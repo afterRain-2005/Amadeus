@@ -1,0 +1,32 @@
+# Python 缓存
+__pycache__/
+*.pyc
+*.pyo
+
+# 敏感数据（含 API Key / 账号密码 / 会话记录）
+data/config.json
+data/saved_logins.json
+data/characters/
+
+# 运行时通信文件
+data/pet_command.json
+data/desktop_pet.ready
+data/codex-request.txt
+
+# 调试截图
+data/canvas-alpha.png
+data/live2d-test.png
+data/native-overlay.png
+data/native-overlay-final.png
+data/offscreen-frame.png
+data/received-frame.png
+data/transparent-test.png
+data/transparent-window.png
+data/ui-snapshot.png
+
+# 系统/IDE
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/

@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>Amadeus Live2D</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body {
+    width: 100%; height: 100%;
+    overflow: hidden;
+    background: transparent;
+  }
+  #canvas { display: block; width: 100%; height: 100%; }
+  #status {
+    position: fixed; top: 4px; left: 4px;
+    font: 10px monospace; color: #888;
+    pointer-events: none;
+  }
+  #pet-menu {
+    position: fixed; top: 10px; right: 10px; z-index: 10;
+    width: 30px; height: 30px; border: 0; border-radius: 5px;
+    color: rgba(255,255,255,.65); background: rgba(10,10,16,.22);
+    font: 18px sans-serif; cursor: pointer;
+  }
+  #pet-menu:hover { color: white; background: rgba(209,139,36,.75); }
+</style>
+</head>
+<body>
+<canvas id="canvas"></canvas>
+<div id="status">Loading...</div>
+<button id="pet-menu" title="关闭桌宠">×</button>
+
+<script src="../resources/live2dcubismcore.min.js"></script>
+<script src="../resources/pixi.min.js"></script>
+<script src="../resources/cubism4.min.js"></script>
+
+<script>
+(async () => {
+  const statusEl = document.getElementById('status');
+  document.getElementById('pet-menu').addEventListener('click', () => {
+    if (window.pywebview?.api?.close) window.pywebview.api.close();
+    else window.close();
+  });
+
+  // 从 query string 读取模型绝对路径
+  // 例如：file:///.../live2d_page.html?model=file:///D:/.../amadeusV1.model3.json
+  const params = new URLSearchParams(location.search);
+  const injectedModelUrl = "__MODEL_URL__";
+  let modelUrl = params.get('model') || injectedModelUrl;
+  if (!modelUrl) {
+    statusEl.textContent = 'ERROR: model path not specified in query string';
+    throw new Error('model path not specified');
+  }
+
+  // 检查依赖
+  if (typeof PIXI === 'undefined') {
+    statusEl.textContent = 'ERROR: pixi.js 未加载（网络问题？）';
+    throw new Error('PIXI undefined');
+  }
+  if (typeof PIXI.live2d === 'undefined') {
+    statusEl.textContent = 'ERROR: pixi-live2d-display 未加载（网络问题？）';
+    throw new Error('pixi-live2d-display undefined');
+  }
+
+  const app = new PIXI.Application({
+    view: document.getElementById('canvas'),
+    resizeTo: window,
+    backgroundAlpha: 0,   // 透明背景
+    antialias: true,
+    preserveDrawingBuffer: true,
+  });
+
+  try {
+    const model = await PIXI.live2d.Live2DModel.from(modelUrl);
+    app.stage.addChild(model);
+
+    // 居中并按窗口大小缩放
+    function fitModel() {
+      const s = Math.min(
+        window.innerWidth / model.width,
+        window.innerHeight / model.height
+      ) * 0.95;
+      model.scale.set(s);
+      model.anchor.set(0.5, 0.5);
+      model.x = window.innerWidth / 2;
+      model.y = window.innerHeight / 2;
+    }
+    fitModel();
+    window.addEventListener('resize', fitModel);
+
+    const state = { angry: 0, blush: 0, smile: 0, sad: 0 };
+    const target = { angry: 0, blush: 0, smile: 0, sad: 0 };
+    let speaking = false;
+    let blinkAt = performance.now() + 1800;
+    let pointerX = 0;
+    let pointerY = 0;
+
+    app.ticker.add(() => {
+      Object.keys(state).forEach(key => state[key] += (target[key] - state[key]) * 0.12);
+      const core = model.internalModel.coreModel;
+      const now = performance.now();
+      const blinkDistance = Math.abs(now - blinkAt);
+      const eyeOpen = blinkDistance < 90 ? Math.max(0, blinkDistance / 90) : 1;
+      if (now > blinkAt + 90) blinkAt = now + 2200 + Math.random() * 2600;
+      core.setParameterValueById('Param8', state.angry);
+      core.setParameterValueById('Param9', state.blush);
+      core.setParameterValueById('ParamEyeRSmile', state.smile);
+      core.setParameterValueById('ParamEyeROpen', Math.min(eyeOpen, 1 - state.smile * 0.55 - state.sad * 0.35));
+      core.setParameterValueById('ParamEyeLOpen', Math.min(eyeOpen, 1 - state.smile * 0.55 - state.sad * 0.35));
+      core.setParameterValueById('ParamAngleX', pointerX * 18);
+      core.setParameterValueById('ParamAngleY', pointerY * 12);
+      core.setParameterValueById('ParamEyeBallX', pointerX);
+      core.setParameterValueById('ParamEyeBallY', pointerY);
+      if (speaking) core.setParameterValueById('ParamMouthOpenY', 0.15 + Math.random() * 0.55);
+    });
+    window.addEventListener('mousemove', event => {
+      pointerX = Math.max(-1, Math.min(1, event.clientX / innerWidth * 2 - 1));
+      pointerY = Math.max(-1, Math.min(1, event.clientY / innerHeight * 2 - 1));
+    });
+    window.__amadeus = {
+      model, app,
+      setEmotion(emotion) {
+        Object.keys(target).forEach(key => target[key] = 0);
+        if (emotion in target) target[emotion] = emotion === 'smile' ? 0.75 : 0.85;
+      },
+      setSpeaking(value) { speaking = Boolean(value); },
+    };
+
+    statusEl.textContent = 'OK';
+    document.title = 'KURISU_READY';
+    setTimeout(() => statusEl.style.display = 'none', 1500);
+  } catch (e) {
+    statusEl.textContent = 'ERROR: 模型加载失败 ' + e.message;
+    console.error(e);
+  }
+})();
+</script>
+</body>
+</html>
