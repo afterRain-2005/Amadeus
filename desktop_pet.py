@@ -157,6 +157,23 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             painter.setRenderHint(QPainter.SmoothPixmapTransform)
             painter.drawImage(self.rect(), self._phone)
 
+    class MessageInputPanel(QWidget):
+        def __init__(self, parent=None) -> None:
+            super().__init__(parent)
+            self.setAttribute(Qt.WA_TranslucentBackground, True)
+            self._left = QImage(str(ROOT / "resources" / "images" / "meswinLeft.png"))
+            self._right = QImage(str(ROOT / "resources" / "images" / "meswinRight.png"))
+
+        def paintEvent(self, event) -> None:
+            painter = QPainter(self)
+            painter.setRenderHint(QPainter.SmoothPixmapTransform)
+            painter.fillRect(self.rect(), QColor(3, 3, 5, 214))
+            painter.fillRect(QRect(8, 8, self.width() - 16, self.height() - 16), QColor(8, 8, 11, 218))
+            if not self._left.isNull():
+                painter.drawImage(QRect(0, 0, 168, self.height()), self._left)
+            if not self._right.isNull():
+                painter.drawImage(QRect(self.width() - 168, 0, 168, self.height()), self._right)
+
     class PetWindow(QWidget):
         def __init__(self) -> None:
             super().__init__()
@@ -217,17 +234,16 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             self.input_panel = QWidget(self)
             self.input_panel.setGeometry(390, 690, 365, 48)
             self.input_panel.setStyleSheet(
-                "background:rgba(218,208,214,246);"
-                "border:2px solid rgba(102,94,100,210);border-radius:7px"
+                "background:rgba(245,240,242,238);"
+                "border:1px solid rgba(232,232,237,210);border-radius:24px"
             )
             input_layout = QHBoxLayout(self.input_panel)
-            input_layout.setContentsMargins(7, 6, 7, 6)
+            input_layout.setContentsMargins(8, 6, 8, 6)
             self.input = QLineEdit()
             self.input.setPlaceholderText("和红莉栖对话，或交给她一个任务…")
             self.input.setStyleSheet(
-                "QLineEdit{background:#fbfbf8;color:#101014;border:1px solid rgba(92,86,91,170);"
-                "border-radius:3px;padding:6px 8px;font:13px 'Lucida Console','Consolas','SimSun'}"
-                "QLineEdit::placeholder{color:#8a8388}"
+                "QLineEdit{background:transparent;color:#1d1d1f;border:0;padding:6px 8px;font-size:13px}"
+                "QLineEdit::placeholder{color:#aeaeb2}"
             )
             self.input.returnPressed.connect(self._send)
             input_layout.addWidget(self.input, 1)
@@ -246,15 +262,13 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             for button in (history_button, minimize_button, settings_button, send_button):
                 button.setFixedSize(30, 30)
                 button.setStyleSheet(
-                    "QPushButton{background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #eee8ec,stop:1 #b7adb4);"
-                    "color:#514a50;border:1px solid #756d72;border-radius:4px;font-size:15px}"
-                    "QPushButton:hover{background:#f0c3c8;color:#7b3131}"
+                    "QPushButton{background:transparent;color:#86868b;border:0;border-radius:15px;font-size:15px}"
+                    "QPushButton:hover{background:rgba(232,134,162,35);color:#e886a2}"
                 )
                 input_layout.addWidget(button)
             send_button.setStyleSheet(
-                "QPushButton{background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #ef7373,stop:1 #c84646);"
-                "color:white;border:1px solid #8d3c3c;border-radius:4px;font-size:14px}"
-                "QPushButton:hover{background:#f08080} QPushButton:disabled{background:#c9b8bd;color:#f4edf0}"
+                "QPushButton{background:#e886a2;color:white;border:0;border-radius:15px;font-size:14px}"
+                "QPushButton:hover{background:#f09bb3} QPushButton:disabled{background:#f5c6d0}"
             )
             self.send_button = send_button
 
