@@ -377,7 +377,7 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             self._hotkey_down = False
             self._csa_down = False
             self._history_expanded = False
-            self._zoom = 0.75
+            self._zoom = 0.9
             self._pinned = False
             self._bubble_segments: list[str] = []
             self._bubble_index = 0
@@ -398,7 +398,8 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             self.setFixedSize(400, 680)
 
             screen = QApplication.primaryScreen().availableGeometry()
-            self.move(screen.right() - self.width() - 20, screen.bottom() - self.height())
+            # 底部留 60px 余量，避免输入框（距窗口底 8px）被任务栏/屏幕底遮挡
+            self.move(screen.right() - self.width() - 20, screen.bottom() - self.height() - 60)
 
             self.reply_bubble = QLabel(self)
             self.reply_bubble.setGeometry((self.width() - 390) // 2, 8, 390, 96)
@@ -905,15 +906,6 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
                     self.update()
 
         def paintEvent(self, event) -> None:
-            # 深色玻璃底（A2 配色：深青蓝渐变）
-            painter = QPainter(self)
-            painter.setRenderHint(QPainter.Antialiasing)
-            grad = QLinearGradient(0, 0, self.width(), self.height())
-            grad.setColorAt(0, QColor(8, 14, 22, 150))
-            grad.setColorAt(1, QColor(12, 24, 36, 130))
-            painter.fillRect(self.rect(), grad)
-            painter.end()
-
             if self._frame.isNull():
                 return
             painter = QPainter(self)
