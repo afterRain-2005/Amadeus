@@ -3,6 +3,9 @@ __pycache__/
 *.pyc
 *.pyo
 
+# 本地依赖（pip install --target，避开沙箱对 site-packages 的写入限制）
+.libs/
+
 # 敏感数据（含 API Key / 账号密码 / 会话记录）
 data/config.json
 data/saved_logins.json
