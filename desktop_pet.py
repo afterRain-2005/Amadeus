@@ -111,6 +111,12 @@ def _decide_delta_action(
     return new_streamed, should_show_thinking, should_set_bubble_text
 
 
+def _decide_send_instant_action() -> dict:
+    """_send 发送瞬间的即时反应决策：呼吸动画 + thinking emotion。
+    返回 {show_thinking_dots, emotion}。不再用静态'让我想想…'。"""
+    return {"show_thinking_dots": True, "emotion": "thinking"}
+
+
 def _build_kurisu_html(text: str) -> str:
     """Kurisu 消息 HTML：青蓝软底 + 青色左边条。"""
     safe = html.escape(text).replace("\n", "<br>")
@@ -593,6 +599,15 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             if self._thinking_anim.state() != QPropertyAnimation.Running:
                 self._thinking_anim.start()
 
+        def _send_emotion(self, emotion: str) -> None:
+            """经 pet_command.json 发送 emotion 到 renderer（即时，不等 LLM）。"""
+            import json, time
+            try:
+                cmd = {"timestamp": time.time(), "emotion": emotion}
+                COMMAND_FILE.write_text(json.dumps(cmd), encoding="utf-8")
+            except OSError:
+                pass
+
         def _show_layered_bubbles(self, text: str) -> None:
             """将回复分层后分多个气泡前后展示，每段用 opacity 动画淡入。"""
             import re
@@ -800,7 +815,9 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             self.reply_bubble.show()
             session = active_session(self._state)
             add_message(session, "user", text)
-            self._set_bubble_text("让我想想…")
+            instant = _decide_send_instant_action()
+            self._show_thinking_dots()
+            self._send_emotion(instant["emotion"])
             self._busy = True
             self._streamed_reply = ""
             self.send_button.setDisabled(True)
