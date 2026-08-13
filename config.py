@@ -55,6 +55,9 @@ APPROVAL_POLICY: dict[str, list[str]] = {
         "focus_window",       # 切换窗口焦点（低风险）
         "web_search",         # 网页搜索（只读）
         "fetch_url",          # 抓取网页（只读）
+        "file_find",          # 查找文件（只读）
+        "list_dir",           # 列目录（只读）
+        "read_file",          # 读文件（只读）
     ],
     # run_command 的安全命令前缀列表（命令 strip 后 startswith 任一前缀即放行）
     "auto_allow_commands": [

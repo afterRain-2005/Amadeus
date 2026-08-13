@@ -42,6 +42,46 @@ def trafilatura_extract(html: str) -> str:
     return trafilatura.extract(html) or ""
 
 
+# 允许的文件操作根目录（用户目录、桌面、项目根）
+def _allowed_roots() -> list[Path]:
+    home = Path.home().resolve()
+    return [
+        home,
+        home / "Desktop",
+        Path(DEFAULT_WORKDIR).resolve(),
+    ]
+
+
+def _is_under(child: Path, parent: Path) -> bool:
+    try:
+        child.resolve().relative_to(parent.resolve())
+        return True
+    except ValueError:
+        return False
+
+
+def _validate_path(path: str) -> tuple[bool, Path]:
+    """校验路径在允许根内且非系统目录。返回 (ok, resolved_path)。"""
+    try:
+        p = Path(os.path.expandvars(os.path.expanduser(path))).resolve()
+    except (OSError, RuntimeError):
+        return False, Path()
+    # 拒绝系统目录
+    sys_roots = [Path("C:/Windows"), Path("C:/Program Files"), Path("C:/Program Files (x86)")]
+    for sr in sys_roots:
+        if _is_under(p, sr):
+            return False, p
+    # 必须在允许根内
+    for root in _allowed_roots():
+        if _is_under(p, root):
+            return True, p
+    return False, p
+
+
+def _default_search_root() -> Path:
+    return Path.home() / "Desktop"
+
+
 TOOL_DEFINITIONS = [
     {"type": "function", "function": {"name": "capture_screen", "description": "Capture the current desktop. Use only when the configured model supports image input; otherwise use list_windows and terminal inspection.", "parameters": {"type": "object", "properties": {}}}},
     {"type": "function", "function": {"name": "list_windows", "description": "List visible desktop windows and titles.", "parameters": {"type": "object", "properties": {}}}},
@@ -54,6 +94,9 @@ TOOL_DEFINITIONS = [
     {"type": "function", "function": {"name": "run_command", "description": "Run PowerShell with a reliable UTF-8 console and return exit code, stdout, and stderr. Use for terminal tasks.", "parameters": {"type": "object", "properties": {"command": {"type": "string"}, "cwd": {"type": "string", "description": "Existing working directory; defaults to the Windows desktop."}, "timeout_seconds": {"type": "integer", "minimum": 1, "maximum": 120}}, "required": ["command"]}}},
     {"type": "function", "function": {"name": "web_search", "description": "Search the web with DuckDuckGo and return the top 5 results (title, snippet, url). Use for factual questions, current info, weather, etc.", "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}}},
     {"type": "function", "function": {"name": "fetch_url", "description": "Fetch a web page and extract its main text content (up to 8000 chars). Use to read an article or page found via web_search. Only http/https URLs.", "parameters": {"type": "object", "properties": {"url": {"type": "string"}}, "required": ["url"]}}},
+    {"type": "function", "function": {"name": "file_find", "description": "Find files matching a glob pattern (e.g. *.txt) under a root directory (defaults to Desktop). Returns up to 30 paths.", "parameters": {"type": "object", "properties": {"pattern": {"type": "string"}, "root": {"type": "string", "description": "Directory to search under; defaults to user Desktop."}}, "required": ["pattern"]}}},
+    {"type": "function", "function": {"name": "list_dir", "description": "List entries (name, size, type) in a directory. Returns up to 100 entries.", "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}}},
+    {"type": "function", "function": {"name": "read_file", "description": "Read a UTF-8 text file (up to 20000 chars, max 2MB). Rejects binary and paths outside allowed roots.", "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}}},
 ]
 
 CONFIRMATION_REQUIRED = {"open_target", "type_text", "press_keys", "click", "run_command"}
@@ -158,6 +201,38 @@ def execute_tool(name: str, arguments: dict) -> dict:
             return {"text": text or "No extractable content."}
         except Exception as exc:
             return {"text": f"Fetch failed: {exc}"}
+    if name == "file_find":
+        pattern = arguments["pattern"].strip() or "*"
+        root_str = arguments.get("root") or str(_default_search_root())
+        ok, root = _validate_path(root_str)
+        if not ok or not root.is_dir():
+            return {"text": "Search root denied or not a directory."}
+        matches = sorted(root.rglob(pattern))[:30]
+        if not matches:
+            return {"text": "No files matched."}
+        return {"text": "\n".join(str(m) for m in matches)}
+    if name == "list_dir":
+        ok, p = _validate_path(arguments["path"])
+        if not ok or not p.is_dir():
+            return {"text": "Directory denied or not found."}
+        entries = []
+        for child in sorted(p.iterdir())[:100]:
+            kind = "DIR" if child.is_dir() else f"{child.stat().st_size}B"
+            entries.append(f"{kind}\t{child.name}")
+        return {"text": "\n".join(entries) or "Empty directory."}
+    if name == "read_file":
+        ok, p = _validate_path(arguments["path"])
+        if not ok:
+            return {"text": "Path denied: outside allowed roots or system directory."}
+        if not p.is_file():
+            return {"text": "Not a file."}
+        if p.stat().st_size > 2_000_000:
+            return {"text": "File too large (>2MB)."}
+        try:
+            text = p.read_text(encoding="utf-8", errors="strict")
+        except UnicodeDecodeError:
+            return {"text": "Binary file, cannot read as text."}
+        return {"text": text[:20000]}
     if name == "run_command":
         return _run_powershell(arguments)
     raise ValueError(f"Unknown tool: {name}")
