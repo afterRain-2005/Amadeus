@@ -112,8 +112,9 @@ def _decide_delta_action(
 
 
 def run_overlay(connection: Connection, renderer: mp.Process) -> int:
-    from PySide6.QtCore import QEasingCurve, QObject, QPoint, QPropertyAnimation, QRect, QRunnable, Qt, QThreadPool, QTimer, Signal
+    from PySide6.QtCore import QByteArray, QEasingCurve, QObject, QPoint, QPropertyAnimation, QRect, QRectF, QRunnable, Qt, QThreadPool, QTimer, Signal
     from PySide6.QtGui import QColor, QIcon, QImage, QMouseEvent, QPainter, QPixmap
+    from PySide6.QtSvg import QSvgRenderer
     from PySide6.QtWidgets import (
                 QApplication, QHBoxLayout, QLabel, QLineEdit, QMenu, QMessageBox,
                 QPushButton, QSystemTrayIcon, QTextBrowser, QVBoxLayout, QWidget,
@@ -173,6 +174,117 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             self.signals.confirmation.emit(request)
             request["event"].wait()
             return request["choice"]
+
+    class DockButton(QPushButton):
+        """Dock 单个按钮：SVG 图标 + hover 放大。"""
+        BASE_SIZE = 32
+        HOVER_SIZE = 44
+        NEAR_SIZE = 38
+
+        def __init__(self, icon_name: str, tooltip: str, is_danger: bool = False, parent=None):
+            super().__init__(parent)
+            self._icon_name = icon_name
+            self._is_danger = is_danger
+            self.setFixedSize(self.BASE_SIZE, self.BASE_SIZE)
+            self.setToolTip(tooltip)
+            self.setCursor(Qt.PointingHandCursor)
+            self._renderer = QSvgRenderer(QByteArray(
+                (ROOT / "resources" / "icons" / f"{icon_name}.svg").read_bytes()
+            ))
+            self._scale = 1.0
+            self._hover_anim = QPropertyAnimation(self, b"scale", self)
+            self._hover_anim.setDuration(200)
+            self._hover_anim.setEasingCurve(QEasingCurve.OutCubic)
+
+        def get_scale(self) -> float:
+            return self._scale
+
+        def set_scale(self, value: float) -> None:
+            self._scale = value
+            size = int(self.BASE_SIZE * value)
+            self.setFixedSize(size, size)
+            self.update()
+
+        scale = property(get_scale, set_scale)
+
+        def set_target_scale(self, scale: float) -> None:
+            self._hover_anim.stop()
+            self._hover_anim.setStartValue(self._scale)
+            self._hover_anim.setEndValue(scale)
+            self._hover_anim.start()
+
+        def paintEvent(self, event) -> None:
+            painter = QPainter(self)
+            painter.setRenderHint(QPainter.Antialiasing)
+            # 背景
+            if self._is_danger:
+                bg = QColor(255, 59, 48, 30) if self._scale > 1.0 else QColor(255, 59, 48, 20)
+                border = QColor(255, 59, 48, 100)
+            else:
+                bg = QColor(0, 212, 255, 20) if self._scale > 1.0 else QColor(0, 212, 255, 12)
+                border = QColor(0, 212, 255, 100)
+            painter.setBrush(bg)
+            painter.setPen(border)
+            painter.drawRoundedRect(self.rect(), 8, 8)
+            # SVG 图标（文件已带颜色，直接渲染）
+            pad = 4
+            self._renderer.render(painter, QRectF(pad, pad, self.width() - pad * 2, self.height() - pad * 2))
+
+    class DockBar(QWidget):
+        """底部悬浮 Dock 工具栏：5 按钮 + hover 邻近放大。"""
+        def __init__(self, parent=None):
+            super().__init__(parent)
+            self.setAttribute(Qt.WA_TranslucentBackground, True)
+            self._buttons: list = []
+            layout = QHBoxLayout(self)
+            layout.setContentsMargins(8, 4, 8, 4)
+            layout.setSpacing(8)
+            layout.setAlignment(Qt.AlignCenter)
+            self.setLayout(layout)
+            self._build_buttons()
+
+        def _build_buttons(self) -> None:
+            specs = [
+                ("chat", "对话", False),
+                ("pin", "固定", False),
+                ("settings", "设置", False),
+                ("history", "记录", False),
+                ("close", "退出", True),
+            ]
+            for icon_name, tooltip, is_danger in specs:
+                btn = DockButton(icon_name, tooltip, is_danger, self)
+                btn.installEventFilter(self)
+                self._buttons.append(btn)
+                self.layout().addWidget(btn)
+
+        def eventFilter(self, obj, event) -> bool:
+            if obj in self._buttons:
+                idx = self._buttons.index(obj)
+                if event.type() == event.Type.Enter:
+                    self._apply_hover_scale(idx)
+                elif event.type() == event.Type.Leave:
+                    self._apply_leave_scale()
+            return super().eventFilter(obj, event)
+
+        def _apply_hover_scale(self, hover_idx: int) -> None:
+            for i, btn in enumerate(self._buttons):
+                dist = abs(i - hover_idx)
+                if dist == 0:
+                    btn.set_target_scale(DockButton.HOVER_SIZE / DockButton.BASE_SIZE)
+                elif dist == 1:
+                    btn.set_target_scale(DockButton.NEAR_SIZE / DockButton.BASE_SIZE)
+                else:
+                    btn.set_target_scale(1.0)
+
+        def _apply_leave_scale(self) -> None:
+            for btn in self._buttons:
+                btn.set_target_scale(1.0)
+
+        def button(self, name: str):
+            for btn in self._buttons:
+                if btn.toolTip() == name:
+                    return btn
+            raise KeyError(name)
 
     class PetWindow(QWidget):
         def __init__(self) -> None:
@@ -253,6 +365,15 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             input_layout.addWidget(send_button)
             self.send_button = send_button
             self.input_panel.hide()
+
+            # Dock 底部悬浮工具栏
+            self.dock_bar = DockBar(self)
+            self.dock_bar.button("对话").clicked.connect(self._toggle_input_panel)
+            self.dock_bar.button("固定").clicked.connect(self._toggle_pin)
+            self.dock_bar.button("设置").clicked.connect(lambda: SettingsDialog(self).exec())
+            self.dock_bar.button("记录").clicked.connect(self._toggle_history)
+            self.dock_bar.button("退出").clicked.connect(QApplication.quit)
+            self.dock_bar.show()
 
             self._relayout()
 
@@ -669,8 +790,11 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             return super().eventFilter(obj, event)
 
         def _relayout(self) -> None:
-            """根据当前窗口尺寸重新定位所有组件。Task 5/6/7 重建。"""
-            pass
+            """根据当前窗口尺寸重新定位所有组件。"""
+            w, h = self.width(), self.height()
+            # Dock：底部居中悬浮
+            dock_w = self.dock_bar.sizeHint().width()
+            self.dock_bar.setGeometry((w - dock_w) // 2, h - 56, dock_w, 48)
 
         def resizeEvent(self, event) -> None:
             self._relayout()
