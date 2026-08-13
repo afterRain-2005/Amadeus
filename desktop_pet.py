@@ -174,36 +174,6 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             request["event"].wait()
             return request["choice"]
 
-    class HistoryPhonePanel(QWidget):
-        def __init__(self, parent=None) -> None:
-            super().__init__(parent)
-            self.setAttribute(Qt.WA_TranslucentBackground, True)
-            self._phone = QImage(str(ROOT / "resources" / "images" / "mail_phone_frame.png"))
-
-        def paintEvent(self, event) -> None:
-            if self._phone.isNull():
-                return
-            painter = QPainter(self)
-            painter.setRenderHint(QPainter.SmoothPixmapTransform)
-            painter.drawImage(self.rect(), self._phone)
-
-    class MessageInputPanel(QWidget):
-        def __init__(self, parent=None) -> None:
-            super().__init__(parent)
-            self.setAttribute(Qt.WA_TranslucentBackground, True)
-            self._left = QImage(str(ROOT / "resources" / "images" / "meswinLeft.png"))
-            self._right = QImage(str(ROOT / "resources" / "images" / "meswinRight.png"))
-
-        def paintEvent(self, event) -> None:
-            painter = QPainter(self)
-            painter.setRenderHint(QPainter.SmoothPixmapTransform)
-            painter.fillRect(self.rect(), QColor(3, 3, 5, 214))
-            painter.fillRect(QRect(8, 8, self.width() - 16, self.height() - 16), QColor(8, 8, 11, 218))
-            if not self._left.isNull():
-                painter.drawImage(QRect(0, 0, 168, self.height()), self._left)
-            if not self._right.isNull():
-                painter.drawImage(QRect(self.width() - 168, 0, 168, self.height()), self._right)
-
     class PetWindow(QWidget):
         def __init__(self) -> None:
             super().__init__()
@@ -251,83 +221,6 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             self._set_bubble_text(self._latest_line(active_session(self._state)["messages"][-1]["content"]))
             self.reply_bubble.hide()
 
-            self.history_panel = HistoryPhonePanel(self)
-            self.history_panel.setGeometry(6, self.height() - 465, 300, 400)
-
-            screen_frame = QWidget(self.history_panel)
-            screen_frame.setGeometry(35, 120, 230, 200)
-            screen_frame.setStyleSheet("background:transparent;border:0")
-
-            self.history = QTextBrowser(screen_frame)
-            self.history.setGeometry(0, 0, 230, 200)
-            self.history.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOn)
-            self.history.setStyleSheet(
-                "QTextBrowser{background:transparent;color:#101014;border:0;padding:8px 14px 8px 9px;"
-                "font:12px 'Lucida Console','Consolas','SimSun'}"
-                "QScrollBar:vertical{background:#d8d8d2;width:6px;margin:8px 10px 8px 0}"
-                "QScrollBar::handle:vertical{background:#17171b;border-radius:0;min-height:30px}"
-                "QScrollBar::add-line:vertical,QScrollBar::sub-line:vertical{height:0;background:transparent}"
-                "QScrollBar::add-page:vertical,QScrollBar::sub-page:vertical{background:#d8d8d2}"
-            )
-            self.history.setOpenExternalLinks(False)
-
-            self.history_panel.hide()
-            self._render_history()
-
-            # 竖排工具栏（角色左侧，参考 ANISpace Live2D Widget）
-            self.tool_bar = QWidget(self)
-            self.tool_bar.setGeometry(20, self.height() // 2 - 110, 44, 220)
-            tool_layout = QVBoxLayout(self.tool_bar)
-            tool_layout.setContentsMargins(0, 0, 0, 0)
-            tool_layout.setSpacing(6)
-            tool_layout.setAlignment(Qt.AlignCenter)
-
-            _tool_btn_style = (
-                "QPushButton{background:rgba(255,255,255,180);color:#8e8e93;border:1px solid rgba(0,0,0,0.06);"
-                "border-radius:10px;font-size:16px}"
-                "QPushButton:hover{background:#007AFF;color:white;border:1px solid #007AFF}"
-            )
-            _quit_btn_style = (
-                "QPushButton{background:rgba(255,255,255,180);color:#8e8e93;border:1px solid rgba(0,0,0,0.06);"
-                "border-radius:10px;font-size:16px}"
-                "QPushButton:hover{background:#ff3b30;color:white;border:1px solid #ff3b30}"
-            )
-
-            chat_button = QPushButton("💬")
-            chat_button.setToolTip("对话")
-            chat_button.clicked.connect(self._toggle_input_panel)
-            pin_button = QPushButton("📌")
-            pin_button.setToolTip("固定位置")
-            pin_button.clicked.connect(self._toggle_pin)
-            settings_button = QPushButton("⚙")
-            settings_button.setToolTip("设置")
-            settings_button.clicked.connect(lambda: SettingsDialog(self).exec())
-            history_button = QPushButton("☰")
-            history_button.setToolTip("记录")
-            history_button.clicked.connect(self._toggle_history)
-            minimize_button = QPushButton("−")
-            minimize_button.setToolTip("最小化")
-            minimize_button.clicked.connect(self._minimize_to_tray)
-            close_button_tool = QPushButton("×")
-            close_button_tool.setToolTip("退出")
-            close_button_tool.clicked.connect(QApplication.quit)
-
-            for btn in (chat_button, pin_button, settings_button, history_button, minimize_button):
-                btn.setFixedSize(36, 36)
-                btn.setStyleSheet(_tool_btn_style)
-                tool_layout.addWidget(btn)
-            close_button_tool.setFixedSize(36, 36)
-            close_button_tool.setStyleSheet(_quit_btn_style)
-            tool_layout.addWidget(close_button_tool)
-            self.chat_button = chat_button
-            self.pin_button = pin_button
-
-            # 工具栏悬浮淡入效果（默认半透明，悬浮时全显）
-            self._tool_opacity = QGraphicsOpacityEffect(self.tool_bar)
-            self._tool_opacity.setOpacity(0.35)
-            self.tool_bar.setGraphicsEffect(self._tool_opacity)
-            self.tool_bar.installEventFilter(self)
-
             # 输入面板（默认隐藏，点击💬展开）
             panel_w = 365
             panel_x = (self.width() - panel_w) // 2
@@ -360,17 +253,6 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             input_layout.addWidget(send_button)
             self.send_button = send_button
             self.input_panel.hide()
-
-            self.close_button = QPushButton("×", self)
-            self.close_button.setToolTip("关闭桌宠")
-            self.close_button.setGeometry(self.width() - 36, 12, 26, 26)
-            self.close_button.setStyleSheet(
-                "QPushButton{background:rgba(255,255,255,200);color:#8e8e93;border:1px solid rgba(0,0,0,0.06);"
-                "border-radius:13px;font-size:16px}"
-                "QPushButton:hover{background:#ff3b30;color:white}"
-            )
-            self.close_button.clicked.connect(QApplication.quit)
-            self.close_button.hide()
 
             self._relayout()
 
@@ -443,21 +325,8 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
                 self.input.setFocus()
 
         def _toggle_pin(self) -> None:
-            """固定/解锁位置。固定后禁用拖拽和自动贴合。"""
+            """固定/解锁位置。固定后禁用拖拽和自动贴合。DockButton 视觉反馈由 Task 5 处理。"""
             self._pinned = not self._pinned
-            if self._pinned:
-                self.pin_button.setStyleSheet(
-                    "QPushButton{background:#007AFF;color:white;border:1px solid #007AFF;"
-                    "border-radius:10px;font-size:16px}"
-                )
-                self.pin_button.setToolTip("已固定，点击解锁")
-            else:
-                self.pin_button.setStyleSheet(
-                    "QPushButton{background:rgba(255,255,255,180);color:#8e8e93;border:1px solid rgba(0,0,0,0.06);"
-                    "border-radius:10px;font-size:16px}"
-                    "QPushButton:hover{background:#007AFF;color:white;border:1px solid #007AFF}"
-                )
-                self.pin_button.setToolTip("固定位置")
 
         def _set_bubble_text(self, text: str) -> None:
             """设置回复气泡文字并自动缩放大小。"""
@@ -568,42 +437,12 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             return latest if len(latest) <= 105 else latest[:104] + "…"
 
         def _render_history(self) -> None:
-            blocks = []
-            for message in active_session(self._state)["messages"]:
-                assistant = message["role"] == "assistant"
-                text = parse_reply(message["content"]).chinese if assistant else message["content"]
-                safe_text = html.escape(text).replace("\n", "<br>")
-                if assistant:
-                    blocks.append(
-                        "<div style='margin:0 0 13px 0'>"
-                        "<div style='color:#3c5f9f;font-weight:bold'>Kurisu</div>"
-                        "<div style='margin-top:2px;line-height:1.42;color:#111'>"
-                        f"{safe_text}</div></div>"
-                    )
-                else:
-                    blocks.append(
-                        "<div style='margin:0 0 13px 0;text-align:right'>"
-                        "<div style='color:#b14545;font-weight:bold'>You</div>"
-                        "<div style='margin-top:2px;line-height:1.42;color:#111'>"
-                        f"{safe_text}</div></div>"
-                    )
-            self.history.setHtml(
-                "<html><body style=\"margin:0;background:#fbfbf8;font-family:'Lucida Console','Consolas','SimSun';"
-                "font-size:13px;letter-spacing:0;color:#111\">"
-                + "".join(blocks)
-                + "</body></html>"
-            )
-            self.history.verticalScrollBar().setValue(self.history.verticalScrollBar().maximum())
-
-        def _set_history_visible(self, visible: bool) -> None:
-            self._history_expanded = visible
-            self.history_panel.setVisible(visible)
-            if visible:
-                self.input_panel.hide()
-                self.reply_bubble.hide()
+            """历史抽屉渲染占位，Task 7 重写为 HistoryDrawer 内容。"""
+            pass
 
         def _toggle_history(self) -> None:
-            self._set_history_visible(not self._history_expanded)
+            """历史抽屉切换占位，Task 7 重写为 HistoryDrawer 滑入/滑出。"""
+            self._history_expanded = not self._history_expanded
 
         def _hide_input_or_noop(self) -> None:
             """Escape 键：收起输入面板（若已展开）。"""
@@ -827,28 +666,11 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             self.update()
 
         def eventFilter(self, obj, event) -> bool:
-            """工具栏悬浮淡入淡出。"""
-            if obj is self.tool_bar:
-                if event.type() == event.Type.Enter:
-                    self._tool_opacity.setOpacity(1.0)
-                elif event.type() == event.Type.Leave:
-                    self._tool_opacity.setOpacity(0.35)
             return super().eventFilter(obj, event)
 
         def _relayout(self) -> None:
-            """根据当前窗口尺寸重新定位所有组件，紧贴人物。"""
-            w, h = self.width(), self.height()
-            # 回复气泡：由 _set_bubble_text 自动管理尺寸和位置
-            # 工具栏：左侧紧贴人物
-            self.tool_bar.setGeometry(6, (h - 250) // 2, 40, 250)
-            # 历史面板：覆盖左侧区域
-            hist_h = min(400, h - 130)
-            self.history_panel.setGeometry(6, h - hist_h - 65, 300, hist_h)
-            # 输入面板：底部居中
-            panel_w = 320
-            self.input_panel.setGeometry((w - panel_w) // 2, h - 58, panel_w, 48)
-            # 关闭按钮：右上角
-            self.close_button.setGeometry(w - 28, 6, 22, 22)
+            """根据当前窗口尺寸重新定位所有组件。Task 5/6/7 重建。"""
+            pass
 
         def resizeEvent(self, event) -> None:
             self._relayout()
@@ -890,7 +712,7 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
     if os.environ.get("AMADEUS_UI_SNAPSHOT"):
         def save_snapshot() -> None:
             if os.environ.get("AMADEUS_UI_SNAPSHOT") == "history":
-                pet._set_history_visible(True)
+                pet._toggle_history()
             elif os.environ.get("AMADEUS_UI_SNAPSHOT") == "bubble":
                 pet._set_bubble_text("我已经理解你的任务。接下来会先检查当前桌面状态，\n再执行必要操作，并把最终结果告诉你。")
                 pet.reply_bubble.show()
