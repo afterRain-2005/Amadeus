@@ -5,3 +5,4 @@ numpy>=1.26
 pywebview>=6.0
 pywin32>=306
 sounddevice>=0.5
+pytest>=8.0
