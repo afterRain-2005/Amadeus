@@ -88,10 +88,26 @@ def _stream_turn_direct(url: str, headers: dict, model: str, messages: list[dict
 
 
 def _status_text(name: str, arguments: dict) -> str:
-    labels = {"capture_screen": "正在观察屏幕…", "list_windows": "正在查看窗口…",
-              "read_clipboard": "正在读取剪贴板…", "open_target": "准备打开目标…",
-              "focus_window": "正在切换窗口…", "type_text": "准备输入文字…",
-              "press_keys": "准备按下快捷键…", "click": "准备点击…", "run_command": "准备执行命令…"}
+    """工具执行进度文案，带图标 + 关键参数。"""
+    if name == "web_search":
+        return f"🔍 搜索：{arguments.get('query', '')}"
+    if name == "fetch_url":
+        return f"🌐 读取网页：{arguments.get('url', '')}"
+    if name == "file_find":
+        return f"🔎 查找文件：{arguments.get('pattern', '')}"
+    if name == "list_dir":
+        return f"📁 列目录：{arguments.get('path', '')}"
+    if name == "read_file":
+        return f"📄 读取：{arguments.get('path', '')}"
+    if name == "write_file":
+        return f"✏️ 写入：{arguments.get('path', '')}"
+    if name == "operate_gui":
+        return f"🖱 操作 GUI：{arguments.get('task', '')}"
+    labels = {"capture_screen": "🖥 正在观察屏幕…", "list_windows": "🪟 正在查看窗口…",
+              "read_clipboard": "📋 正在读取剪贴板…", "open_target": "📂 准备打开目标…",
+              "focus_window": "🪟 正在切换窗口…", "type_text": "⌨️ 准备输入文字…",
+              "press_keys": "⌨️ 准备按下快捷键…", "click": "🖱 准备点击…",
+              "run_command": "⚙️ 准备执行命令…"}
     return labels.get(name, f"正在执行 {name}…")
 
 
