@@ -15,6 +15,12 @@ import time
 
 
 ROOT = Path(sys._MEIPASS) if getattr(sys, 'frozen', False) else Path(__file__).resolve().parent
+# 本地依赖目录：用 pip install --target 装的 ddgs/trafilatura 等（避开 anaconda site-packages 沙箱限制）。
+# 冻结模式下依赖已打包进 exe，不需要 .libs。
+if not getattr(sys, 'frozen', False):
+    _libs = ROOT / ".libs"
+    if _libs.is_dir():
+        sys.path.insert(0, str(_libs))
 # 通信文件必须用 storage.APP_DIR（exe 同目录/data/），与 pet_controller.py 保持一致；
 # 不能用 ROOT/data，因为冻结模式下 ROOT=sys._MEIPASS 是临时解压目录，会与发送端失联。
 from core.storage import APP_DIR as _APP_DIR
@@ -115,6 +121,16 @@ def _decide_send_instant_action() -> dict:
     """_send 发送瞬间的即时反应决策：呼吸动画 + thinking emotion。
     返回 {show_thinking_dots, emotion}。不再用静态'让我想想…'。"""
     return {"show_thinking_dots": True, "emotion": "thinking"}
+
+
+def _decide_call_toggle_action(in_call: bool) -> dict:
+    """Dock 电话按钮点击决策：非通话态→进入通话，通话态→挂断。
+
+    返回 {enter_call, hangup}。纯函数便于测试（参考 _decide_delta_action 模式）。
+    """
+    if in_call:
+        return {"enter_call": False, "hangup": True}
+    return {"enter_call": True, "hangup": False}
 
 
 def _build_kurisu_html(text: str) -> str:
@@ -274,6 +290,7 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
         def _build_buttons(self) -> None:
             specs = [
                 ("chat", "对话", False),
+                ("phone", "电话", False),
                 ("pin", "固定", False),
                 ("settings", "设置", False),
                 ("history", "记录", False),
@@ -440,6 +457,16 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
                 "QLineEdit::placeholder{color:rgba(0,212,255,0.5)}"
             )
             self.input.returnPressed.connect(self._send)
+            collapse_button = QPushButton("←")
+            collapse_button.setToolTip("收起聊天")
+            collapse_button.clicked.connect(self._toggle_input_panel)
+            collapse_button.setFixedSize(36, 36)
+            collapse_button.setStyleSheet(
+                "QPushButton{background:rgba(142,142,147,0.2);color:#8e8e93;border:0;border-radius:18px;"
+                "font-size:16px}"
+                "QPushButton:hover{background:rgba(142,142,147,0.4)}"
+            )
+            input_layout.addWidget(collapse_button)
             input_layout.addWidget(self.input, 1)
             send_button = QPushButton("↑")
             send_button.setToolTip("发送")
@@ -461,7 +488,16 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             self.dock_bar.button("设置").clicked.connect(lambda: SettingsDialog(self).exec())
             self.dock_bar.button("记录").clicked.connect(self._toggle_history)
             self.dock_bar.button("退出").clicked.connect(QApplication.quit)
+            self.dock_bar.button("电话").clicked.connect(self._toggle_call)
             self.dock_bar.show()
+
+            # 通话态视图（默认隐藏）
+            from ui.widgets.call_view import CallView
+            self._in_call = False
+            self.call_view = CallView(self)
+            self.call_view.setGeometry(8, 8, self.width() - 16, self.height() - 16)
+            self.call_view.hide()
+            self.call_controller = None  # 通话时创建，避免闲置时持有 sounddevice stream
 
             # Dock 与输入框互斥切换的 opacity effect
             self._dock_opacity = QGraphicsOpacityEffect(self.dock_bar)
@@ -520,12 +556,6 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             self.hotkey_timer.timeout.connect(self._poll_global_hotkey)
             self.hotkey_timer.start(80)
 
-            # 前台窗口检测：非桌面场景自动贴合右下角，桌面场景恢复用户位置
-            self._auto_hidden = False
-            self._foreground_timer = QTimer(self)
-            self._foreground_timer.timeout.connect(self._check_foreground)
-            self._foreground_timer.start(500)
-
             from PySide6.QtGui import QKeySequence, QShortcut
             # Ctrl+Space 已由 _poll_global_hotkey 的 win32api 全局轮询处理，
             # 此处不再注册 QShortcut，避免重复触发 _focus_input。
@@ -542,12 +572,16 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
         def _toggle_input_panel(self) -> None:
             """切换输入面板：Dock 淡出 + 输入框淡入，或反向。"""
             if self.input_panel.isVisible() and self._input_opacity.opacity() > 0.5:
+                # 收起 input，恢复 dock 可点击
                 self._cross_fade(self._input_opacity, self._dock_opacity)
                 QTimer.singleShot(200, self.input_panel.hide)
+                self.dock_bar.setAttribute(Qt.WA_TransparentForMouseEvents, False)
             else:
+                # 展开 input，dock 透明时不拦截鼠标（避免误点 dock 按钮）
                 self.input_panel.show()
                 self.input.setFocus()
                 self._cross_fade(self._dock_opacity, self._input_opacity)
+                self.dock_bar.setAttribute(Qt.WA_TransparentForMouseEvents, True)
 
         def _cross_fade(self, fade_out_effect, fade_in_effect) -> None:
             """200ms opacity 交叉淡入淡出。"""
@@ -607,6 +641,81 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
                 COMMAND_FILE.write_text(json.dumps(cmd), encoding="utf-8")
             except OSError:
                 pass
+
+        # ===== 通话态切换 =====
+        def _toggle_call(self) -> None:
+            """Dock 电话按钮：非通话态→进入通话，通话态→挂断。"""
+            decision = _decide_call_toggle_action(self._in_call)
+            if decision["enter_call"]:
+                self._enter_call()
+            elif decision["hangup"]:
+                self._hangup_call()
+
+        def _enter_call(self) -> None:
+            """进入通话态：隐藏平时组件，显示 CallView，启动管线。"""
+            config = load_config()
+            if not all(config.get(key) for key in ("endpoint", "api_key", "model")):
+                SettingsDialog(self).exec()
+                return
+            self._in_call = True
+            self.reply_bubble.hide()
+            self.input_panel.hide()
+            self.history_drawer.hide()
+            self.dock_bar.hide()
+            self.call_view.show()
+            self.call_view.raise_()
+            # 重新创建 controller 以用最新 config
+            from core.voice_call import VoiceCallController
+            self.call_controller = VoiceCallController(config, character, self)
+            self.call_controller.phase_changed.connect(self._on_call_phase_changed)
+            self.call_controller.subtitle.connect(self.call_view.set_subtitle)
+            self.call_controller.elapsed.connect(self.call_view.set_elapsed)
+            self.call_controller.waveform.connect(self.call_view.set_waveform)
+            self.call_controller.you_said.connect(self._on_call_you_said)
+            self.call_controller.error.connect(self._on_call_error)
+            self.call_view.mute_clicked.connect(self.call_controller.toggle_mute)
+            self.call_view.hangup_clicked.connect(self._hangup_call)
+            self.call_view.screen_clicked.connect(self.call_controller.toggle_screen_share)
+            self.call_controller.start()
+
+        def _hangup_call(self) -> None:
+            """挂断：停管线，恢复平时态。"""
+            if not self._in_call:
+                return
+            self._in_call = False
+            if self.call_controller:
+                self.call_controller.hangup()
+            self.call_view.hide()
+            self.dock_bar.show()
+            # 恢复对话气泡
+            msgs = active_session(self._state)["messages"]
+            if msgs:
+                self._set_bubble_text(self._latest_line(msgs[-1]["content"]))
+
+        def _on_call_phase_changed(self, phase: str) -> None:
+            self.call_view.set_phase(phase)
+            # Live2D 表情随状态切换
+            emotion_map = {
+                "listening": "neutral",
+                "processing": "thinking",
+                "speaking": "smile",
+                "ended": "neutral",
+            }
+            emotion = emotion_map.get(phase)
+            if emotion:
+                self._send_emotion(emotion)
+            # speaking 态驱动 Live2D 口型
+            if phase == "speaking":
+                send_pet_command(speaking=True)
+            elif phase in ("listening", "ended"):
+                send_pet_command(speaking=False)
+
+        def _on_call_you_said(self, text: str) -> None:
+            """通话中用户说的话（暂不显示，避免干扰红莉栖字幕）。"""
+            pass
+
+        def _on_call_error(self, text: str) -> None:
+            self.call_view.set_subtitle(f"⚠ {text}")
 
         def _show_layered_bubbles(self, text: str) -> None:
             """将回复分层后分多个气泡前后展示，每段用 opacity 动画淡入。"""
@@ -751,46 +860,6 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
                 self._toggle_visibility()
             self._csa_down = cas_pressed
 
-        def _check_foreground(self) -> None:
-            """检测前台窗口：非桌面场景自动贴合右下角，桌面场景恢复用户位置。
-
-            规则（与 project_memory 约定一致）：
-            - _pinned 为 True 时，不做任何自动位移
-            - 前台是桌面（GetForegroundWindow 返回 0 或标题为 Program Manager）→ 恢复 _user_pos
-            - 前台是非桌面窗口 → 平滑滑到右下角
-            """
-            if self._pinned:
-                return
-            try:
-                import win32gui
-            except ImportError:
-                return
-            try:
-                foreground = win32gui.GetForegroundWindow()
-            except Exception:
-                return
-            # 前台是自己时不动作，避免拖拽中被强行拉走
-            if foreground == int(self.winId()):
-                return
-            title = win32gui.GetWindowText(foreground).strip() if foreground else ""
-            is_desktop = (foreground == 0) or (title == "Program Manager")
-            screen = QApplication.primaryScreen().availableGeometry()
-            if is_desktop:
-                # 桌面场景：回到用户上次拖拽位置，没有则保持当前
-                if self._user_pos is not None and self.pos() != self._user_pos:
-                    self._animate_to(self._user_pos)
-                self._auto_hidden = False
-            else:
-                # 非桌面场景：滑到右下角（仅当当前不在右下角附近时才动）
-                target = QPoint(
-                    screen.right() - self.width() - 20,
-                    screen.bottom() - self.height() + 20,  # 略微下沉，露出头部
-                )
-                # 阈值 30px，避免抖动
-                if (self.pos() - target).manhattanLength() > 30:
-                    self._animate_to(target)
-                    self._auto_hidden = True
-
         def _toggle_visibility(self) -> None:
             """Ctrl+Alt+S 切换桌宠显示/隐藏。"""
             if self.isVisible():
@@ -810,8 +879,6 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
                 return
             self.input.clear()
             self._cancel_bubbles()
-            if self._auto_hidden:
-                self._inactivity_timer.start(20000)
             self.reply_bubble.show()
             session = active_session(self._state)
             add_message(session, "user", text)
@@ -970,6 +1037,10 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
 
         def mousePressEvent(self, event: QMouseEvent) -> None:
             if event.button() == Qt.LeftButton:
+                # input 可见时点 PetWindow 空白区收起 input，不触发拖拽/聚焦
+                if self.input_panel.isVisible() and self._input_opacity.opacity() > 0.5:
+                    self._toggle_input_panel()
+                    return
                 if event.position().x() > 50:
                     self._focus_input()
                 if not self._pinned:
