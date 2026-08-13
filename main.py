@@ -8,7 +8,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from PySide6.QtWidgets import QApplication, QSystemTrayIcon, QMenu
-from PySide6.QtGui import QFontDatabase, QIcon
+from PySide6.QtGui import QIcon
 
 from ui.login_window import LoginWindow
 
@@ -19,6 +19,39 @@ _tray_icon: QSystemTrayIcon | None = None
 _pet_process: subprocess.Popen | None = None
 
 
+def _is_frozen() -> bool:
+    """PyInstaller 冻结模式检测。"""
+    return getattr(sys, 'frozen', False)
+
+
+def _resource_dir() -> Path:
+    """返回资源根目录（冻结时为 sys._MEIPASS，开发时为本文件所在目录）。"""
+    if _is_frozen():
+        return Path(sys._MEIPASS)
+    return Path(__file__).resolve().parent
+
+
+def _start_pet_process() -> None:
+    """启动桌宠进程。
+
+    冻结模式下用 [exe, '--desktop-pet'] 自调用；
+    开发模式下用 [python, 'desktop_pet.py'] 启动子进程。
+    """
+    global _pet_process
+    creation_flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+    if _is_frozen():
+        _pet_process = subprocess.Popen(
+            [sys.executable, "--desktop-pet"],
+            creationflags=creation_flags,
+        )
+    else:
+        _pet_process = subprocess.Popen(
+            [sys.executable, str(Path(__file__).resolve().parent / "desktop_pet.py")],
+            cwd=str(Path(__file__).resolve().parent),
+            creationflags=creation_flags,
+        )
+
+
 def main() -> int:
     global _login_window, _tray_icon
 
@@ -26,9 +59,11 @@ def main() -> int:
     app = QApplication(sys.argv)
     app.setApplicationName("Amadeus")
     app.setQuitOnLastWindowClosed(False)
-    app.setWindowIcon(QIcon(str(Path(__file__).resolve().parent / "resources" / "Kurisu.png")))
+    app.setWindowIcon(QIcon(str(_resource_dir() / "resources" / "Kurisu.png")))
 
-    QFontDatabase.addApplicationFont("Cinzel")
+    # 注：原 addApplicationFont("Cinzel") 传的是字体族名而非 .ttf 文件路径，
+    # 永远返回 -1 无效。Cinzel 字体若已安装到系统，QFont("Cinzel") 可直接使用；
+    # 若未安装则 QFont 会自动 fallback，无需此处加载。
 
     print("[main] 创建登录窗口...", flush=True)
     _login_window = LoginWindow()
@@ -56,26 +91,7 @@ def _on_login_success(character_id: str) -> None:
     _login_window.hide()
 
     if _pet_process is None or _pet_process.poll() is not None:
-        creation_flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
-        _pet_process = subprocess.Popen(
-            [sys.executable, str(Path(__file__).resolve().parent / "desktop_pet.py")],
-            cwd=Path(__file__).resolve().parent,
-            creationflags=creation_flags,
-        )
-
-
-
-def _on_chat_logout() -> None:
-    """Stop the pet and return to login."""
-    global _pet_process
-    print("[main] 退出登录，切回登录窗口", flush=True)
-    if _pet_process is not None and _pet_process.poll() is None:
-        _pet_process.terminate()
-        _pet_process = None
-    if _login_window is not None:
-        _login_window.show()
-        _login_window.raise_()
-        _login_window.activateWindow()
+        _start_pet_process()
 
 
 def _on_quit() -> None:
@@ -90,15 +106,15 @@ def _on_quit() -> None:
 def _show_windows() -> None:
     global _pet_process
     if _pet_process is None or _pet_process.poll() is not None:
-        creation_flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
-        _pet_process = subprocess.Popen(
-            [sys.executable, str(Path(__file__).resolve().parent / "desktop_pet.py")],
-            cwd=Path(__file__).resolve().parent, creationflags=creation_flags,
-        )
+        _start_pet_process()
     elif _login_window is not None and _login_window.isVisible():
         _login_window.show()
         _login_window.raise_()
 
 
 if __name__ == "__main__":
+    if "--desktop-pet" in sys.argv:
+        # 冻结模式下 exe 自调用：入口分流到 desktop_pet.main()
+        from desktop_pet import main as pet_main
+        sys.exit(pet_main())
     sys.exit(main())
