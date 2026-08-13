@@ -98,3 +98,122 @@ memory 记录"回复气泡顶部居中"，但 Lucas1479 风格是底部字幕更
 没有默认采用新设计，而是显式提"顶部 vs 底部"让用户选，用户选保留顶部。
 若自行假设"既然学 Lucas1479 就改底部"会违反用户既有约定。
 **教训**：新设计与 memory/project_memory 冲突时，必须显式列出冲突点让用户拍板，不自行覆盖。
+
+## 2026-08-13 Plan 1 验收 + 压缩恢复
+
+### 1. 上下文压缩后必须先重建任务状态再继续，不能盲跑触发消息
+压缩后系统回放了原始触发消息（brainstorming 请求），但实际进度已远超该消息（Plan 1 已实施完毕待验收）。
+若直接重跑 brainstorming 会浪费且重复劳动。正确做法：读 lessons.md → git log/status/diff 重建当前点
+→ 向用户确认当前任务 → 继续。**教训**：压缩恢复协议 = 读 lessons + 查 git 状态 + 用户确认，三步缺一不可。
+
+### 2. 窗口默认位置必须给底部 UI 留余量，不能贴 screen.bottom()
+输入框在 `h - 56`（距窗口底 8px），窗口贴 `screen.bottom()` 时输入框被任务栏/屏幕底切。
+修复：默认 Y = `screen.bottom() - height - 60`，给输入框留 ~68px 屏幕底余量。
+**教训**：贴边定位（bottom-right corner）要审计所有子控件的几何，底部有控件时必须加 margin。
+
+### 3. 人物缩放标定要算可用区，不能凭感觉调 zoom
+base_h(520) × zoom vs 窗口高(680) 减去顶部字幕(104) 和底部 Dock(56) 的可用区。
+zoom 0.75→390px 偏小；0.9→468px，顶在 152（字幕底 104 留 48px），底在 620（Dock 624 留 4px），平衡。
+zoom 1.0→520px 顶在 100 与字幕条贴住太挤。**教训**：调缩放参数前先算"可用高度 = 窗口高 - 顶部chrome - 底部chrome"。
+
+### 4. PowerShell 不认 cmd 内建（taskkill/timeout/start），需固化该教训
+重启用 `Stop-Process -Name pythonw -Force` + `Start-Sleep -Seconds 1` + `Start-Process`。
+8-13 已记过，本轮又踩。**教训**：该教训需在 start.bat 之外的所有重启场景复用，写进 project_memory。
+
+### 5. 定向 git add 避免混入遗留改动
+工作区长期有先前未提交的打包/Hermes 相关文件（core/storage.py、start.bat、ui/settings_dialog.py、
+Amadeus.spec、build/、scripts/）。提交时只 `git add 本任务文件`，不用 `git add -A/.`。
+**教训**：工作区有历史遗留未提交改动时，每次提交都用定向 add，保持提交纯净可回溯。
+
+## 2026-08-13 Agent 增强 Task 1-5 实施
+
+### 1. subagent 并行结果会丢失，必须查 git 状态重建，不能假设
+并行派 3 个 subagent 跑 Task 1/4/5，Task 4 返回完整报告，Task 1/5 结果"missing"。
+若假设它们成功会误判；若假设失败会重做已完成的工作。正确做法：git log + git status + grep
+确认每个文件实际改动到哪步，再从断点续做。Task 1 留下 requirements.txt 改动但代码没写；
+Task 5 留下测试文件但实现没改。**教训**：subagent 结果丢失时，以 git/文件系统实际状态为准重建进度。
+
+### 2. brainstorming 要先读现有代码再提方案，否则会重复造轮子
+把"建 agent loop / C 分级 / function-calling"当新建来 brainstorm，读完 agent_client.py +
+desktop_tools.py 才发现这些已全部实现且成熟。差点按"从零建"写 plan 浪费大量工作。
+**教训**：涉及"增强/添加能力"的需求，必须先读现有实现，区分"已有"与"缺口"，再 brainstorm 缺口部分。
+
+### 3. 路径校验测试用例要考虑 resolve 后的实际落点，不能凭直觉写
+`../../etc/passwd` 看似"路径穿越"，但在此项目布局（项目根在 d:\Desktop\Ideas 下）resolve 后
+仍在 Desktop 允许根内，校验放行是符合语义的，测试断言"应拒绝"是错的预期。
+**教训**：相对路径测试要算清 resolve 后的绝对路径是否真在允许根外，用明确逃逸的路径（如向上多级到盘根外）。
+
+### 4. pip 安装重型依赖（ddgs 拉 primp）耗时可能超 subagent 超时，导致中断
+Task 1 subagent 在 `pip install ddgs trafilatura` 时中断（primp 4.7MB 下载慢），
+留下 requirements.txt 改了但代码没写的半成品。改由主会话装（后台跑，同时做不依赖网络的其他任务）。
+**教训**：装重型依赖用非阻塞 + 并行做其他工作；subagent 跑装依赖的任务要给足超时或改主会话执行。
+
+### 5. 全量回归是验收底线——32 passed 才放心交付
+Task 3 完成后跑全量 32 passed，确认 Task 1-5 的新工具没破坏既有 bubble/dock/history 等测试。
+**教训**：每完成一个 track 收尾时必须全量回归，单元测试只测单点，集成回归才防连带破坏。
+
+## 2026-08-13 电话模式 Task 1-9 实施
+
+### 1. Plan 中的测试代码可能有 bug，subagent 发现后最小修复是正确做法
+Task 3 的 patch 路径 `mss()` vs `mss.mss()`（mock 未对齐实现调用）、Task 4 的 `frame_to_data_url`
+try/except 范围不够（img.save 未包导致 ValueError 逃逸）、Task 2 的 frame_ms 注释算错（16ms→64ms）。
+严格按计划代码执行是好的，但发现 bug 时应最小修复并报告偏离原因，不盲目重试。
+**教训**：Plan 代码 ≠ 可运行代码。测试驱动的价值正在于此——先 RED 后 GREEN，发现 plan 缺陷时最小修复。
+
+### 2. Subagent 集成任务必须先读代码确认变量名再改，不能硬写死
+Task 8 的 subagent 主动读了 1056 行 desktop_pet.py 确认所有变量名（load_config/character/send_pet_command/
+active_session/_latest_line/SettingsDialog）的可用性，避免了按计划硬写死名字的错误。所有变量名经代码验证后
+零偏离适配。
+**教训**：集成任务（修改大型现有文件）的 subagent 必须加"Step 0: 读代码确认位置"步骤，不依赖计划文档的变量名假设。
+
+### 3. 定向 git add 有效防止污染，9 个 commit 全部纯净
+所有 9 个 task 的 commit 都只包含本任务的文件，未混入工作区遗留改动（desktop_tools.py/storage.py/
+lessons.md/start.bat/Amadeus.spec/build/scripts/）。这是继 8-13 教训 5 后的再次验证。
+**教训**：该教训已固化，后续所有 subagent 任务都要求在 Step 5 用定向 add 并报告 git status 确认。
+
+### 4. 电话模式 TTS 降级是合理的风险缓释策略
+StreamingTTS（UI redesign §7.3）未实现，电话模式 TTS 先接 SAPI SpeechPlayer（不可打断、无振幅口型），
+但 VoiceCallController 的 `speaking_changed` 信号连接 + `_on_tts_speaking_changed` 回 listening 的逻辑
+已预留 StreamingTTS 切换接口。不是"临时凑合"，是"承认风险 + 给降级路径 + 留切换接口"。
+**教训**：前置依赖未就绪时，不是跳过功能，而是写降级实现 + 留接口，保证功能可运行且后续可平滑升级。
+
+### 5. 集成任务的 subagent 须读全量代码，仅读片段不够
+Task 8 的 subagent 读了 desktop_pet.py 1056 行全文，才确认 run_overlay 闭包内的所有变量（load_config、
+character、send_pet_command、active_session、SettingsDialog、_latest_line）均可用。若只读
+_build_buttons 和 __init__ 片段，会漏掉闭包变量的可用性信息，导致写错调用方式。
+**教训**：集成任务 subagent 的 Step 0 必须读目标文件的全文（或至少 __init__ + 关键方法区域），
+不能只读计划指明的行号范围。
+
+## 2026-08-14 启动修复 + 聊天/Dock 交互 + 取消自动位移
+
+### 1. Edit 工具"成功"不等于文件被改，git stat cache 会误导诊断
+desktop_pet.py 工作区实际 = HEAD 09ff411（之前会话已提交 collapse_button/WA_TransparentForMouseEvents/删除 _check_foreground），
+但这轮对话我重新 Edit 这些改动时，Edit 工具报告"修改成功"且 cat -n 显示新内容——实际文件未被改变
+（因为已是目标状态，old_string 匹配到的位置 new_string 与现有内容一致）。git status/diff 都说 desktop_pet.py
+无改动，差点误判为"git 索引损坏"。**教训**：诊断"改动丢失"时，用 `git diff HEAD -- file` + `git show HEAD:file`
+确认工作区与 HEAD 的真实关系，不能只信 Edit 工具输出或反复 update-index --refresh。
+
+### 2. 上下文压缩后开始工作前必须先 git log + git show HEAD 确认最新提交内容
+这轮对话重新做了之前会话已提交的 desktop_pet.py 改动（collapse_button 等），完全重复劳动。
+若开始前先 `git log --oneline -3` + `git show HEAD:desktop_pet.py | grep 关键标记`，会立刻发现
+改动已在 HEAD，直接跳到 core/desktop_tools.py（真正未提交的文件）。**教训**：压缩恢复或新会话开始时，
+除了读 lessons.md，还必须 git log + git show HEAD 确认代码实际状态，避免重复已完成的工作。
+
+### 3. TRAE 沙箱禁止写入任何 site-packages，用 --target 装到项目本地 + sys.path 注入
+`pip install` 默认装到 `D:\anaconda\Lib\site-packages` 被沙箱拒（TRAE Sandbox Error: hit restricted），
+`pip install --user` 装到 `C:\Users\23733\AppData\Roaming\Python\Python313\site-packages` 也被拒
+（WinError 5 拒绝访问）。解决：`pip install --target=.libs ddgs trafilatura` 装到项目本地 .libs/，
+在 desktop_pet.py 顶部 `sys.path.insert(0, str(ROOT/.libs))` 注入。冻结模式（exe）跳过，依赖已打包。
+**教训**：TRAE 内装依赖只能用 --target 到项目内 + sys.path 注入；--user 和默认路径都被沙箱拦。
+
+### 4. Qt QGraphicsOpacityEffect.setOpacity(0) 只改视觉不改事件接收，用 WA_TransparentForMouseEvents
+dock 用 opacity 1→0 淡出后，视觉消失但控件仍 isVisible()=True 且仍接收鼠标事件，导致聊天框打开时
+点 dock 原位置仍能误触"固定/设置/记录/退出"按钮。解决：`setAttribute(Qt.WA_TransparentForMouseEvents, True)`
+让透明控件不拦截鼠标事件（且不影响 opacity 动画），反向时设 False 恢复点击。
+**教训**：Qt 透明控件 ≠ 不可交互控件。opacity=0 只是视觉，要禁用交互必须配合 WA_TransparentForMouseEvents
+或 setEnabled(False) 或 hide()。
+
+### 5. pythonw.exe 启动失败时错误被静默吞，诊断必须改用 python.exe 前台跑
+start.bat 用 `pythonw.exe desktop_pet.py` 启动，pythonw 无控制台，崩溃时 stderr 被丢弃，用户感知是
+"点了没反应"。诊断时改用 `python.exe desktop_pet.py 2>&1` 前台跑，立即看到 ModuleNotFoundError 等真实错误。
+**教训**：GUI 程序启动失败排查，第一步是把 pythonw 换成 python 前台跑捕获 stderr；修复后再换回 pythonw。

@@ -14,8 +14,8 @@ import win32clipboard
 import win32con
 import win32gui
 import httpx
-from ddgs import DDGS
-import trafilatura
+
+from config import OPENCLAW_DEFAULTS
 
 
 POWERSHELL = r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"
@@ -39,6 +39,7 @@ def httpx_get_text(url: str, timeout: float = 15.0, max_bytes: int = 2_000_000) 
 
 def trafilatura_extract(html: str) -> str:
     """从 HTML 提取正文。"""
+    import trafilatura  # 延迟导入：避免启动时强依赖，仅 fetch_url 调用时才需要
     return trafilatura.extract(html) or ""
 
 
@@ -98,9 +99,10 @@ TOOL_DEFINITIONS = [
     {"type": "function", "function": {"name": "list_dir", "description": "List entries (name, size, type) in a directory. Returns up to 100 entries.", "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}}},
     {"type": "function", "function": {"name": "read_file", "description": "Read a UTF-8 text file (up to 20000 chars, max 2MB). Rejects binary and paths outside allowed roots.", "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}}},
     {"type": "function", "function": {"name": "write_file", "description": "Write text content to a file (overwrites). Path must be inside allowed roots. Requires user confirmation.", "parameters": {"type": "object", "properties": {"path": {"type": "string"}, "content": {"type": "string"}}, "required": ["path", "content"]}}},
+    {"type": "function", "function": {"name": "operate_gui", "description": "Delegate a GUI operation task (e.g. 'open Notepad and type hello', 'click the send button in WeChat') to the OpenClaw CUA backend, which drives mouse/keyboard to operate the real desktop. Requires OpenClaw Gateway running locally and a CUA skill installed. Needs user confirmation.", "parameters": {"type": "object", "properties": {"task": {"type": "string", "description": "Natural language description of the GUI operation to perform."}}, "required": ["task"]}}},
 ]
 
-CONFIRMATION_REQUIRED = {"open_target", "type_text", "press_keys", "click", "run_command", "write_file"}
+CONFIRMATION_REQUIRED = {"open_target", "type_text", "press_keys", "click", "run_command", "write_file", "operate_gui"}
 
 
 def execute_tool(name: str, arguments: dict) -> dict:
@@ -179,6 +181,7 @@ def execute_tool(name: str, arguments: dict) -> dict:
         if not query:
             return {"text": "Empty query."}
         try:
+            from ddgs import DDGS  # 延迟导入：避免启动时强依赖，仅 web_search 调用时才需要
             with DDGS() as ddgs:
                 results = list(ddgs.text(query, max_results=5))
         except Exception as exc:
@@ -245,9 +248,47 @@ def execute_tool(name: str, arguments: dict) -> dict:
         except OSError as exc:
             return {"text": f"Write failed: {exc}"}
         return {"text": f"Written {len(content)} chars to {p}."}
+    if name == "operate_gui":
+        return _operate_gui(arguments)
     if name == "run_command":
         return _run_powershell(arguments)
     raise ValueError(f"Unknown tool: {name}")
+
+
+def _operate_gui(arguments: dict) -> dict:
+    """把 GUI 操作任务委托给本地 OpenClaw Gateway（CUA 后端）。
+
+    通过 POST /v1/chat/completions 把自然语言任务发给 openclaw/default 代理，
+    代理自动启用 CUA skill 操作真实桌面（鼠标/键盘）。Gateway 未启用或不可达时返回降级提示。
+    参考接口：https://docs.openclaw.ai/gateway（/v1/chat/completions 在主端口，OpenAI 兼容）。
+    """
+    task = arguments.get("task", "").strip()
+    if not task:
+        return {"text": "Empty GUI task."}
+    if not OPENCLAW_DEFAULTS.get("enabled"):
+        return {"text": "OpenClaw CUA 后端未启用。请在 config.py 设置 OPENCLAW_DEFAULTS['enabled']=True，并部署 OpenClaw Gateway（openclaw gateway，默认 127.0.0.1:18789）。"}
+    base = str(OPENCLAW_DEFAULTS.get("base_url", "http://127.0.0.1:18789")).rstrip("/")
+    token = str(OPENCLAW_DEFAULTS.get("token", ""))
+    model = str(OPENCLAW_DEFAULTS.get("model", "openclaw/default"))
+    timeout = float(OPENCLAW_DEFAULTS.get("timeout", 120))
+    headers = {"Authorization": f"Bearer {token}"} if token else {}
+    try:
+        with httpx.Client(timeout=timeout) as client:
+            resp = client.post(
+                f"{base}/v1/chat/completions",
+                headers=headers,
+                json={"model": model, "messages": [{"role": "user", "content": task}]},
+            )
+        if resp.is_error:
+            return {"text": f"OpenClaw Gateway HTTP {resp.status_code}: {resp.text[:500]}"}
+        data = resp.json()
+        choices = data.get("choices") or []
+        content = choices[0].get("message", {}).get("content", "") if choices else ""
+        return {"text": content or "OpenClaw 返回空回复。"}
+    except httpx.HTTPError as exc:
+        return {"text": f"OpenClaw Gateway 不可达：{exc}。请确认 Gateway 已启动（openclaw gateway）。"}
+    except Exception as exc:
+        return {"text": f"operate_gui 失败：{exc}"}
 
 
 def _press_keys(keys: list[str]) -> None:
