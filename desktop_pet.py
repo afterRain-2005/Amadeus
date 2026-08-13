@@ -339,8 +339,8 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             self.input_panel = QWidget(self)
             self.input_panel.setGeometry(panel_x, self.height() - 70, panel_w, 52)
             self.input_panel.setStyleSheet(
-                "background:rgba(255,255,255,230);"
-                "border:1px solid rgba(0,0,0,0.08);border-radius:24px"
+                "background:rgba(0,212,255,0.06);"
+                "border:1px solid rgba(0,212,255,0.4);border-radius:24px"
             )
             input_layout = QHBoxLayout(self.input_panel)
             input_layout.setContentsMargins(14, 6, 6, 6)
@@ -348,9 +348,9 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             self.input = QLineEdit()
             self.input.setPlaceholderText("和红莉栖对话…")
             self.input.setStyleSheet(
-                "QLineEdit{background:transparent;color:#1d1d1f;border:0;padding:8px 10px;"
+                "QLineEdit{background:transparent;color:#7be8ff;border:0;padding:8px 10px;"
                 "font-size:14px;font-family:'Segoe UI','Microsoft YaHei'}"
-                "QLineEdit::placeholder{color:#8e8e93}"
+                "QLineEdit::placeholder{color:rgba(0,212,255,0.5)}"
             )
             self.input.returnPressed.connect(self._send)
             input_layout.addWidget(self.input, 1)
@@ -359,8 +359,9 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             send_button.clicked.connect(self._send)
             send_button.setFixedSize(36, 36)
             send_button.setStyleSheet(
-                "QPushButton{background:#007AFF;color:white;border:0;border-radius:18px;font-size:16px;font-weight:bold}"
-                "QPushButton:hover{background:#0066d6} QPushButton:disabled{background:#b0d4ff}"
+                "QPushButton{background:#00d4ff;color:#001824;border:0;border-radius:18px;"
+                "font-size:16px;font-weight:bold}"
+                "QPushButton:hover{background:#33dfff} QPushButton:disabled{background:rgba(0,212,255,0.3)}"
             )
             input_layout.addWidget(send_button)
             self.send_button = send_button
@@ -374,6 +375,15 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             self.dock_bar.button("记录").clicked.connect(self._toggle_history)
             self.dock_bar.button("退出").clicked.connect(QApplication.quit)
             self.dock_bar.show()
+
+            # Dock 与输入框互斥切换的 opacity effect
+            self._dock_opacity = QGraphicsOpacityEffect(self.dock_bar)
+            self.dock_bar.setGraphicsEffect(self._dock_opacity)
+            self._dock_opacity.setOpacity(1.0)
+
+            self._input_opacity = QGraphicsOpacityEffect(self.input_panel)
+            self.input_panel.setGraphicsEffect(self._input_opacity)
+            self._input_opacity.setOpacity(0.0)
 
             self._relayout()
 
@@ -438,12 +448,32 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             self.input.setFocus()
 
         def _toggle_input_panel(self) -> None:
-            """切换输入面板可见性。"""
-            if self.input_panel.isVisible():
-                self.input_panel.hide()
+            """切换输入面板：Dock 淡出 + 输入框淡入，或反向。"""
+            if self.input_panel.isVisible() and self._input_opacity.opacity() > 0.5:
+                self._cross_fade(self._input_opacity, self._dock_opacity)
+                QTimer.singleShot(200, self.input_panel.hide)
             else:
                 self.input_panel.show()
                 self.input.setFocus()
+                self._cross_fade(self._dock_opacity, self._input_opacity)
+
+        def _cross_fade(self, fade_out_effect, fade_in_effect) -> None:
+            """200ms opacity 交叉淡入淡出。"""
+            anim_out = QPropertyAnimation(fade_out_effect, b"opacity", self)
+            anim_out.setDuration(200)
+            anim_out.setStartValue(fade_out_effect.opacity())
+            anim_out.setEndValue(0.0)
+            anim_out.setEasingCurve(QEasingCurve.OutCubic)
+            anim_out.start()
+            self._fade_out_anim = anim_out
+
+            anim_in = QPropertyAnimation(fade_in_effect, b"opacity", self)
+            anim_in.setDuration(200)
+            anim_in.setStartValue(fade_in_effect.opacity())
+            anim_in.setEndValue(1.0)
+            anim_in.setEasingCurve(QEasingCurve.OutCubic)
+            anim_in.start()
+            self._fade_in_anim = anim_in
 
         def _toggle_pin(self) -> None:
             """固定/解锁位置。固定后禁用拖拽和自动贴合。DockButton 视觉反馈由 Task 5 处理。"""
@@ -566,9 +596,9 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             self._history_expanded = not self._history_expanded
 
         def _hide_input_or_noop(self) -> None:
-            """Escape 键：收起输入面板（若已展开）。"""
-            if self.input_panel.isVisible():
-                self.input_panel.hide()
+            """Escape 键：收起输入面板（若已展开），Dock 淡入恢复。"""
+            if self.input_panel.isVisible() and self._input_opacity.opacity() > 0.5:
+                self._toggle_input_panel()
 
         def _poll_global_hotkey(self) -> None:
             try:
@@ -795,6 +825,9 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             # Dock：底部居中悬浮
             dock_w = self.dock_bar.sizeHint().width()
             self.dock_bar.setGeometry((w - dock_w) // 2, h - 56, dock_w, 48)
+            # 输入面板：底部居中（与 Dock 同位，互斥显示）
+            panel_w = 320
+            self.input_panel.setGeometry((w - panel_w) // 2, h - 56, panel_w, 48)
 
         def resizeEvent(self, event) -> None:
             self._relayout()
