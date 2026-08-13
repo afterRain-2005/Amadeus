@@ -94,6 +94,23 @@ def renderer_process(connection: Connection) -> None:
         server.shutdown()
 
 
+def _decide_delta_action(
+    streamed_reply: str, text: str, history_expanded: bool
+) -> tuple[str, bool, bool]:
+    """流式增量到达时的纯决策逻辑。
+
+    返回 (new_streamed, should_show_thinking, should_set_bubble_text)：
+    - 始终把 text 累积到 streamed_reply；
+    - delta 期间不更新气泡文字（should_set_bubble_text 恒为 False），由 finished 阶段
+      统一 _show_layered_bubbles；
+    - 仅在历史面板未展开时显示思考点动画（避免与历史面板重复展示）。
+    """
+    new_streamed = streamed_reply + text
+    should_show_thinking = not history_expanded
+    should_set_bubble_text = False
+    return new_streamed, should_show_thinking, should_set_bubble_text
+
+
 def run_overlay(connection: Connection, renderer: mp.Process) -> int:
     from PySide6.QtCore import QEasingCurve, QObject, QPoint, QPropertyAnimation, QRect, QRunnable, Qt, QThreadPool, QTimer, Signal
     from PySide6.QtGui import QColor, QIcon, QImage, QMouseEvent, QPainter, QPixmap
@@ -725,8 +742,13 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             self._set_bubble_text(self._latest_line(text))
 
         def _agent_delta(self, text: str) -> None:
-            self._streamed_reply += text
-            if not self._history_expanded:
+            new_streamed, should_show_thinking, should_set_bubble_text = _decide_delta_action(
+                self._streamed_reply, text, self._history_expanded
+            )
+            self._streamed_reply = new_streamed
+            if should_set_bubble_text:
+                self._set_bubble_text(self._streamed_reply)
+            if should_show_thinking:
                 self._show_thinking_dots()
 
         def _agent_finished(self, reply: str) -> None:
