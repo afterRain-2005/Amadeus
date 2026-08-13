@@ -41,6 +41,48 @@ HERMES_DEFAULTS: dict[str, object] = {
 }
 
 
+# === OpenClaw CUA 后端默认配置 ===
+# OpenClaw 是 Node.js 个人 AI 助理平台（npm install -g openclaw），其 Gateway 暴露 OpenAI 兼容 HTTP API。
+# amadeus-py 的 operate_gui 工具通过 POST /v1/chat/completions 把 GUI 任务委托给 OpenClaw 代理（默认 openclaw/default），
+# 代理自动启用 CUA skill（如 TuriX-CUA）操作真实桌面（鼠标/键盘）。
+# 前提：用户需先部署 OpenClaw（Node ≥ 22.22.3 + npm install -g openclaw + openclaw onboard + 装 CUA skill + openclaw gateway）。
+# 官方文档：https://docs.openclaw.ai/gateway  仓库：https://github.com/openclaw/openclaw
+OPENCLAW_DEFAULTS: dict[str, object] = {
+    "enabled": False,                          # 是否启用 OpenClaw CUA 后端（False 时 operate_gui 返回降级提示）
+    "base_url": "http://127.0.0.1:18789",      # OpenClaw Gateway 默认端口（仅回环）
+    "token": "",                               # OPENCLAW_GATEWAY_TOKEN（shared-secret 鉴权，onboard 时生成）
+    "model": "openclaw/default",               # 稳定代理别名，始终映射到配置的默认代理
+    "timeout": 120,                            # GUI 操作可能耗时，给足超时（秒）
+}
+
+
+# === 电话模式默认配置 ===
+# 电话模式 = 与红莉栖 AI 半双工语音通话 + 屏幕共享给 AI 看（豆包语音电话模式）。
+# 语音管线：VAD(RMS阈值) → 回合制 STT(小米mimo) → DeepSeek 流式 LLM → TTS(红莉栖音色)
+# 屏幕共享：mss 定时截帧缓存 + 开口时附帧给视觉模型 → 描述注入 LLM user 消息
+# 视觉模型用 GPT-4o（DeepSeek 无视觉能力）；未配 key 时屏幕共享自动降级关闭。
+PHONE_DEFAULTS: dict[str, object] = {
+    "vision_endpoint": "",                              # OpenAI 兼容视觉端点（留空则用对话 endpoint）
+    "vision_api_key": "",                               # 视觉模型 key（留空时屏幕共享降级关闭）
+    "vision_model": "gpt-4o",                           # 视觉理解模型（DeepSeek 无视觉，必须 GPT-4o 级）
+    "gpt_sovits_url": "http://127.0.0.1:9880",          # GPT-SoVITS api_v2.py 默认端口
+    "screen_share_default": True,                       # 进入通话时默认开屏幕共享
+    "capture_interval_ms": 2500,                        # mss 截帧间隔（2.5s 一次，仅缓存最新帧）
+}
+
+# === VAD 参数（移植原项目 amadeus/src/components/VoiceCall.tsx:23-27）===
+# 数学本质：RMS = sqrt(mean(x^2))，信号能量度量。
+# 滞回阈值：START_THRESH > END_THRESH，留缓冲带防边界抖动（单阈值时噪声在阈值附近波动会反复触发）。
+# 形象理解：像声音的"音量水位线"，超过高位认为有人说话，低于低位持续一段时间认为说完了。
+VAD_PARAMS: dict[str, int | float] = {
+    "start_thresh": 0.018,       # 开始说话的 RMS 阈值（高位）
+    "end_thresh": 0.012,         # 结束说话的 RMS 阈值（低位，低于开始防抖）
+    "start_frames": 3,           # 连续多少帧超阈值才判定"开始说话"
+    "silence_ms": 1100,          # 静音持续多久判定"一句话结束"
+    "max_utterance_ms": 15000,   # 单次最长录音（防一直不结束）
+}
+
+
 # === 审批策略（类似 Trae 的权限配置） ===
 # 工具分为三档：
 #   auto_allow_tools:   永远自动放行（只读/低风险操作）
