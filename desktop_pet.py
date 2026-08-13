@@ -804,7 +804,7 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
                 return
             painter = QPainter(self)
             painter.setRenderHint(QPainter.SmoothPixmapTransform)
-            # 全身显示，按 _zoom 缩放，水平居中偏右（给工具栏留空间），底部对齐
+            # 全身显示，按 _zoom 缩放，水平居中，底部对齐
             base_h = 520
             target_h = int(base_h * self._zoom)
             target_w = int(target_h * self._frame.width() / self._frame.height())
@@ -812,7 +812,7 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
                 target_w, target_h, Qt.KeepAspectRatio, Qt.SmoothTransformation
             )
             target = QRect(
-                (self.width() - scaled.width()) // 2 + 15,
+                (self.width() - scaled.width()) // 2,
                 self.height() - scaled.height() - 60,
                 scaled.width(), scaled.height(),
             )
