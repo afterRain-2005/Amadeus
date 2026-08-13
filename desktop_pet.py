@@ -405,9 +405,9 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             self.reply_bubble.setAlignment(Qt.AlignCenter)
             self.reply_bubble.setWordWrap(True)
             self.reply_bubble.setStyleSheet(
-                "QLabel{background:rgba(255,255,255,245);color:#1d1d1f;"
-                "border:1px solid rgba(0,0,0,0.06);border-radius:22px;"
-                "padding:12px 18px;font:14px 'Segoe UI','Microsoft YaHei';"
+                "QLabel{background:rgba(0,212,255,0.16);color:#7be8ff;"
+                "border:1px solid rgba(0,212,255,0.4);border-radius:18px;"
+                "padding:10px 16px;font:14px 'Segoe UI','Microsoft YaHei';"
                 "font-weight:400;letter-spacing:0.2px}"
             )
             self._set_bubble_text(self._latest_line(active_session(self._state)["messages"][-1]["content"]))
@@ -577,15 +577,30 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             self.reply_bubble.setGeometry(x, 6, w, h)
 
         def _show_thinking_dots(self) -> None:
-            """delta 期间显示思考动画（3 个青色点呼吸），不显示流式文字。"""
-            if not hasattr(self, '_thinking_dots_shown'):
-                self._set_bubble_text("● ● ●")
-                self._thinking_dots_shown = True
+            """delta 期间显示思考动画（3 个青色点呼吸）。与 _show_next_bubble 共用 _bubble_opacity。"""
+            self._set_bubble_text("● ● ●")
+            if not hasattr(self, '_bubble_opacity'):
+                self._bubble_opacity = QGraphicsOpacityEffect(self.reply_bubble)
+                self.reply_bubble.setGraphicsEffect(self._bubble_opacity)
+            if not hasattr(self, '_thinking_anim'):
+                self._thinking_anim = QPropertyAnimation(self._bubble_opacity, b"opacity", self)
+                self._thinking_anim.setDuration(1000)
+                self._thinking_anim.setStartValue(0.4)
+                self._thinking_anim.setKeyValueAt(0.5, 1.0)
+                self._thinking_anim.setEndValue(0.4)
+                self._thinking_anim.setLoopCount(-1)
+            if self._thinking_anim.state() != QPropertyAnimation.Running:
+                self._thinking_anim.start()
 
         def _show_layered_bubbles(self, text: str) -> None:
             """将回复分层后分多个气泡前后展示，每段用 opacity 动画淡入。"""
             import re
             self._cancel_bubbles()
+            # 停止思考呼吸动画，恢复 opacity
+            if hasattr(self, '_thinking_anim') and self._thinking_anim.state() == QPropertyAnimation.Running:
+                self._thinking_anim.stop()
+                if hasattr(self, '_bubble_opacity'):
+                    self._bubble_opacity.setOpacity(1.0)
             self._thinking_dots_shown = False
             segments = re.split(r'(?<=[。！？!?\n])\s*', text.strip())
             merged: list[str] = []
