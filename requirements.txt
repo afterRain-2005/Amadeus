@@ -6,3 +6,5 @@ pywebview>=6.0
 pywin32>=306
 sounddevice>=0.5
 pytest>=8.0
+ddgs>=4.0
+trafilatura>=1.12

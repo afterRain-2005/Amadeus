@@ -13,10 +13,33 @@ from PIL import ImageGrab
 import win32clipboard
 import win32con
 import win32gui
+import httpx
+from ddgs import DDGS
+import trafilatura
 
 
 POWERSHELL = r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"
 DEFAULT_WORKDIR = str(Path(__file__).resolve().parents[4])
+
+
+def httpx_get_text(url: str, timeout: float = 15.0, max_bytes: int = 2_000_000) -> str:
+    """抓取 URL 文本，限制响应体大小。"""
+    with httpx.Client(timeout=timeout, follow_redirects=True) as client:
+        with client.stream("GET", url) as resp:
+            resp.raise_for_status()
+            chunks = []
+            size = 0
+            for chunk in resp.iter_bytes(chunk_size=8192):
+                size += len(chunk)
+                if size > max_bytes:
+                    break
+                chunks.append(chunk)
+            return b"".join(chunks).decode("utf-8", errors="replace")
+
+
+def trafilatura_extract(html: str) -> str:
+    """从 HTML 提取正文。"""
+    return trafilatura.extract(html) or ""
 
 
 TOOL_DEFINITIONS = [
@@ -29,6 +52,8 @@ TOOL_DEFINITIONS = [
     {"type": "function", "function": {"name": "press_keys", "description": "Press a keyboard shortcut such as ctrl+l or alt+tab.", "parameters": {"type": "object", "properties": {"keys": {"type": "array", "items": {"type": "string"}}}, "required": ["keys"]}}},
     {"type": "function", "function": {"name": "click", "description": "Click a desktop coordinate after inspecting the screen.", "parameters": {"type": "object", "properties": {"x": {"type": "integer"}, "y": {"type": "integer"}, "button": {"type": "string", "enum": ["left", "right"]}}, "required": ["x", "y"]}}},
     {"type": "function", "function": {"name": "run_command", "description": "Run PowerShell with a reliable UTF-8 console and return exit code, stdout, and stderr. Use for terminal tasks.", "parameters": {"type": "object", "properties": {"command": {"type": "string"}, "cwd": {"type": "string", "description": "Existing working directory; defaults to the Windows desktop."}, "timeout_seconds": {"type": "integer", "minimum": 1, "maximum": 120}}, "required": ["command"]}}},
+    {"type": "function", "function": {"name": "web_search", "description": "Search the web with DuckDuckGo and return the top 5 results (title, snippet, url). Use for factual questions, current info, weather, etc.", "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}}},
+    {"type": "function", "function": {"name": "fetch_url", "description": "Fetch a web page and extract its main text content (up to 8000 chars). Use to read an article or page found via web_search. Only http/https URLs.", "parameters": {"type": "object", "properties": {"url": {"type": "string"}}, "required": ["url"]}}},
 ]
 
 CONFIRMATION_REQUIRED = {"open_target", "type_text", "press_keys", "click", "run_command"}
@@ -105,6 +130,34 @@ def execute_tool(name: str, arguments: dict) -> dict:
         win32api.mouse_event(down, x, y, 0, 0)
         win32api.mouse_event(up, x, y, 0, 0)
         return {"text": f"Clicked {x},{y}."}
+    if name == "web_search":
+        query = arguments["query"].strip()
+        if not query:
+            return {"text": "Empty query."}
+        try:
+            with DDGS() as ddgs:
+                results = list(ddgs.text(query, max_results=5))
+        except Exception as exc:
+            return {"text": f"Search failed: {exc}"}
+        if not results:
+            return {"text": "No results found."}
+        lines = []
+        for i, item in enumerate(results, 1):
+            title = item.get("title", "")
+            body = item.get("body", "")
+            href = item.get("href", "")
+            lines.append(f"{i}. {title}\n   {body}\n   {href}")
+        return {"text": "\n".join(lines)}
+    if name == "fetch_url":
+        url = arguments["url"].strip()
+        if not url.startswith(("http://", "https://")):
+            return {"text": "Fetch failed: only http/https URLs are allowed."}
+        try:
+            html = httpx_get_text(url)
+            text = trafilatura_extract(html)[:8000]
+            return {"text": text or "No extractable content."}
+        except Exception as exc:
+            return {"text": f"Fetch failed: {exc}"}
     if name == "run_command":
         return _run_powershell(arguments)
     raise ValueError(f"Unknown tool: {name}")

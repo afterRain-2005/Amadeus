@@ -53,6 +53,8 @@ APPROVAL_POLICY: dict[str, list[str]] = {
         "list_windows",       # 列出窗口（只读）
         "read_clipboard",     # 读剪贴板（只读）
         "focus_window",       # 切换窗口焦点（低风险）
+        "web_search",         # 网页搜索（只读）
+        "fetch_url",          # 抓取网页（只读）
     ],
     # run_command 的安全命令前缀列表（命令 strip 后 startswith 任一前缀即放行）
     "auto_allow_commands": [
