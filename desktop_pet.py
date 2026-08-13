@@ -135,7 +135,7 @@ def _build_you_html(text: str) -> str:
 
 def run_overlay(connection: Connection, renderer: mp.Process) -> int:
     from PySide6.QtCore import QByteArray, QEasingCurve, QObject, QPoint, QPropertyAnimation, QRect, QRectF, QRunnable, Qt, QThreadPool, QTimer, Signal
-    from PySide6.QtGui import QColor, QIcon, QImage, QMouseEvent, QPainter, QPixmap
+    from PySide6.QtGui import QColor, QIcon, QImage, QLinearGradient, QMouseEvent, QPainter, QPixmap
     from PySide6.QtSvg import QSvgRenderer
     from PySide6.QtWidgets import (
                 QApplication, QHBoxLayout, QLabel, QLineEdit, QMenu, QMessageBox,
@@ -905,6 +905,15 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
                     self.update()
 
         def paintEvent(self, event) -> None:
+            # 深色玻璃底（A2 配色：深青蓝渐变）
+            painter = QPainter(self)
+            painter.setRenderHint(QPainter.Antialiasing)
+            grad = QLinearGradient(0, 0, self.width(), self.height())
+            grad.setColorAt(0, QColor(8, 14, 22, 150))
+            grad.setColorAt(1, QColor(12, 24, 36, 130))
+            painter.fillRect(self.rect(), grad)
+            painter.end()
+
             if self._frame.isNull():
                 return
             painter = QPainter(self)
