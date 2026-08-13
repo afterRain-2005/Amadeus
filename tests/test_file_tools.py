@@ -65,3 +65,18 @@ def test_read_file_rejects_traversal():
     from core.desktop_tools import execute_tool
     result = execute_tool("read_file", {"path": "../../../../etc/passwd"})
     assert "拒绝" in result["text"] or "denied" in result["text"].lower()
+
+
+def test_write_file_writes_content():
+    from core.desktop_tools import execute_tool
+    with tempfile.TemporaryDirectory() as d:
+        target = str(Path(d) / "out.txt")
+        result = execute_tool("write_file", {"path": target, "content": "新内容"})
+        assert "written" in result["text"].lower() or "ok" in result["text"].lower() or "写入" in result["text"]
+        assert Path(target).read_text(encoding="utf-8") == "新内容"
+
+
+def test_write_file_rejects_system_dir():
+    from core.desktop_tools import execute_tool
+    result = execute_tool("write_file", {"path": "C:/Windows/evil.bat", "content": "x"})
+    assert "denied" in result["text"].lower() or "拒绝" in result["text"]

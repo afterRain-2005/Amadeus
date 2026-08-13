@@ -97,9 +97,10 @@ TOOL_DEFINITIONS = [
     {"type": "function", "function": {"name": "file_find", "description": "Find files matching a glob pattern (e.g. *.txt) under a root directory (defaults to Desktop). Returns up to 30 paths.", "parameters": {"type": "object", "properties": {"pattern": {"type": "string"}, "root": {"type": "string", "description": "Directory to search under; defaults to user Desktop."}}, "required": ["pattern"]}}},
     {"type": "function", "function": {"name": "list_dir", "description": "List entries (name, size, type) in a directory. Returns up to 100 entries.", "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}}},
     {"type": "function", "function": {"name": "read_file", "description": "Read a UTF-8 text file (up to 20000 chars, max 2MB). Rejects binary and paths outside allowed roots.", "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}}},
+    {"type": "function", "function": {"name": "write_file", "description": "Write text content to a file (overwrites). Path must be inside allowed roots. Requires user confirmation.", "parameters": {"type": "object", "properties": {"path": {"type": "string"}, "content": {"type": "string"}}, "required": ["path", "content"]}}},
 ]
 
-CONFIRMATION_REQUIRED = {"open_target", "type_text", "press_keys", "click", "run_command"}
+CONFIRMATION_REQUIRED = {"open_target", "type_text", "press_keys", "click", "run_command", "write_file"}
 
 
 def execute_tool(name: str, arguments: dict) -> dict:
@@ -233,6 +234,17 @@ def execute_tool(name: str, arguments: dict) -> dict:
         except UnicodeDecodeError:
             return {"text": "Binary file, cannot read as text."}
         return {"text": text[:20000]}
+    if name == "write_file":
+        ok, p = _validate_path(arguments["path"])
+        if not ok:
+            return {"text": "Write denied: path outside allowed roots or system directory."}
+        content = arguments.get("content", "")
+        try:
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(content, encoding="utf-8")
+        except OSError as exc:
+            return {"text": f"Write failed: {exc}"}
+        return {"text": f"Written {len(content)} chars to {p}."}
     if name == "run_command":
         return _run_powershell(arguments)
     raise ValueError(f"Unknown tool: {name}")
