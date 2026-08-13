@@ -111,6 +111,28 @@ def _decide_delta_action(
     return new_streamed, should_show_thinking, should_set_bubble_text
 
 
+def _build_kurisu_html(text: str) -> str:
+    """Kurisu 消息 HTML：青蓝软底 + 青色左边条。"""
+    safe = html.escape(text).replace("\n", "<br>")
+    return (
+        "<div style='margin:0 0 12px 0;padding:8px 10px;background:rgba(0,212,255,0.16);"
+        "border-left:2px solid #00d4ff;border-radius:4px'>"
+        "<div style='color:#7be8ff;font-weight:bold;font-size:11px;margin-bottom:2px'>Kurisu</div>"
+        f"<div style='line-height:1.42;color:#7be8ff;font-size:13px'>{safe}</div></div>"
+    )
+
+
+def _build_you_html(text: str) -> str:
+    """You 消息 HTML：灰底 + 右灰边条。"""
+    safe = html.escape(text).replace("\n", "<br>")
+    return (
+        "<div style='margin:0 0 12px 0;padding:8px 10px;background:rgba(255,255,255,0.06);"
+        "border-right:2px solid #8e8e93;border-radius:4px;text-align:right'>"
+        "<div style='color:#8e8e93;font-weight:bold;font-size:11px;margin-bottom:2px'>You</div>"
+        f"<div style='line-height:1.42;color:#cccccc;font-size:13px'>{safe}</div></div>"
+    )
+
+
 def run_overlay(connection: Connection, renderer: mp.Process) -> int:
     from PySide6.QtCore import QByteArray, QEasingCurve, QObject, QPoint, QPropertyAnimation, QRect, QRectF, QRunnable, Qt, QThreadPool, QTimer, Signal
     from PySide6.QtGui import QColor, QIcon, QImage, QMouseEvent, QPainter, QPixmap
@@ -286,6 +308,64 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
                     return btn
             raise KeyError(name)
 
+    class HistoryDrawer(QWidget):
+        """右侧滑入历史抽屉。"""
+        def __init__(self, parent=None):
+            super().__init__(parent)
+            self.setAttribute(Qt.WA_TranslucentBackground, True)
+            self._width = 168
+            layout = QVBoxLayout(self)
+            layout.setContentsMargins(8, 8, 8, 8)
+            self.history = QTextBrowser(self)
+            self.history.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOn)
+            self.history.setStyleSheet(
+                "QTextBrowser{background:rgba(8,14,22,0.85);color:#7be8ff;border:1px solid rgba(0,212,255,0.4);"
+                "border-radius:8px;padding:8px;font:13px 'Segoe UI','Microsoft YaHei'}"
+                "QScrollBar:vertical{background:rgba(0,212,255,0.1);width:6px;margin:4px}"
+                "QScrollBar::handle:vertical{background:#00d4ff;border-radius:3px;min-height:30px}"
+                "QScrollBar::add-line:vertical,QScrollBar::sub-line:vertical{height:0}"
+                "QScrollBar::add-page:vertical,QScrollBar::sub-page:vertical{background:transparent}"
+            )
+            self.history.setOpenExternalLinks(False)
+            layout.addWidget(self.history)
+            self._slide_anim = None
+
+        def set_messages_html(self, html_content: str) -> None:
+            self.history.setHtml(
+                "<html><body style='margin:0;background:transparent'>"
+                + html_content
+                + "</body></html>"
+            )
+            self.history.verticalScrollBar().setValue(self.history.verticalScrollBar().maximum())
+
+        def slide_in(self) -> None:
+            """300ms 从右滑入。"""
+            if self.parent() is None:
+                return
+            parent_w = self.parent().width()
+            target_x = parent_w - self._width - 4
+            anim = QPropertyAnimation(self, b"pos", self)
+            anim.setDuration(300)
+            anim.setStartValue(self.pos())
+            anim.setEndValue(QPoint(target_x, self.pos().y()))
+            anim.setEasingCurve(QEasingCurve.InOutCubic)
+            anim.start()
+            self._slide_anim = anim
+
+        def slide_out(self) -> None:
+            """300ms 滑出到右侧外。"""
+            if self.parent() is None:
+                return
+            parent_w = self.parent().width()
+            target_x = parent_w + 4
+            anim = QPropertyAnimation(self, b"pos", self)
+            anim.setDuration(300)
+            anim.setStartValue(self.pos())
+            anim.setEndValue(QPoint(target_x, self.pos().y()))
+            anim.setEasingCurve(QEasingCurve.InOutCubic)
+            anim.start()
+            self._slide_anim = anim
+
     class PetWindow(QWidget):
         def __init__(self) -> None:
             super().__init__()
@@ -384,6 +464,11 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             self._input_opacity = QGraphicsOpacityEffect(self.input_panel)
             self.input_panel.setGraphicsEffect(self._input_opacity)
             self._input_opacity.setOpacity(0.0)
+
+            # 历史抽屉（右侧滑入，默认隐藏）
+            self.history_drawer = HistoryDrawer(self)
+            self.history_drawer.setGeometry(self.width() - 172, 8, 168, self.height() - 80)
+            self.history_drawer.hide()
 
             self._relayout()
 
@@ -588,12 +673,27 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             return latest if len(latest) <= 105 else latest[:104] + "…"
 
         def _render_history(self) -> None:
-            """历史抽屉渲染占位，Task 7 重写为 HistoryDrawer 内容。"""
-            pass
+            blocks = []
+            for message in active_session(self._state)["messages"]:
+                assistant = message["role"] == "assistant"
+                text = parse_reply(message["content"]).chinese if assistant else message["content"]
+                if assistant:
+                    blocks.append(_build_kurisu_html(text))
+                else:
+                    blocks.append(_build_you_html(text))
+            self.history_drawer.set_messages_html("".join(blocks))
 
         def _toggle_history(self) -> None:
-            """历史抽屉切换占位，Task 7 重写为 HistoryDrawer 滑入/滑出。"""
             self._history_expanded = not self._history_expanded
+            if self._history_expanded:
+                self._render_history()
+                self.history_drawer.show()
+                self.history_drawer.slide_in()
+                self.input_panel.hide()
+                self.reply_bubble.hide()
+            else:
+                self.history_drawer.slide_out()
+                QTimer.singleShot(300, self.history_drawer.hide)
 
         def _hide_input_or_noop(self) -> None:
             """Escape 键：收起输入面板（若已展开），Dock 淡入恢复。"""
@@ -828,6 +928,8 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             # 输入面板：底部居中（与 Dock 同位，互斥显示）
             panel_w = 320
             self.input_panel.setGeometry((w - panel_w) // 2, h - 56, panel_w, 48)
+            # 历史抽屉：右侧
+            self.history_drawer.setGeometry(w - 172, 8, 168, h - 80)
 
         def resizeEvent(self, event) -> None:
             self._relayout()
