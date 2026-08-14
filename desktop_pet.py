@@ -157,7 +157,7 @@ def _build_you_html(text: str) -> str:
 
 def run_overlay(connection: Connection, renderer: mp.Process) -> int:
     from PySide6.QtCore import QByteArray, QEasingCurve, QObject, QPoint, QPropertyAnimation, QRect, QRectF, QRunnable, Qt, QThreadPool, QTimer, Signal
-    from PySide6.QtGui import QColor, QIcon, QImage, QLinearGradient, QMouseEvent, QPainter, QPixmap
+    from PySide6.QtGui import QColor, QIcon, QImage, QKeyEvent, QLinearGradient, QMouseEvent, QPainter, QPixmap
     from PySide6.QtSvg import QSvgRenderer
     from PySide6.QtWidgets import (
                 QApplication, QHBoxLayout, QLabel, QLineEdit, QMenu, QMessageBox,
@@ -664,6 +664,18 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             self.dock_bar.hide()
             self.call_view.show()
             self.call_view.raise_()
+            self.call_view.setFocus()  # 确保 CallView 能接收键盘事件（Escape 退出）
+            # 断开旧 controller 信号（避免重复连接）
+            if self.call_controller is not None:
+                try:
+                    self.call_controller.phase_changed.disconnect()
+                    self.call_controller.subtitle.disconnect()
+                    self.call_controller.elapsed.disconnect()
+                    self.call_controller.waveform.disconnect()
+                    self.call_controller.you_said.disconnect()
+                    self.call_controller.error.disconnect()
+                except Exception:
+                    pass
             # 重新创建 controller 以用最新 config
             from core.voice_call import VoiceCallController
             self.call_controller = VoiceCallController(config, character, self)
@@ -673,24 +685,43 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             self.call_controller.waveform.connect(self.call_view.set_waveform)
             self.call_controller.you_said.connect(self._on_call_you_said)
             self.call_controller.error.connect(self._on_call_error)
+            # 断开 CallView 旧信号再重连（防止重复连接导致 hangup 被多次调用）
+            try:
+                self.call_view.mute_clicked.disconnect()
+                self.call_view.hangup_clicked.disconnect()
+                self.call_view.screen_clicked.disconnect()
+            except Exception:
+                pass
             self.call_view.mute_clicked.connect(self.call_controller.toggle_mute)
             self.call_view.hangup_clicked.connect(self._hangup_call)
             self.call_view.screen_clicked.connect(self.call_controller.toggle_screen_share)
             self.call_controller.start()
 
         def _hangup_call(self) -> None:
-            """挂断：停管线，恢复平时态。"""
+            """挂断：停管线，恢复平时态。即使 controller 为 None 也能恢复 UI。"""
             if not self._in_call:
                 return
             self._in_call = False
-            if self.call_controller:
-                self.call_controller.hangup()
+            if self.call_controller is not None:
+                try:
+                    self.call_controller.hangup()
+                except Exception:
+                    pass
+                try:
+                    self.call_controller.phase_changed.disconnect()
+                except Exception:
+                    pass
+                self.call_controller = None
             self.call_view.hide()
             self.dock_bar.show()
+            self.reply_bubble.show()
             # 恢复对话气泡
-            msgs = active_session(self._state)["messages"]
-            if msgs:
-                self._set_bubble_text(self._latest_line(msgs[-1]["content"]))
+            try:
+                msgs = active_session(self._state)["messages"]
+                if msgs:
+                    self._set_bubble_text(self._latest_line(msgs[-1]["content"]))
+            except Exception:
+                pass
 
         def _on_call_phase_changed(self, phase: str) -> None:
             self.call_view.set_phase(phase)
@@ -1034,6 +1065,12 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
         def resizeEvent(self, event) -> None:
             self._relayout()
             super().resizeEvent(event)
+
+        def keyPressEvent(self, event: QKeyEvent) -> None:
+            if event.key() == Qt.Key_Escape and self._in_call:
+                self._hangup_call()
+                return
+            super().keyPressEvent(event)
 
         def mousePressEvent(self, event: QMouseEvent) -> None:
             if event.button() == Qt.LeftButton:
