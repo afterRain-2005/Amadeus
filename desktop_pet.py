@@ -429,8 +429,8 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             self.reply_bubble.setAlignment(Qt.AlignCenter)
             self.reply_bubble.setWordWrap(True)
             self.reply_bubble.setStyleSheet(
-                "QLabel{background:rgba(0,212,255,0.16);color:#7be8ff;"
-                "border:1px solid rgba(0,212,255,0.4);border-radius:18px;"
+                "QLabel{background:rgba(8,14,22,0.92);color:#a0eaff;"
+                "border:1px solid rgba(0,212,255,0.6);border-radius:18px;"
                 "padding:10px 16px;font:14px 'Segoe UI','Microsoft YaHei';"
                 "font-weight:400;letter-spacing:0.2px}"
             )
@@ -443,8 +443,8 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             self.input_panel = QWidget(self)
             self.input_panel.setGeometry(panel_x, self.height() - 70, panel_w, 52)
             self.input_panel.setStyleSheet(
-                "background:rgba(0,212,255,0.06);"
-                "border:1px solid rgba(0,212,255,0.4);border-radius:24px"
+                "background:rgba(8,14,22,0.92);"
+                "border:1px solid rgba(0,212,255,0.6);border-radius:24px"
             )
             input_layout = QHBoxLayout(self.input_panel)
             input_layout.setContentsMargins(14, 6, 6, 6)
@@ -452,9 +452,9 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             self.input = QLineEdit()
             self.input.setPlaceholderText("和红莉栖对话…")
             self.input.setStyleSheet(
-                "QLineEdit{background:transparent;color:#7be8ff;border:0;padding:8px 10px;"
+                "QLineEdit{background:transparent;color:#a0eaff;border:0;padding:8px 10px;"
                 "font-size:14px;font-family:'Segoe UI','Microsoft YaHei'}"
-                "QLineEdit::placeholder{color:rgba(0,212,255,0.5)}"
+                "QLineEdit::placeholder{color:rgba(160,234,255,0.55)}"
             )
             self.input.returnPressed.connect(self._send)
             collapse_button = QPushButton("←")
@@ -462,9 +462,9 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             collapse_button.clicked.connect(self._toggle_input_panel)
             collapse_button.setFixedSize(36, 36)
             collapse_button.setStyleSheet(
-                "QPushButton{background:rgba(142,142,147,0.2);color:#8e8e93;border:0;border-radius:18px;"
+                "QPushButton{background:rgba(142,142,147,0.35);color:#b8b8be;border:0;border-radius:18px;"
                 "font-size:16px}"
-                "QPushButton:hover{background:rgba(142,142,147,0.4)}"
+                "QPushButton:hover{background:rgba(142,142,147,0.55)}"
             )
             input_layout.addWidget(collapse_button)
             input_layout.addWidget(self.input, 1)
