@@ -134,25 +134,59 @@ def _decide_call_toggle_action(in_call: bool) -> dict:
 
 
 def _build_kurisu_html(text: str) -> str:
-    """Kurisu 消息 HTML：青蓝软底 + 青色左边条。"""
+    """Kurisu 消息 HTML：fauux 玫瑰软底 + 玫瑰左边条。"""
     safe = html.escape(text).replace("\n", "<br>")
     return (
-        "<div style='margin:0 0 12px 0;padding:8px 10px;background:rgba(0,212,255,0.16);"
-        "border-left:2px solid #00d4ff;border-radius:4px'>"
-        "<div style='color:#7be8ff;font-weight:bold;font-size:11px;margin-bottom:2px'>Kurisu</div>"
-        f"<div style='line-height:1.42;color:#7be8ff;font-size:13px'>{safe}</div></div>"
+        "<div style='margin:0 0 12px 0;padding:8px 10px;background:rgba(210,115,138,0.22);"
+        "border-left:2px solid #d2738a;border-radius:4px'>"
+        "<div style='color:#d2738a;font-weight:bold;font-size:11px;margin-bottom:2px'>Kurisu</div>"
+        f"<div style='line-height:1.42;color:#c1b492;font-size:13px'>{safe}</div></div>"
     )
 
 
 def _build_you_html(text: str) -> str:
-    """You 消息 HTML：灰底 + 右灰边条。"""
+    """You 消息 HTML：淡玫瑰底 + 右米黄边条。"""
     safe = html.escape(text).replace("\n", "<br>")
     return (
-        "<div style='margin:0 0 12px 0;padding:8px 10px;background:rgba(255,255,255,0.06);"
-        "border-right:2px solid #8e8e93;border-radius:4px;text-align:right'>"
-        "<div style='color:#8e8e93;font-weight:bold;font-size:11px;margin-bottom:2px'>You</div>"
-        f"<div style='line-height:1.42;color:#cccccc;font-size:13px'>{safe}</div></div>"
+        "<div style='margin:0 0 12px 0;padding:8px 10px;background:rgba(210,115,138,0.14);"
+        "border-right:2px solid #8a7f63;border-radius:4px;text-align:right'>"
+        "<div style='color:#8a7f63;font-weight:bold;font-size:11px;margin-bottom:2px'>You</div>"
+        f"<div style='line-height:1.42;color:#c1b492;font-size:13px'>{safe}</div></div>"
     )
+
+
+def _dither_texture_url() -> str:
+    """fauux 抖动纹理的绝对路径（正斜杠，供 QSS url() 引用）。"""
+    return str(ROOT / "resources" / "textures" / "dither_rose.png").replace("\\", "/")
+
+
+def _ensure_dither_texture() -> None:
+    """首次运行时生成 16×16 抖动纹理（已存在则跳过）。失败退化为纯色。"""
+    target = ROOT / "resources" / "textures" / "dither_rose.png"
+    if target.exists():
+        return
+    try:
+        from PySide6.QtGui import QColor, QImage, QPainter
+        target.parent.mkdir(parents=True, exist_ok=True)
+        img = QImage(16, 16, QImage.Format_ARGB32)
+        img.fill(QColor("#171114"))
+        p = QPainter(img)
+        try:
+            rose = QColor(210, 115, 138, 56)
+            cream = QColor(193, 180, 146, 26)
+            dark = QColor(0, 0, 0, 128)
+            for y in range(0, 16, 4):
+                for x in range(0, 16, 4):
+                    p.setPen(rose);  p.drawPoint(x, y)
+                    p.setPen(cream); p.drawPoint(x + 2, y + 2)
+                    p.setPen(dark);  p.drawPoint(x + 1, y + 3)
+                p.setPen(QColor(0, 0, 0, 40))
+                p.drawLine(0, y + 3, 15, y + 3)
+        finally:
+            p.end()
+        img.save(str(target), "PNG")
+    except OSError:
+        pass
 
 
 def run_overlay(connection: Connection, renderer: mp.Process) -> int:
@@ -260,16 +294,16 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
         def paintEvent(self, event) -> None:
             painter = QPainter(self)
             painter.setRenderHint(QPainter.Antialiasing)
-            # 背景
+            # 背景（fauux：玫瑰 #d2738a / 危险深玫瑰 #7a3040，直角）
             if self._is_danger:
-                bg = QColor(255, 59, 48, 30) if self._scale > 1.0 else QColor(255, 59, 48, 20)
-                border = QColor(255, 59, 48, 100)
+                bg = QColor(122, 48, 64, 40) if self._scale > 1.0 else QColor(122, 48, 64, 26)
+                border = QColor(210, 115, 138, 110)
             else:
-                bg = QColor(0, 212, 255, 20) if self._scale > 1.0 else QColor(0, 212, 255, 12)
-                border = QColor(0, 212, 255, 100)
+                bg = QColor(210, 115, 138, 22) if self._scale > 1.0 else QColor(210, 115, 138, 14)
+                border = QColor(210, 115, 138, 100)
             painter.setBrush(bg)
             painter.setPen(border)
-            painter.drawRoundedRect(self.rect(), 8, 8)
+            painter.drawRect(self.rect())
             # SVG 图标（文件已带颜色，直接渲染）
             pad = 4
             self._renderer.render(painter, QRectF(pad, pad, self.width() - pad * 2, self.height() - pad * 2))
@@ -342,10 +376,11 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             self.history = QTextBrowser(self)
             self.history.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOn)
             self.history.setStyleSheet(
-                "QTextBrowser{background:rgba(8,14,22,0.85);color:#7be8ff;border:1px solid rgba(0,212,255,0.4);"
-                "border-radius:8px;padding:8px;font:13px 'Segoe UI','Microsoft YaHei'}"
-                "QScrollBar:vertical{background:rgba(0,212,255,0.1);width:6px;margin:4px}"
-                "QScrollBar::handle:vertical{background:#00d4ff;border-radius:3px;min-height:30px}"
+                "QTextBrowser{background-color:#171114;background-image:url(" + _dither_texture_url() + ");"
+                "color:#c1b492;border:1px solid #d2738a;"
+                "border-radius:0px;padding:8px;font:13px 'Times New Roman','SimSun'}"
+                "QScrollBar:vertical{background:rgba(210,115,138,0.15);width:6px;margin:4px}"
+                "QScrollBar::handle:vertical{background:#d2738a;border-radius:0px;min-height:30px}"
                 "QScrollBar::add-line:vertical,QScrollBar::sub-line:vertical{height:0}"
                 "QScrollBar::add-page:vertical,QScrollBar::sub-page:vertical{background:transparent}"
             )
@@ -429,10 +464,11 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             self.reply_bubble.setAlignment(Qt.AlignCenter)
             self.reply_bubble.setWordWrap(True)
             self.reply_bubble.setStyleSheet(
-                "QLabel{background:rgba(8,14,22,0.92);color:#a0eaff;"
-                "border:1px solid rgba(0,212,255,0.6);border-radius:18px;"
-                "padding:10px 16px;font:14px 'Segoe UI','Microsoft YaHei';"
-                "font-weight:400;letter-spacing:0.2px}"
+                "QLabel{background-color:#171114;background-image:url(" + _dither_texture_url() + ");"
+                "color:#c1b492;"
+                "border:1px solid #d2738a;border-radius:0px;"
+                "padding:10px 16px;font:14px 'Times New Roman','SimSun';"
+                "font-weight:400}"
             )
             self._set_bubble_text(self._latest_line(active_session(self._state)["messages"][-1]["content"]))
             self.reply_bubble.hide()
@@ -443,8 +479,8 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             self.input_panel = QWidget(self)
             self.input_panel.setGeometry(panel_x, self.height() - 70, panel_w, 52)
             self.input_panel.setStyleSheet(
-                "background:rgba(8,14,22,0.92);"
-                "border:1px solid rgba(0,212,255,0.6);border-radius:24px"
+                "background-color:#171114;background-image:url(" + _dither_texture_url() + ");"
+                "border:1px solid #d2738a;border-radius:0px"
             )
             input_layout = QHBoxLayout(self.input_panel)
             input_layout.setContentsMargins(14, 6, 6, 6)
@@ -452,9 +488,9 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             self.input = QLineEdit()
             self.input.setPlaceholderText("和红莉栖对话…")
             self.input.setStyleSheet(
-                "QLineEdit{background:transparent;color:#a0eaff;border:0;padding:8px 10px;"
-                "font-size:14px;font-family:'Segoe UI','Microsoft YaHei'}"
-                "QLineEdit::placeholder{color:rgba(160,234,255,0.55)}"
+                "QLineEdit{background:transparent;color:#c1b492;border:0;padding:8px 10px;"
+                "font-size:14px;font-family:'Times New Roman','SimSun'}"
+                "QLineEdit::placeholder{color:#8a7f63}"
             )
             self.input.returnPressed.connect(self._send)
             collapse_button = QPushButton("←")
@@ -462,9 +498,9 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             collapse_button.clicked.connect(self._toggle_input_panel)
             collapse_button.setFixedSize(36, 36)
             collapse_button.setStyleSheet(
-                "QPushButton{background:rgba(142,142,147,0.35);color:#b8b8be;border:0;border-radius:18px;"
+                "QPushButton{background:transparent;color:#8a7f63;border:1px solid #8a7f63;border-radius:0px;"
                 "font-size:16px}"
-                "QPushButton:hover{background:rgba(142,142,147,0.55)}"
+                "QPushButton:hover{background:#d2738a;color:#171114}"
             )
             input_layout.addWidget(collapse_button)
             input_layout.addWidget(self.input, 1)
@@ -473,9 +509,9 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             send_button.clicked.connect(self._send)
             send_button.setFixedSize(36, 36)
             send_button.setStyleSheet(
-                "QPushButton{background:#00d4ff;color:#001824;border:0;border-radius:18px;"
+                "QPushButton{background:transparent;color:#c1b492;border:1px solid #c1b492;border-radius:0px;"
                 "font-size:16px;font-weight:bold}"
-                "QPushButton:hover{background:#33dfff} QPushButton:disabled{background:rgba(0,212,255,0.3)}"
+                "QPushButton:hover{background:#d2738a;color:#171114} QPushButton:disabled{color:#8a7f63}"
             )
             input_layout.addWidget(send_button)
             self.send_button = send_button
@@ -541,9 +577,9 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             btn.setToolTip("点击打开")
             btn.setCursor(Qt.PointingHandCursor)
             btn.setStyleSheet(
-                "QPushButton{background:#007AFF;color:white;border:none;"
-                "border-radius:25px;font:bold 11px 'Segoe UI','Microsoft YaHei';padding:2px}"
-                "QPushButton:hover{background:#0051D5}"
+                "QPushButton{background:#d2738a;color:#171114;border:1px solid #d2738a;"
+                "border-radius:0px;font:bold 11px 'Times New Roman','SimSun';padding:2px}"
+                "QPushButton:hover{background:#c1b492}"
             )
             btn.clicked.connect(self._restore_from_tray)
             self._restore_win.hide()
@@ -982,11 +1018,16 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             self.send_button.setDisabled(False)
             parsed = parse_reply(reply)
             send_pet_command(emotion=parsed.emotion)
-            # TTS：朗读日语部分（与 chat_window.py 行为一致）
+            # TTS：气泡显示中文（_latest_line 已提取 chinese），语音读日语（ja 路径）
+            # text_lang="ja" 必传，否则 infer_text_lang 对日文返回 zh 导致 GPT-SoVITS 400
             config = load_config()
             if config.get("tts_enabled", True) and parsed.japanese:
                 self.speech.set_rate([-2, 0, 2][config.get("tts_rate", 1)])
-                self.speech.speak(parsed.japanese)
+                self.speech.speak_with_options(
+                    parsed.japanese,
+                    text_lang="ja",
+                    allow_fallback=False,
+                )
             if not self._history_expanded:
                 self._show_layered_bubbles(self._latest_line(reply))
 
@@ -1105,6 +1146,7 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
 
     app = QApplication(sys.argv)
     app.setApplicationName("Amadeus Kurisu")
+    _ensure_dither_texture()  # fauux 抖动纹理（幂等，缺失时生成）
     pet = PetWindow()
     app.aboutToQuit.connect(lambda: renderer.terminate() if renderer.is_alive() else None)
     pet.show()

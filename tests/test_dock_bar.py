@@ -15,9 +15,9 @@ def test_dock_bar_has_5_icons():
 
 
 def test_dock_bar_icon_colors():
-    """4 个普通图标为青色 #00d4ff，close 为红色 #ff3b30。"""
+    """4 个普通图标为米黄 #c1b492，close 为玫瑰 #d2738a（fauux 配色）。"""
     for name in ["chat", "pin", "settings", "history"]:
         svg = ROOT / "resources" / "icons" / f"{name}.svg"
-        assert "#00d4ff" in svg.read_text(encoding="utf-8"), f"{name} 应为青色"
+        assert "#c1b492" in svg.read_text(encoding="utf-8"), f"{name} 应为米黄"
     close = ROOT / "resources" / "icons" / "close.svg"
-    assert "#ff3b30" in close.read_text(encoding="utf-8"), "close 应为红色"
+    assert "#d2738a" in close.read_text(encoding="utf-8"), "close 应为玫瑰"

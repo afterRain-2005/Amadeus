@@ -1,7 +1,7 @@
 # ui/widgets/call_view.py
 """通话态视图：三区布局（顶部状态条 / 中部字幕+波形+屏幕缩略图 / 底部三按钮）。
 
-配色沿用 A2 青蓝（#00d4ff 强调 + 半透青气泡），SVG 矢量按钮。
+配色 fauux 风格（rose #d2738a 强调 + cream #c1b492 文字 + Times 衬线），SVG 矢量按钮。
 移植原项目 VoiceCall.tsx 的波形 canvas + 状态文案，适配 PySide6。
 """
 from __future__ import annotations
@@ -45,7 +45,7 @@ class WaveformCanvas(QWidget):
             bar_h = max(2, v * h)
             x = i * (bar_w + gap)
             y = (h - bar_h) / 2
-            p.fillRect(QRectF(x, y, bar_w, bar_h), QColor(0, 212, 255, 200))
+            p.fillRect(QRectF(x, y, bar_w, bar_h), QColor(210, 115, 138, 200))
 
 
 class _SvgButton(QPushButton):
@@ -65,18 +65,19 @@ class _SvgButton(QPushButton):
     def paintEvent(self, event) -> None:
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
+        # fauux：rose #d2738a / 深 danger #7a3040 / cream #c1b492，直角
         if self._color == "red":
-            bg = QColor(255, 59, 48, 200)
-            border = QColor(255, 59, 48, 255)
+            bg = QColor(122, 48, 64, 220)
+            border = QColor(210, 115, 138, 255)
         elif self._color == "amber":
-            bg = QColor(255, 176, 58, 180)
-            border = QColor(255, 176, 58, 255)
+            bg = QColor(193, 180, 146, 190)
+            border = QColor(210, 115, 138, 255)
         else:
-            bg = QColor(0, 212, 255, 40)
-            border = QColor(0, 212, 255, 120)
+            bg = QColor(210, 115, 138, 40)
+            border = QColor(210, 115, 138, 120)
         p.setBrush(bg)
         p.setPen(border)
-        p.drawEllipse(self.rect())
+        p.drawRect(self.rect())
         if self._renderer is not None:
             pad = 10
             self._renderer.render(p, QRectF(pad, pad, self.width() - pad * 2, self.height() - pad * 2))
@@ -103,15 +104,15 @@ class CallView(QWidget):
         top = QHBoxLayout()
         top.setSpacing(6)
         self._dot = QLabel("●", self)
-        self._dot.setStyleSheet("color:#ff3b30; font-size:10px")
+        self._dot.setStyleSheet("color:#c1b492; font-size:10px")
         self.status_label = QLabel("正在接通…", self)
         self.status_label.setStyleSheet(
-            "color:#7be8ff; font:12px 'Segoe UI','Microsoft YaHei';"
-            "background:rgba(0,212,255,0.12); border:1px solid rgba(0,212,255,0.3);"
-            "border-radius:10px; padding:3px 10px"
+            "color:#c1b492; font:12px 'Times New Roman','SimSun';"
+            "background:#171114; border:1px solid #d2738a;"
+            "border-radius:0px; padding:3px 10px"
         )
         self.elapsed_label = QLabel("0:00", self)
-        self.elapsed_label.setStyleSheet("color:#8e8e93; font:11px 'Consolas'")
+        self.elapsed_label.setStyleSheet("color:#8a7f63; font:11px 'Times New Roman','SimSun'")
         top.addWidget(self._dot)
         top.addWidget(self.status_label)
         top.addStretch()
@@ -123,9 +124,9 @@ class CallView(QWidget):
         self.subtitle_label.setAlignment(Qt.AlignCenter)
         self.subtitle_label.setWordWrap(True)
         self.subtitle_label.setStyleSheet(
-            "color:#7be8ff; font:14px 'Segoe UI','Microsoft YaHei';"
-            "background:rgba(0,212,255,0.10); border:1px solid rgba(0,212,255,0.3);"
-            "border-radius:14px; padding:10px 16px"
+            "color:#c1b492; font:14px 'Times New Roman','SimSun';"
+            "background:#171114; border:1px solid #d2738a;"
+            "border-radius:0px; padding:10px 16px"
         )
         layout.addWidget(self.subtitle_label)
 
@@ -163,7 +164,7 @@ class CallView(QWidget):
             "idle": "",
         }
         self.status_label.setText(status_map.get(phase, phase))
-        dot_color = "#ffb63a" if phase == "connecting" else "#34c759" if phase in ("listening", "speaking", "processing") else "#8e8e93"
+        dot_color = "#c1b492" if phase == "connecting" else "#d2738a" if phase in ("listening", "speaking", "processing") else "#8a7f63"
         self._dot.setStyleSheet(f"color:{dot_color}; font-size:10px")
 
     def set_subtitle(self, text: str) -> None:

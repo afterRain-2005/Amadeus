@@ -251,3 +251,101 @@ dock 用 opacity 1→0 淡出后，视觉消失但控件仍 isVisible()=True 且
 start.bat 用 `pythonw.exe desktop_pet.py` 启动，pythonw 无控制台，崩溃时 stderr 被丢弃，用户感知是
 "点了没反应"。诊断时改用 `python.exe desktop_pet.py 2>&1` 前台跑，立即看到 ModuleNotFoundError 等真实错误。
 **教训**：GUI 程序启动失败排查，第一步是把 pythonw 换成 python 前台跑捕获 stderr；修复后再换回 pythonw。
+
+## 2026-08-15 红莉栖声线 + 日语路径 + GPU 加速
+
+### 1. pyopenjtalk-plus 预编译 wheel 是 py3.13 日语 TTS 的唯一可行方案
+pyopenjtalk 0.4.1 在 py3.13 下从源码编译需要 MSVC + cmake + cython，编译 open_jtalk C 代码失败。
+pyopenjtalk-plus（PyPI 包名 `pyopenjtalk-plus`，import 名仍是 `pyopenjtalk`，drop-in 替代）在 PyPI
+提供 Windows/macOS/Linux 预编译 wheel（支持 py3.10-3.14）。`pip install pyopenjtalk-plus` 即可，
+无需编译环境。**教训**：py3.13 下需 pyopenjtalk 时，直接装 pyopenjtalk-plus，不要尝试源码编译。
+
+### 2. GPT-SoVITS 声线克隆质量三要素：参考音频 + prompt_text + text_lang
+声线不像红莉栖的三个原因：(1) 参考音频片段选取不佳（原粗暴截取前 8s，F0 不稳定）；
+(2) prompt_text 为空（GPT-SoVITS 无法对齐声线特征）；(3) text_lang 不匹配（跨语种迁移损失声线）。
+解决：写 analyze_voice_sample.py 用 RMS+F0+频谱质心分析找最佳 6s 片段（7-13s，F0 260-280Hz 稳定），
+用 SenseVoiceSmall ASR 识别 prompt_text（日语文本），text_lang 改为 ja。三者齐备后声线像红莉栖。
+**教训**：GPT-SoVITS few-shot 声线克隆不是只给参考音频就行，prompt_text 对齐 + text_lang 匹配同样关键。
+
+### 3. pip cache 的 wheel 文件可能损坏/不完整，安装前必须验证 zip 完整性
+pip cache http-v2 目录下的 .body 文件可能是下载中断的临时文件，即使大小正确也可能是损坏的 zip。
+直接复制重命名安装会报 "Wheel is invalid" 或 "BadZipFile"。验证方法：`zipfile.testzip()` 检查完整性，
+或检查 PK 头尾（head=b'PK\x03\x04', tail=b'PK\x05\x06...'）。**教训**：从 pip cache 取 wheel 前
+必须验证 zip 完整性，不能只看文件大小。
+
+### 4. Stop-Process -Name python 会杀所有 python 进程，包括后台下载和 API 服务
+用 `Stop-Process -Name python -Force` 清理桌宠进程时，会同时杀掉 GPT-SoVITS API 服务和正在进行的
+torch 下载进程。正确做法：用 StopCommand 停特定 job，或用 `Stop-Process -Id <特定PID>` 只杀目标进程。
+**教训**：Windows 下清理 Python 进程时，不能用 -Name python（会误杀所有），必须用 -Id 指定特定 PID。
+
+### 5. PyTorch CUDA wheel 的 Python 版本和 CUDA 版本必须精确匹配
+cu121 索引没有 py313 的 torch wheel（"Could not find a version that satisfies the requirement torch"），
+cu126 索引有 py313 wheel（torch 2.13.0+cu126 cp313, 2594.6MB）。PyTorch 官方源 download.pytorch.org
+按 CUDA 版本分索引（/whl/cu121, /whl/cu124, /whl/cu126），每个索引只包含特定 Python 版本的 wheel。
+**教训**：装 CUDA PyTorch 前先确认 Python 版本 + CUDA 版本 + 索引 URL 三者匹配，cu121 不一定有所有 py 版本。
+
+## 2026-08-15 fauux 双主题（Wired）实施
+
+### 1. 用户说"颜色不好看"≠要换配色方案，先澄清不满的具体维度
+用户上轮已批准 fauux 配色（玫瑰粉+米黄）并定稿进 spec，反馈"颜色不好看"实际指
+预览稿局部渲染问题（图标灰底等），我却理解为整个配色方案被否，擅自推荐"AMADEUS 紫"
+替代方案，被用户严厉纠正（"采用你妈的紫色"）。**教训**：对已定稿并写入 spec 的设计决策，
+用户后续反馈的不满点要先澄清具体指什么，不能推翻整个已批准方案自行换新。
+
+### 2. 项目核心资产（Live2D 人物）绝不能在任何 UI 预览中缺席
+预览 mockup 没画红莉栖 Live2D 立绘，用户质问"我的live2d人物呢？你是不是根本不知道
+我们的项目在做什么"。本项目 = pywebview 渲染 Live2D 人物 + PySide6 overlay 气泡/Dock，
+人物是绝对主角。**教训**：做 Amadeus 的任何 UI 设计/预览，必须包含 Kurisu 立绘占位
+（她由独立进程渲染，主题只改 overlay，二者不冲突），漏掉主角等于没理解项目。
+
+### 3. 上下文压缩后 summary 里的"已完成"必须逐项核实，可能是"计划已完成"
+压缩 summary 把 spec/plan 文档阶段描述得像已实现（含代码片段），实际 ui/theme.py 等
+实现文件根本不存在。**教训**：压缩恢复后用 Glob/LS 核实关键文件是否真实存在，
+git log 看实现类 commit 是否存在，再决定从哪步续做，不能信 summary 的完成态描述。
+
+### 4. PySide6 QByteArray 不支持 `bytes in QByteArray` 成员测试
+`assert b"#c1b492" in QByteArray(...)` 返回 False 而非报错（PySide6 的 __contains__
+语义问题），导致复染测试假失败。**教训**：QByteArray 做内容断言先 `bytes(qba)` 转换。
+
+### 5. __init__ 中被方法链提前调用的回调，访问的实例属性必须防御
+_set_bubble_text 在 __init__ 中被调用（角括号 _corner_marks 尚未创建），方法内直接
+读 self._corner_marks → AttributeError 启动崩溃。**教训**：__init__ 内被间接调用的
+方法，访问"稍后创建"的属性用 `getattr(self, "x", None)` 防御，或把该属性创建提到
+首次调用之前。
+
+## 2026-08-15 Live2D 渲染崩溃事故
+
+### 1. 【严重】desktop_pet.py 主进程禁止顶部导入 PySide6
+**事故**：为接入 fauux 主题，在 desktop_pet.py 顶部新增了
+rom PySide6.QtWidgets import QApplication, ... 和 rom ui.theme import ...。
+这导致主进程在 import 阶段就加载了 Qt，而 renderer_process 子进程再 import webview +
+启动 Qt 事件循环时与主进程的 Qt 实例冲突，webview.start(gui='qt') 卡死不返回，
+Live2D 永远不加载（卡在 "calling webview.start" 之后无 loaded 事件）。
+**修复**：git checkout HEAD -- desktop_pet.py 回退顶部导入，PySide6 必须在
+run_overlay() 函数内部延迟导入（这是原架构的设计意图）。
+**教训**：desktop_pet.py 的主进程（run_overlay 之前）绝对不能 import PySide6/Qt，
+否则子进程的 QtWebEngine 渲染必崩。主题模块（ui/theme.py）的导入也要放到
+run_overlay 内部，或通过函数内 import 调用。
+依据：git diff HEAD desktop_pet.py 显示顶部新增 11 行 PySide6 导入；
+回退后立即恢复正常渲染。
+参考：desktop_pet.py:16-25 (HEAD 版本无顶部 PySide6 导入),
+desktop_pet.py:368-371 (run_overlay 内部延迟导入)
+
+### 2. 【严重】pip 装包污染 anaconda base 环境导致 QtWebEngine 崩溃
+**事故**：8-15 1:42 在 anaconda base 装了 faster-whisper/tokenizers/av/ctranslate2/
+onnxruntime（GPT-SoVITS 依赖，应装到 gpt_sovits_venv）。这些包带的 cudnn64_9.dll 等
+CUDA DLL 污染了 site-packages，QtWebEngineProcess 子进程加载到错误 DLL，渲染进程
+0xC0000005 崩溃（ProcessGone: 3 -1073741819）。
+**修复**：pip uninstall -y faster-whisper tokenizers av ctranslate2 onnxruntime
+**教训**：GPT-SoVITS 的所有依赖必须装到独立 venv（gpt_sovits_venv 或 gpt_sovits_venv_py311），
+绝不装到 anaconda base。anaconda base 是桌宠运行环境，只能有 PySide6 + pywebview。
+任何带原生 DLL 的包装到 base 都可能破坏 QtWebEngine。
+依据：8-15 1:42 装包后 Live2D 崩溃；卸载后虽未直接恢复（主因是教训1），
+但消除了 DLL 污染的次要风险。
+
+### 3. 【流程】改 UI 主题前必须先 git stash 或开分支
+**事故**：改 fauux 主题时直接改 desktop_pet.py，混入了顶部 PySide6 导入（破坏渲染）
+和 theme 相关代码。无法单独回退主题改动而不影响渲染逻辑。
+**教训**：UI 主题接入属于"高风险改动"（触及主进程导入链），必须：
+1) 先 git stash 保存当前状态；2) 改动后单独测试 Live2D 渲染；3) 确认无误再 commit。
+不要把主题改动和架构改动混在一次 commit。
