@@ -149,12 +149,33 @@ class VoiceCallController(QObject):
     def _open_mic(self) -> None:
         try:
             import sounddevice as sd
+            # 诊断：列出可用设备
+            devices = sd.query_devices()
+            default_in = sd.default.device[0]
+            print(f"[VoiceCall] 默认输入设备: {default_in}")
+            print(f"[VoiceCall] 可用设备: {len(devices)} 个")
+            for i, d in enumerate(devices):
+                if d["max_input_channels"] > 0:
+                    print(f"  [{i}] {d['name']} (in={d['max_input_channels']}ch, "
+                          f"sr={d['default_samplerate']:.0f})")
+            # 尝试 16000 Hz，失败则用设备默认采样率
+            try:
+                sd.check_input_settings(device=default_in, samplerate=16000, channels=1)
+                sr = 16000
+            except sd.PortAudioError:
+                dev_info = sd.query_devices(default_in)
+                sr = int(dev_info["default_samplerate"])
+                print(f"[VoiceCall] 设备不支持 16000Hz，使用 {sr}Hz")
             self._stream = sd.InputStream(
-                samplerate=16000, channels=1, dtype="float32",
+                samplerate=sr, channels=1, dtype="float32",
                 blocksize=1024, callback=self._audio_callback,
+                device=default_in,
             )
             self._stream.start()
+            print(f"[VoiceCall] 麦克风已启动 sr={sr} device={default_in}")
         except Exception as exc:
+            import traceback
+            traceback.print_exc()
             self.error.emit(f"麦克风不可用：{exc}")
             self._set_phase("ended")
 
@@ -169,13 +190,15 @@ class VoiceCallController(QObject):
 
     def _audio_callback(self, indata: np.ndarray, frames: int, time_info, status) -> None:
         """sounddevice 回调：每帧喂 VAD，检测到说话起止累积/提交。"""
-        if self._vad_paused or self._muted:
+        if self._muted:
             return
         samples = indata.flatten()
-        result = self._vad.feed(samples)
-        # 波形：RMS 归一化
-        rms = result.rms
+        # 波形始终发射（即使 VAD 暂停），让用户看到麦克风在接收
+        rms = VADDetector.compute_rms(samples)
         self.waveform.emit(min(rms / self._vad.start_thresh, 1.0))
+        if self._vad_paused:
+            return
+        result = self._vad.feed(samples)
         if result.utterance_started:
             self._recording_buf = [samples.copy()]
             self.subtitle.emit("听到了，继续说…")
