@@ -124,7 +124,8 @@ class Theme:
 - `_save` 写入 `config["theme"]`
 
 ### 4.5 SVG 图标（不新增文件）
-- 现有 11 个 Feather 风格 SVG 的 stroke 只有两种值：`#00d4ff`、`#ff3b30`
+- 现有 10 个 Feather 风格 SVG（chat/close/hangup/history/mic/mic_off/phone/pin/screen_share/settings）
+  的 stroke 只有两种值：`#00d4ff`、`#ff3b30`
 - 复染映射（Wired）：`{"#00d4ff": "#c1b492", "#ff3b30": "#d2738a"}`
 - Aqua 主题映射为恒等（不复染，直接原样渲染）
 
