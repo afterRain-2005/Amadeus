@@ -313,6 +313,30 @@ _set_bubble_text 在 __init__ 中被调用（角括号 _corner_marks 尚未创�
 方法，访问"稍后创建"的属性用 `getattr(self, "x", None)` 防御，或把该属性创建提到
 首次调用之前。
 
+## 2026-08-15 fauux 单主题化（用户回滚双主题后重做）
+
+### 1. 用户指令是"改 UI"时，最小改动 = 直接替换样式值，不引入架构
+上轮擅自实现 Theme 数据类/设置页/实时切换/图标运行时复染的全套双主题系统，
+用户回滚 desktop_pet.py 并训斥"只让你改个ui你改这么多干嘛"。正确做法：在原
+setStyleSheet 字符串里直接把色值/字体/圆角换成 fauux 值，SVG 图标批量文本替换
+色值即可。**教训**：样式改造任务先问"换值"还是"换架构"，默认最小改动（YAGNI）。
+
+### 2. GDI 抓透明分层窗口是全黑假象，验证 Live2D 要看帧管道产物
+诊断脚本显示 overlay"unique_colors=1 全黑"，误判 Live2D 崩溃；实际 GDI/PrintWindow
+抓不到分层透明窗口内容。真相是 data/received-frame.png（帧管道落地文件）133KB、
+采样 684 色、62% 不透明 = Kurisu 渲染完全正常。**教训**：验证分层窗口渲染看
+received-frame.png 的尺寸/色彩数/不透明率，不信屏幕抓图。
+
+### 3. 用户手动回滚文件后，动手前必须 git status 核实磁盘真实状态
+用户已把 desktop_pet.py checkout 回 HEAD（旧版无主题参数），我若继续按内存里的
+"新版"做增量编辑必然错乱。**教训**：任何暂停后恢复（压缩/用户手动改文件），
+先 git status/diff + 重读目标文件，再决定编辑基线。
+
+### 4. PowerShell 没有 bash heredoc，多行 commit message 用 here-string
+`git commit -m "$(cat <<'EOF' ... EOF)"` 在 PowerShell 直接解析错误。正确：
+`$msg = @'...'@; git commit -m $msg`。**教训**：Windows 终端写多行命令先想
+PowerShell 语法。
+
 ## 2026-08-15 Live2D 渲染崩溃事故
 
 ### 1. 【严重】desktop_pet.py 主进程禁止顶部导入 PySide6
