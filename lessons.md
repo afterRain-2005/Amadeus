@@ -2,6 +2,40 @@
 
 > 每轮对话结束时记录 5 条最重要的教训。开始项目时首先查看本文件。
 
+## 2026-08-13 TTS 集成
+
+### 1. GPT-SoVITS 集成设计：代码优先 + 模型后装
+TTS 架构设计为 GPT-SoVITS 优先 + SAPI 降级双路径。代码写好但模型需用户手动安装，
+避免自动下载超大依赖（PyTorch ~2GB + 预训练模型 ~1.5GB）阻塞项目流程。
+KurisuTTS 单例模式仅加载一次模型，避免重复消耗显存。
+依据：GPT-SoVITS V3 非 PyPI 包，需从 GitHub 克隆，国内网络极慢。
+参考：core/gpt_sovits_client.py, core/tts_client.py
+
+### 2. 语音管线优先级：先查现有素材再装新依赖
+用户指出 "当前文件夹里不是有语音素材吗" 提醒我们：项目资源（voice_sample.mp3）
+已存在，但 TTS 后端（SAPI）无法利用它做音色克隆。应先确认用户已有哪些素材和 API key，
+再决定安装方案。盲目从零安装 GPT-SoVITS 导致用户多次取消克隆操作。
+依据：resources/voice_sample.mp3 15s 干净人声，但 SAPI 只读系统语音包不读文件。
+
+### 3. 麦克风诊断：波形始终显示 + 设备列表打印
+sounddevice InputStream 回调中即使 VAD 暂停也发射波形信号，让用户看到绿色
+波形条跳动来确认麦克风在接收数据。启动时打印所有输入设备列表和采样率，方便定位
+设备选错问题。VAD 阈值（START_THRESH=0.018）需在实际环境微调。
+依据：用户反馈 "麦克风无反应"，无法判断是设备问题还是阈值问题。
+参考：core/voice_call.py _open_mic, _audio_callback
+
+### 4. NVIDIA GPU 检测：nvidia-smi 不在 PATH 不代表无 GPU
+用户明确说 "有 NVIDIA 显卡"，但 nvidia-smi 命令找不到。可能原因：驱动未安装、
+PATH 未配置、或使用了其他 GPU 品牌。安装 PyTorch 时应同时尝试 CUDA 和 CPU 版本，
+或先通过 python -c "import torch; print(torch.cuda.is_available())" 验证。
+依据：用户环境有 GPU 但 nvidia-smi 不可用，导致 PyTorch 下载了 CPU 版。
+
+### 5. 电话模式退出：双路径退出 + 信号断连
+通话态退出需要两套机制：UI 按钮（红色 ✕）+ 键盘 Esc。进通话态前 disconnect 旧信号
+防止 hangup 被多次调用。异常情况下无论 controller 是否为 None 都恢复 Dock + 气泡。
+依据：用户反馈 "通话态无法退出"、"重复进通话态信号重复连接"。
+参考：commit b02a56d
+
 ## 2026-08-09 全盘代码审查
 
 ### 1. 实例变量必须在 __init__ 中初始化，否则运行时 AttributeError
