@@ -1020,6 +1020,8 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             self._send_emotion(instant["emotion"])
             self._busy = True
             self._streamed_reply = ""
+            # 流式 TTS 状态：_stream_japanese_started 标记已进入日语段（=== 之后）
+            self._stream_japanese_started = False
             self.send_button.setDisabled(True)
             history = [{"role": message["role"], "content": message["content"]} for message in session["messages"][-14:]]
             task = AgentTask(history, session.get("memories", []))
@@ -1073,6 +1075,26 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
                 self._set_bubble_text(self._streamed_reply)
             if should_show_thinking:
                 self._show_thinking_dots()
+            # 流式 TTS：检测 === 分隔符，进入日语段后增量追加到 SpeechPlayer
+            config = load_config()
+            if config.get("tts_enabled", True):
+                if not self._stream_japanese_started:
+                    # 检测是否出现 === 分隔符（中日文分界）
+                    if "===" in new_streamed:
+                        self._stream_japanese_started = True
+                        # 启动流式合成会话
+                        self.speech.set_rate([-2, 0, 2][config.get("tts_rate", 1)])
+                        self.speech.speak_streaming_start(text_lang="ja")
+                        # 提取 === 之后的日语部分追加
+                        jp_part = new_streamed.split("===", 1)[1].lstrip("=\r\n").strip()
+                        if jp_part:
+                            self.speech.speak_streaming_append(jp_part)
+                else:
+                    # 已在日语段，增量追加（去掉可能残留的 ===）
+                    if "===" in text:
+                        text = text.split("===", 1)[-1].lstrip("=\r\n")
+                    if text:
+                        self.speech.speak_streaming_append(text)
 
         def _agent_finished(self, reply: str) -> None:
             session = active_session(self._state)
@@ -1084,16 +1106,20 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             self.send_button.setDisabled(False)
             parsed = parse_reply(reply)
             send_command(emotion=parsed.emotion)
-            # TTS：气泡显示中文（_latest_line 已提取 chinese），语音读日语（ja 路径）
-            # text_lang="ja" 必传，否则 infer_text_lang 对日文返回 zh 导致 GPT-SoVITS 400
+            # 流式 TTS：会话结束，刷新剩余缓冲
+            # （流式合成在 _agent_delta 中已开始，这里只刷新剩余文本）
             config = load_config()
-            if config.get("tts_enabled", True) and parsed.japanese:
+            if config.get("tts_enabled", True) and self._stream_japanese_started:
+                self.speech.speak_streaming_end()
+            elif config.get("tts_enabled", True) and parsed.japanese and not self._stream_japanese_started:
+                # 兜底：如果流式未启动（如无 === 分隔符），整段合成
                 self.speech.set_rate([-2, 0, 2][config.get("tts_rate", 1)])
                 self.speech.speak_with_options(
                     parsed.japanese,
                     text_lang="ja",
                     allow_fallback=False,
                 )
+            self._stream_japanese_started = False
             if not self._history_expanded:
                 self._show_layered_bubbles(self._latest_line(reply))
 

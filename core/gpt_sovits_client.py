@@ -13,6 +13,7 @@ Run the local GPT-SoVITS server first:
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Optional
 from urllib.error import HTTPError, URLError
@@ -33,15 +34,19 @@ DEFAULT_PARAMS: dict[str, object] = {
     # prompt_text 由 ASR(SenseVoiceSmall) 识别 voice_sample_clip_v2.wav 得到，
     # 对应片段 7-13s 的日语文本，用于 GPT-SoVITS 声线克隆对齐
     "prompt_text": "技術的及びデータセットの制限により現在成熟していません",
-    # prompt_lang=ja：红莉栖讲日语，需 py311 venv（pyopenjtalk 在 py3.13 编译失败）
-    # py311 venv 路径：gpt_sovits_venv_py311\Scripts\python.exe
+    # prompt_lang=ja：红莉栖讲日语（gpt_sovits_venv py3.13 + pyopenjtalk-plus）
     "prompt_lang": "ja",
     "text_lang": "ja",
+    # 声线稳定性：top_p/temperature 越低声线越像参考音频，
+    # 原值 0.8/0.8 声线漂移明显（生成「聞いてるわ」时偏离红莉栖音色）
     "top_k": 15,
-    "top_p": 0.8,
-    "temperature": 0.8,
+    "top_p": 0.6,
+    "temperature": 0.6,
+    # cut5=按标点切分，配合 batch_size=5 批量并行推理
+    # （cut1 凑四句不切，单段853 token推理30秒；cut5 切4段但 batch_size=1 串行16秒）
     "text_split_method": "cut5",
-    "batch_size": 1,
+    # batch_size=5：多段批量推理，RTX 4050 6GB 显存可承受
+    "batch_size": 5,
     "batch_threshold": 0.75,
     "split_bucket": True,
     "speed_factor": 1.0,
@@ -52,8 +57,23 @@ DEFAULT_PARAMS: dict[str, object] = {
     "repetition_penalty": 1.35,
     "sample_steps": 32,
     "super_sampling": False,
+    # streaming_mode=False：流式返回 chunked WAV，_play_wav 按完整 WAV 处理无法播放
+    # 改用 cut1 减少切分 + 括号过滤降低合成量，首句延迟已大幅降低
     "streaming_mode": False,
 }
+
+
+# 过滤括号内的情态提示词（如「（静かに一瞬置いて）続けて。」→「続けて。」）
+# GPT-4o 输出常含中文/日文括号的舞台指示，不应被 TTS 合成
+_PAREN_RE = re.compile(r"[（(][^（）()]*[）)]")
+
+
+def _strip_stage_directions(text: str) -> str:
+    """Remove parenthetical stage directions from text before synthesis."""
+    cleaned = _PAREN_RE.sub("", text or "").strip()
+    # 清理残留的多余空格和重复标点
+    cleaned = re.sub(r"\s+", " ", cleaned)
+    return cleaned
 
 
 def infer_text_lang(text: str) -> str:
@@ -104,7 +124,7 @@ class KurisuTTS:
         allow_fallback: bool = False,
     ) -> Optional[bytes]:
         """Synthesize text and return wav bytes, or None on failure."""
-        text = (text or "").strip()
+        text = _strip_stage_directions((text or ""))
         if not text:
             return None
 

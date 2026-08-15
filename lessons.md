@@ -563,3 +563,46 @@ P0 Task4 计划假设设置页有 Hermes tab（实际无）；Agent Task6 计划
 `git commit -m $msg`（$msg 是 here-string，内含 "Chat 模型"）→ 双引号在 Win32 参数
 解析时被剥掉，git 收到断裂的多段参数报 pathspec 错误。
 **教训**：commit message 里避免英文双引号（中文引号安全），或改用 `git commit -F 文件`。
+
+## 2026-08-15 流式 TTS 句间间隔优化（双缓冲预取 vs 短句合并）
+
+### 1. 【算法证伪】短句合并在 GPT-SoVITS batch_size=5 + cut5 下反而更慢 12%
+**实验**：4 句短句（はい。/そうね。/うん。/わかった。）单独合成 13.70s vs 合并 15 字合成 15.35s，
+合并反而慢 1.65s。**原因**：batch_size=5 在 cut5 切分回 4 句后实际是**串行推理**而非并行
+（15.35s ≈ 4 × 3.84s），batch 没生效。**致命代价**：首句延迟从 3.4s 暴涨到 15.35s。
+**结论**：短句合并撤销。**教训**：算法优化不能只看 API 调用次数指标（4→1），必须实测端到端
+耗时和首句延迟。batch_size 参数在 cut5 切分后不保证并行，需实测验证。
+
+### 1b. 【算法反转】逗号连接合并让 batch 真正并行，撤销之前的撤销决策
+**关键发现**：之前撤销短句合并是因为用**句号**连接（はい。そうね。うん。わかった。），
+cut5 切分后 4 段长度差异大（2-4字），split_bucket 分到不同桶无法 batch，串行 14.31s。
+改用**逗号**连接（はい、そうね、うん、わかった。），4 段长度相似（2-4字），分到同桶，
+batch_size=5 并行生效，合成 4.30s（≈单段时间）。**端到端收益**：6 句话从 23.72s→9.61s（-59%），
+句间间隔从 11.99s→0s（-100%）。**教训**：split_bucket 按段长分桶，段长相似才能 batch。
+合并短句用逗号（非句号）连接，让 cut5 切分后段长均匀，batch 并行才生效。
+参考：core/tts_client.py _dispatch_sentence, _flush_merge_buffer。
+
+### 2. 【算法证实】双缓冲预取在合成 ≤ 播放时 100% 消除句间间隔
+**实验**：3 句典型日语（23-25 字），合成时间 S_i ∈ [4.28, 4.86]s，播放时间 P_i ∈ [5.39, 7.48]s。
+所有 S_i < P_i（GPU 推理 4-5s vs 音频播放 5-7s），双缓冲理论句间间隔 = Σ max(0, S_{i+1}-P_i) = 0s。
+串行模型句间总间隔 = S_2+S_3 = 9.14s，双缓冲 = 0s，**收益 9.14s（100%）**。
+**物理意义**：合成用 GPU（CUDA kernel launch），播放用 CPU/音频设备，不同硬件资源天然并行。
+**教训**：双线程用队列解耦是经典的 producer-consumer 模式，核心是把"等待"转为"预取"。
+
+### 3. 实现：合成线程和播放线程用 _playback_queue 解耦
+**架构**：合成循环（_stream_consumer）从 _stream_queue 取句→合成→塞 _playback_queue；
+播放循环（_playback_worker）从 _playback_queue 取 wav→播放。两线程独立调度。
+**stop() 必须唤醒两个队列**：合成线程阻塞在 _stream_queue.get，播放线程阻塞在 _playback_queue.get，
+stop() 要往两个队列都 put(None) 唤醒，否则任一线程卡死会让 speaking_changed 信号悬空。
+参考：core/tts_client.py _stream_consumer, _playback_worker, stop。
+
+### 4. 验证 Live2D 渲染的"帧管道产物"原则再次复用
+8-15 fauux 教训"验证分层窗口渲染看 received-frame.png 的尺寸/色彩数/不透明率"再次复用。
+本轮桌宠重启后用 received-frame.png 133KB 证明 Live2D 正常，不信屏幕抓图（GDI 抓透明窗口全黑）。
+**教训**：UI 验证看文件产物（data/desktop_pet.ready + data/received-frame.png），不看终端输出。
+
+### 5. pythonw.exe 启动后进程消失，改用 python.exe 后台运行保留 stdout 诊断
+本轮第一次 Start-Process pythonw.exe main.py 启动后桌宠进程消失（无错误信息）。
+按 8-14 教训 5"pythonw 静默吞错误"改用 `python.exe main.py 2>&1` 后台运行，stderr 重定向到
+stdout，能看到启动日志。**教训**：pythonw.exe 启动失败时改用 python.exe 前台/后台跑捕获 stderr；
+启动成功后再换回 pythonw.exe 释放终端。诊断优先于美观。

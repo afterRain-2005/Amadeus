@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import io
+import queue
+import re
 import threading
 import time
 import wave
@@ -20,12 +22,31 @@ class SpeechPlayer(QObject):
     # 不必重启桌宠（曾因永久缓存 False 导致整轮会话无声）。
     _AVAILABLE_TTL = 60.0
 
+    # 流式合成：句末标点（日语/中文/英文），遇到即送 TTS
+    _SENTENCE_END_RE = re.compile(r"[。！？!?\n]")
+
+    # 短句合并阈值：GPT-SoVITS 合成地板约 3-4s（与文本长度无关），
+    # 短句（< 14 字）播放时间 < 合成时间，导致双缓冲失败（S > P）。
+    # 合并短句到 ≥ 14 字，让 S < P 恢复双缓冲收益。
+    # 实验依据：14 字「こんにちは、牧濑红莉栖です。」S=4.06 P=4.43 (S<P)
+    #           3 字「はい。」S=3.25 P=1.26 (S>P，双缓冲失败)
+    _MERGE_THRESHOLD = 14
+
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self.rate = 0
         self._stop_event = threading.Event()
         self._kurisu_available: bool | None = None
         self._available_checked_at: float = 0.0
+        # 流式合成状态
+        self._stream_buffer = ""
+        self._stream_queue: queue.Queue[tuple[str, str | None] | None] = queue.Queue()
+        self._stream_thread: threading.Thread | None = None
+        # 双缓冲播放队列：合成线程往里塞 wav，播放线程从中取 wav 播放
+        self._playback_queue: queue.Queue[bytes | None] = queue.Queue()
+        self._stream_lang: str | None = "ja"
+        # 短句合并缓冲：暂存 < _MERGE_THRESHOLD 的短句，用逗号连接合并
+        self._merge_buffer = ""
 
     def set_rate(self, rate: int) -> None:
         self.rate = rate
@@ -52,8 +73,190 @@ class SpeechPlayer(QObject):
             daemon=True,
         ).start()
 
+    def speak_streaming_start(self, text_lang: str | None = "ja") -> None:
+        """开始流式合成会话：清空缓冲，启动后台消费线程。
+
+        GPT-4o 流式输出期间，调用 speak_streaming_append(delta) 增量追加文本，
+        遇到句末标点会立即送 TTS 合成播放，实现边生成边说话。
+        会话结束调用 speak_streaming_end() 刷新剩余文本。
+        """
+        self.stop()
+        self._stop_event.clear()
+        self._stream_buffer = ""
+        self._merge_buffer = ""
+        # 清空队列
+        while not self._stream_queue.empty():
+            try:
+                self._stream_queue.get_nowait()
+            except queue.Empty:
+                break
+        self._stream_lang = text_lang
+        self._stream_thread = threading.Thread(
+            target=self._stream_consumer, daemon=True
+        )
+        self._stream_thread.start()
+
+    def speak_streaming_append(self, delta: str) -> None:
+        """流式追加文本。按句末标点切分，短句合并到 ≥14 字再送 TTS。
+
+        短句合并策略：
+        - 短句（< _MERGE_THRESHOLD 字）暂存到 _merge_buffer，用逗号连接
+        - 合并后总字数 ≥ _MERGE_THRESHOLD 时送队列
+        - 长句（≥ _MERGE_THRESHOLD 字）先刷新 _merge_buffer，再直接送队列
+
+        物理依据：GPT-SoVITS 合成地板约 3-4s（与文本长度无关），
+        短句播放时间 < 合成时间导致双缓冲失败。合并短句让 S < P 恢复双缓冲收益。
+        用逗号连接让 cut5 切分后 batch_size=5 并行处理（实验验证）。
+        """
+        if not delta or self._stop_event.is_set():
+            return
+        self._stream_buffer += delta
+        # 按句末标点切分
+        for match in self._SENTENCE_END_RE.finditer(self._stream_buffer):
+            sentence = self._stream_buffer[: match.end()].strip()
+            self._stream_buffer = self._stream_buffer[match.end() :]
+            if sentence:
+                self._dispatch_sentence(sentence)
+        # 剩余未结束的文本保留在 _stream_buffer
+
+    def _dispatch_sentence(self, sentence: str) -> None:
+        """分发句子：短句合并到 _merge_buffer，长句直接送队列。"""
+        # 去掉句末标点计算实际字数
+        bare = self._SENTENCE_END_RE.sub("", sentence).strip()
+        if len(bare) >= self._MERGE_THRESHOLD:
+            # 长句：先刷新合并缓冲（避免短句被长句隔断），再送长句
+            self._flush_merge_buffer()
+            self._stream_queue.put((sentence, self._stream_lang))
+        else:
+            # 短句：去掉句末标点，用逗号连接合并
+            self._merge_buffer += bare + "、"
+            # 合并后总字数 ≥ 阈值：送队列
+            if len(self._merge_buffer) >= self._MERGE_THRESHOLD:
+                self._flush_merge_buffer()
+
+    def _flush_merge_buffer(self) -> None:
+        """刷新合并缓冲：把暂存的短句合并后送队列。"""
+        if not self._merge_buffer:
+            return
+        # 去掉末尾多余的逗号，加句号保持自然语气
+        merged = self._merge_buffer.rstrip("、").strip()
+        if merged:
+            self._stream_queue.put((merged + "。", self._stream_lang))
+        self._merge_buffer = ""
+
+    def speak_streaming_end(self) -> None:
+        """流式会话结束：刷新剩余缓冲，发结束信号。"""
+        if self._stream_buffer.strip():
+            self._dispatch_sentence(self._stream_buffer.strip())
+            self._stream_buffer = ""
+        self._flush_merge_buffer()
+        self._stream_queue.put(None)  # 结束信号
+
+    def _stream_consumer(self) -> None:
+        """流式合成消费线程：合成与播放完全解耦，用 _playback_queue 连接。
+
+        架构（双缓冲预取）：
+        - 合成循环（本线程）：从 _stream_queue 取句 → 合成 → 放入 _playback_queue
+        - 播放循环（_playback_worker 线程）：从 _playback_queue 取 wav → 播放
+
+        数学本质：双线程独立调度，完成时间 ≈ max(ΣS_i, ΣP_i)
+        相比串行（ΣS + ΣP）削减 min(ΣS, ΣP)。
+        形象理解：合成线程是"厨师做菜流水线"，播放线程是"客人吃饭流水线"，
+        中间用传送带（_playback_queue）连接。厨师不必等客人吃完才做下一道菜，
+        传送带会自动缓冲。合成快时预取多句堆在队列里，播放快时合成已就绪。
+
+        短句合并（逗号连接方案）：短句（< 14 字）用逗号连接合并到 ≥14 字送 TTS。
+        实验验证：4 短句单独合成 13.26s、间隔 9.13s；合并逗号连接 4.30s、间隔 0s。
+        关键：用逗号连接让 cut5 切分后段长相似，split_bucket 分到同桶，batch 并行生效。
+        （之前撤销的方案用句号连接，段长差异大分到不同桶，batch 失效串行 14.31s。）
+        """
+        self.speaking_changed.emit(True)
+        try:
+            if self._available_expired():
+                self._kurisu_available = self._check_kurisu()
+                self._available_checked_at = time.monotonic()
+            if not self._kurisu_available:
+                self.tts_offline.emit()
+                print("[SpeechPlayer] GPT-SoVITS offline, streaming disabled")
+                return
+
+            # 清空播放队列（可能残留上一轮会话的 wav）
+            while not self._playback_queue.empty():
+                try:
+                    self._playback_queue.get_nowait()
+                except queue.Empty:
+                    break
+
+            # 启动播放 worker（独立线程，从 _playback_queue 取 wav 按顺序播放）
+            playback_thread = threading.Thread(
+                target=self._playback_worker, daemon=True
+            )
+            playback_thread.start()
+
+            # 合成循环：取句 → 合成 → 入播放队列
+            while not self._stop_event.is_set():
+                try:
+                    item = self._stream_queue.get(timeout=0.5)
+                except queue.Empty:
+                    continue
+                if item is None:
+                    # 会话结束：通知播放 worker 结束
+                    self._playback_queue.put(None)
+                    break
+                sentence, text_lang = item
+                if self._stop_event.is_set():
+                    break
+                # 合成并入队（与播放并行）
+                self._synthesize_and_enqueue(sentence, text_lang)
+            # 兜底：会话被 stop 打断时也要通知播放 worker 结束
+            self._playback_queue.put(None)
+            # 等播放 worker 结束（最多 30s，防止卡死）
+            playback_thread.join(timeout=30.0)
+        finally:
+            self.speaking_changed.emit(False)
+
+    def _synthesize_and_enqueue(self, sentence: str, text_lang: str | None) -> None:
+        """合成一句并放入 _playback_queue（供播放 worker 取走播放）。"""
+        if self._stop_event.is_set() or not sentence:
+            return
+        ok, wav_bytes = self._synthesize_kurisu(
+            sentence, text_lang=text_lang, prompt_text=None, prompt_lang="ja"
+        )
+        if not ok or not wav_bytes:
+            print(f"[SpeechPlayer] streaming sentence failed: {sentence[:30]}")
+            return
+        self._playback_queue.put(wav_bytes)
+
+    def _playback_worker(self) -> None:
+        """播放 worker：从 _playback_queue 取 wav 按顺序播放。
+
+        独立线程，与合成循环并行。队列里可能有多个已合成的 wav（双缓冲预取），
+        本线程只需顺序取出播放即可。遇到 None 表示会话结束。
+        """
+        while not self._stop_event.is_set():
+            try:
+                wav = self._playback_queue.get(timeout=0.5)
+            except queue.Empty:
+                continue
+            if wav is None:
+                break
+            if self._stop_event.is_set():
+                break
+            self.playback_started.emit(self._wav_duration_seconds(wav))
+            self._play_wav(wav)
+
     def stop(self) -> None:
         self._stop_event.set()
+        # 唤醒可能阻塞在 queue.get 的合成循环
+        try:
+            self._stream_queue.put(None, block=False)
+        except queue.Full:
+            pass
+        # 唤醒可能阻塞在 queue.get 的播放 worker
+        try:
+            self._playback_queue.put(None, block=False)
+        except queue.Full:
+            pass
 
     def _check_kurisu(self) -> bool:
         try:
@@ -112,19 +315,12 @@ class SpeechPlayer(QObject):
         prompt_text: str | None = None,
         prompt_lang: str | None = None,
     ) -> bool:
+        """合成并播放（阻塞直到播放完成）。用于非流式 speak_with_options。"""
         try:
-            from core.gpt_sovits_client import KurisuTTS
-
-            tts = KurisuTTS()
-            if not tts.available:
-                return False
-            wav_bytes = tts.synthesize(
-                text,
-                text_lang=text_lang,
-                prompt_text=prompt_text,
-                prompt_lang=prompt_lang,
+            ok, wav_bytes = self._synthesize_kurisu(
+                text, text_lang=text_lang, prompt_text=prompt_text, prompt_lang=prompt_lang
             )
-            if not wav_bytes or self._stop_event.is_set():
+            if not ok or not wav_bytes or self._stop_event.is_set():
                 return False
             self.playback_started.emit(self._wav_duration_seconds(wav_bytes))
             self._play_wav(wav_bytes)
@@ -132,6 +328,34 @@ class SpeechPlayer(QObject):
         except Exception as exc:
             print(f"[SpeechPlayer] GPT-SoVITS failed: {exc}")
             return False
+
+    def _synthesize_kurisu(
+        self,
+        text: str,
+        *,
+        text_lang: str | None = None,
+        prompt_text: str | None = None,
+        prompt_lang: str | None = None,
+    ) -> tuple[bool, bytes | None]:
+        """只合成不播放，返回 (success, wav_bytes)。供流式合成使用。"""
+        try:
+            from core.gpt_sovits_client import KurisuTTS
+
+            tts = KurisuTTS()
+            if not tts.available:
+                return False, None
+            wav_bytes = tts.synthesize(
+                text,
+                text_lang=text_lang,
+                prompt_text=prompt_text,
+                prompt_lang=prompt_lang,
+            )
+            if not wav_bytes or self._stop_event.is_set():
+                return False, None
+            return True, wav_bytes
+        except Exception as exc:
+            print(f"[SpeechPlayer] GPT-SoVITS synthesize failed: {exc}")
+            return False, None
 
     def _wav_duration_seconds(self, wav_bytes: bytes) -> float:
         with wave.open(io.BytesIO(wav_bytes), "rb") as wav:
