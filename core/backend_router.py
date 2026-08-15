@@ -87,8 +87,17 @@ def route_and_send(
     on_delta=lambda t: None,
     on_status=lambda t: None,
     on_approval=lambda p: "deny",
+    system_role: str = "user",
+    skip_history: bool = False,
+    inject_system_prompt: str | None = None,
 ) -> tuple[str, str]:
-    """按模式分发，返回 (reply, backend_used)。hermes 失败自动降级本地直连。"""
+    """按模式分发，返回 (reply, backend_used)。hermes 失败自动降级本地直连。
+
+    扩展参数（companion 用）：
+    - system_role="companion" 跳过 classify_input，直接走 chat 路径
+    - skip_history=True 时不写 conversation_history
+    - inject_system_prompt 注入到 messages 最前，作为额外 system 指令
+    """
     global _codex_session_started
     from core.agent_client import run_hermes_run, run_local_run
     from core.codex_client import ensure_agents_md, run_codex_turn
@@ -103,12 +112,18 @@ def route_and_send(
         openclaw_cfg.update(config["openclaw"])
     openclaw_enabled = bool(openclaw_cfg.get("enabled", False))
 
-    route = mode if mode in ("chat", "hermes", "codex") else classify_input(
-        input_text, openclaw_enabled=openclaw_enabled,
-        llm_classify=lambda t: _llm_classify(
-            t, endpoint=config.get("endpoint", ""),
-            api_key=config.get("api_key", ""), model=config.get("model", "")),
-    )
+    # companion 模式：跳过 classify_input，直接走 chat 路径
+    if system_role == "companion":
+        route = "chat"
+    elif mode in ("chat", "hermes", "codex"):
+        route = mode
+    else:
+        route = classify_input(
+            input_text, openclaw_enabled=openclaw_enabled,
+            llm_classify=lambda t: _llm_classify(
+                t, endpoint=config.get("endpoint", ""),
+                api_key=config.get("api_key", ""), model=config.get("model", "")),
+        )
 
     hermes_cfg = {**{"base_url": "http://127.0.0.1:8642", "profile": "kurisu",
                      "session_id": "amadeus-kurisu", "api_key": ""},
@@ -151,10 +166,17 @@ def route_and_send(
 
     # chat / gui / hermes 降级：本地直连（gui 追加 operate_gui 引导）
     text = input_text if route != "gui" else input_text + "\n" + GUI_NUDGE
+    # companion 模式不写 conversation_history
+    if not skip_history and conversation_history is not None:
+        conversation_history.append({"role": "user", "content": input_text})
+    # inject_system_prompt 叠加到 instructions
+    instructions = KURISU_OUTPUT_FORMAT
+    if inject_system_prompt:
+        instructions = f"{inject_system_prompt}\n\n{KURISU_OUTPUT_FORMAT}"
     reply = run_local_run(
         endpoint=config.get("endpoint", ""), api_key=config.get("api_key", ""),
         model=config.get("model", ""), soul_md=soul_md,
-        instructions=KURISU_OUTPUT_FORMAT, input_text=text,
+        instructions=instructions, input_text=text,
         conversation_history=conversation_history, memories=memories,
         on_status=on_status, on_delta=on_delta, on_approval=on_approval)
     return reply, ("gui" if route == "gui" else "chat")
