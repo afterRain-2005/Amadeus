@@ -87,6 +87,19 @@ def _show_windows() -> None:
 
 
 if __name__ == "__main__":
+    # 冻结模式下 multiprocessing spawn 会重新执行本 exe（--multiprocessing-fork）。
+    # 实测 PyInstaller 6.21 bootloader 会把 worker argv 里的 --multiprocessing-fork
+    # 剥离（Python 层 sys.argv 只剩业务参数），freeze_support/is_forking 永远拦不住；
+    # worker 恢复协议一旦失败即落入下方 argv 分发 → 误入 pet_main → 无限递归 spawn
+    # （实测进程树每秒 +1）。
+    # mp.parent_process() 由 spawn 协议设置在进程对象上、不依赖 argv，是 frozen 下
+    # 判定「本进程是 mp worker」的唯一可靠手段：worker 绝不进入任何业务入口。
+    import multiprocessing as mp
+    mp.freeze_support()
+    if mp.parent_process() is not None:
+        # 漏拦的 worker：立即非零退出，让父进程通过 join/exitcode 感知 renderer
+        # 启动失败，而不是递归复制出整棵桌宠进程树。
+        sys.exit(1)
     if "--desktop-pet" in sys.argv:
         from desktop_pet import main as pet_main
         sys.exit(pet_main())

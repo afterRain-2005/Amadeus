@@ -2,6 +2,38 @@
 
 > 每轮对话结束时记录 5 条最重要的教训。开始项目时首先查看本文件。
 
+## 2026-08-15 PyInstaller 打包验证（mp worker 递归爆炸修复）
+
+### 1. PyInstaller 6.21 frozen 下 freeze_support 不可靠，用 mp.parent_process() 兜底
+实测 bootloader 会把 mp spawn worker 的 `--multiprocessing-fork` 参数从 Python 层
+sys.argv 中剥离（worker 只剩父进程业务参数，如 `--desktop-pet`），`is_forking()` 永远
+返回 False，freeze_support（标准版和 rthook 替换版都）拦不住漏拦 worker。worker 恢复
+协议一旦失败就会以 argv 分发逻辑误入 `pet_main()` → 无限递归 spawn（进程树每秒 +1）。
+`mp.parent_process()` 由 spawn 协议设置在进程对象上、不依赖 argv，是 frozen 下判定
+「本进程是 mp worker」的唯一可靠手段。修复：worker 判定成立时立即 `sys.exit(1)`。
+依据：data/mp_repro 最小复现实验 + Win32_Process 进程树实测（见 main.py 注释）。
+
+### 2. 进程异常先画进程树：Win32_Process 三元组定位递归链
+`Get-CimInstance Win32_Process` 取 ProcessId/ParentProcessId/CommandLine 三元组，
+`--multiprocessing-fork` 命令行只能由 mp.Process 产生，沿父子链回溯即可锁定
+「谁在循环 spawn」。本轮 9 进程 → 清理后单实例 → 复跑捕获完整递归链，20 分钟定位。
+
+### 3. 打包后测试必须先核对产物版本，防止测了旧 exe
+上一轮 rebuild 后未确认 build 输出即启动测试，递归现象与代码预期不符（freeze_support
+已加却像没加），浪费一轮排查。教训：build 命令 exit 0 ≠ 产物正确，测试前核对
+时间戳/大小，或 smoke test 里带版本诊断输出。
+
+### 4. 最小复现是定差分的唯一科学手段：先证明通用机制再找项目差异
+frozen+mp 疑难先写 10 行最小 repro（target 函数 + argv/parent_process 落盘）单独打包：
+(a) 无参启动——worker argv 被剥离、拦截正常；(b) 带 --desktop-pet 启动——worker 正常
+执行 target。证明 bootloader 拦截与业务参数无关，递归根源在 Amadeus 的 argv 分发入口
+无兜底，而非 pywebview/PySide6 依赖栈。
+
+### 5. spec excludes 一石二鸟：解决冲突 + 瘦身
+conda base 混装 PyQt5/PyQt6 会直接 abort build（多 Qt 绑定）；.libs 里 numpy 的
+函数级懒导入被静态分析追踪会连带 anaconda 科学栈（scipy/pandas/botocore）。统一在
+excludes 显式排除，exe 从潜在 500MB+ 降到 117.5MB。依据：Amadeus.spec excludes 列表。
+
 ## 2026-08-13 TTS 集成
 
 ### 1. GPT-SoVITS 集成设计：代码优先 + 模型后装

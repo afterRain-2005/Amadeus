@@ -27,7 +27,15 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[],
+    # anaconda base 混装 PyQt5/PyQt6，PyInstaller 不允许多 Qt 绑定，显式排除；
+    # .libs 里 numpy 的函数级 matplotlib 懒导入会被静态分析追踪，连带 anaconda
+    # 科学栈（scipy/pandas/botocore 等），运行时根本不会走到，全部排除瘦身。
+    excludes=[
+        'PyQt5', 'PyQt6', 'qtpy',
+        'matplotlib', 'scipy', 'pandas', 'botocore', 'boto3', 'IPython',
+        'pytest', 'tkinter',
+        'webview.platforms.qt', 'webview.platforms.gtk', 'webview.platforms.cocoa',
+    ],
     noarchive=False,
 )
 pyz = PYZ(a.pure)
