@@ -52,6 +52,40 @@ class SettingsDialog(QDialog):
         asr_form.addRow("ASR 模型", self.asr_model)
         tabs.addTab(asr_page, "语音输入")
 
+        # === Agent 模式（2026-08-15 agent-mode spec §4.4）===
+        from config import AGENT_ROUTER_DEFAULTS, HERMES_DEFAULTS
+        agent_page = QWidget()
+        agent_form = QFormLayout(agent_page)
+        router_cfg = {**AGENT_ROUTER_DEFAULTS, **(config.get("agent_router") or {})}
+        self.agent_mode = QComboBox()
+        self.agent_mode.addItem("本地直连（默认）", "chat")
+        self.agent_mode.addItem("Hermes 网关（deepseek 模式）", "hermes")
+        self.agent_mode.addItem("codex 子进程", "codex")
+        self.agent_mode.addItem("自动分流（gate）", "auto")
+        idx = self.agent_mode.findData(str(router_cfg.get("mode", "chat")))
+        self.agent_mode.setCurrentIndex(max(idx, 0))
+        agent_form.addRow("Agent 模式", self.agent_mode)
+
+        hermes_cfg = {**HERMES_DEFAULTS, **(config.get("hermes") or {})}
+        self.hermes_key = QLineEdit(str(hermes_cfg.get("api_key", "")))
+        self.hermes_key.setEchoMode(QLineEdit.Password)
+        agent_form.addRow("Hermes API Key", self.hermes_key)
+
+        self.hermes_status = QLabel("未检测")
+        self.hermes_status.setStyleSheet("color:#8a7f63")
+        hermes_btn = QPushButton("检测 Hermes 网关")
+        hermes_btn.clicked.connect(self._probe_hermes)
+        agent_form.addRow(self.hermes_status, hermes_btn)
+
+        codex_cfg = {**AGENT_ROUTER_DEFAULTS["codex"], **(router_cfg.get("codex") or {})}
+        self.codex_sandbox = QComboBox()
+        self.codex_sandbox.addItem("只读（默认）", "read-only")
+        self.codex_sandbox.addItem("可写工作区", "workspace-write")
+        idx = self.codex_sandbox.findData(str(codex_cfg.get("sandbox", "read-only")))
+        self.codex_sandbox.setCurrentIndex(max(idx, 0))
+        agent_form.addRow("codex 沙箱", self.codex_sandbox)
+        tabs.addTab(agent_page, "Agent 模式")
+
         # === 关于 / 版本 ===
         from core.version import __version__
         about_page = QWidget()
@@ -96,6 +130,19 @@ class SettingsDialog(QDialog):
             self.version_status.setText(f"{latest}（版本号格式异常）")
             self.version_status.setStyleSheet("color:#8a7f63")
 
+    def _probe_hermes(self) -> None:
+        """同步探测 Hermes 网关 /health（2s 超时，设置页内可接受）。"""
+        from config import HERMES_DEFAULTS
+        from core.hermes_launcher import probe_health, read_profile_api_key
+        hermes_cfg = {**HERMES_DEFAULTS, **(load_config().get("hermes") or {})}
+        base_url = str(hermes_cfg.get("base_url") or "http://127.0.0.1:8642")
+        api_key = str(hermes_cfg.get("api_key") or "") or (read_profile_api_key() or "")
+        self.hermes_status.setText("检测中…")
+        QApplication.processEvents()
+        ok = probe_health(base_url, api_key)
+        self.hermes_status.setText("在线" if ok else "离线")
+        self.hermes_status.setStyleSheet("color:#34c759" if ok else "color:#d2738a")
+
     def _save(self) -> None:
         config = load_config()
         config.update({
@@ -105,5 +152,13 @@ class SettingsDialog(QDialog):
             "asr_api_key": self.asr_key.text().strip(), "asr_model": self.asr_model.text().strip(),
             "version_check_url": self.version_check_url.text().strip(),
         })
+        from config import AGENT_ROUTER_DEFAULTS, HERMES_DEFAULTS
+        router_cfg = {**AGENT_ROUTER_DEFAULTS, **(config.get("agent_router") or {})}
+        codex_cfg = {**AGENT_ROUTER_DEFAULTS["codex"], **(router_cfg.get("codex") or {})}
+        codex_cfg["sandbox"] = self.codex_sandbox.currentData()
+        config["agent_router"] = {"mode": self.agent_mode.currentData(), "codex": codex_cfg}
+        hermes_cfg = {**HERMES_DEFAULTS, **(config.get("hermes") or {})}
+        hermes_cfg["api_key"] = self.hermes_key.text().strip()
+        config["hermes"] = hermes_cfg
         save_config(config)
         self.accept()
