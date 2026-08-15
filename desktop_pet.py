@@ -1087,6 +1087,7 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
                         self.speech.speak_streaming_start(text_lang="ja")
                         # 提取 === 之后的日语部分追加
                         jp_part = new_streamed.split("===", 1)[1].lstrip("=\r\n").strip()
+                        print(f"[PET-DBG] delta 首次===检测 jp_part={jp_part!r} (len={len(jp_part)})")
                         if jp_part:
                             self.speech.speak_streaming_append(jp_part)
                 else:
@@ -1094,6 +1095,7 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
                     if "===" in text:
                         text = text.split("===", 1)[-1].lstrip("=\r\n")
                     if text:
+                        print(f"[PET-DBG] delta 日语段追加 text={text!r} (len={len(text)})")
                         self.speech.speak_streaming_append(text)
 
         def _agent_finished(self, reply: str) -> None:
@@ -1106,6 +1108,9 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             self.send_button.setDisabled(False)
             parsed = parse_reply(reply)
             send_command(emotion=parsed.emotion)
+            print(f"[PET-DBG] finished reply_len={len(reply)} jp_len={len(parsed.japanese)} started={self._stream_japanese_started}")
+            print(f"[PET-DBG] finished reply={reply[:200]!r}")
+            print(f"[PET-DBG] finished parsed.jp={parsed.japanese[:200]!r}")
             # 流式 TTS：会话结束，刷新剩余缓冲
             # （流式合成在 _agent_delta 中已开始，这里只刷新剩余文本）
             config = load_config()
@@ -1113,6 +1118,7 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
                 self.speech.speak_streaming_end()
             elif config.get("tts_enabled", True) and parsed.japanese and not self._stream_japanese_started:
                 # 兜底：如果流式未启动（如无 === 分隔符），整段合成
+                print(f"[PET-DBG] 兜底整段合成 jp={parsed.japanese[:60]!r}")
                 self.speech.set_rate([-2, 0, 2][config.get("tts_rate", 1)])
                 self.speech.speak_with_options(
                     parsed.japanese,
@@ -1243,6 +1249,99 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
     app.aboutToQuit.connect(lambda: renderer.terminate() if renderer.is_alive() else None)
     pet.show()
     pet.raise_()
+
+    # === Companion 主动问候子系统 ===
+    # 在 PetWindow 实例化后接入（pet 实例已可用，pet._agent_delta / pet._show_status
+    # 是 PetWindow 的方法，可复用为 companion 回复的流式表达回调）。
+    # PySide6 延迟导入（此处已在 run_overlay 内部，但显式导入让依赖清晰）。
+    from core.companion.controller import CompanionController
+    from core.companion.sensors import (
+        ActiveWindowSensor, ActivityTracker, IdleStateTracker,
+        ClipboardSensor, ScreenSensor, build_snapshot,
+    )
+    from core.companion import storage as companion_storage
+    from datetime import datetime as _dt_datetime
+
+    _companion_cfg_full = load_config()
+    companion_cfg = {**{"enabled": True, "frequency": "mid", "daily_limit": 30,
+                        "quiet_hours": {"start": "23:00", "end": "08:00"},
+                        "sensors": {"active_window": True, "activity": True,
+                                    "idle": True, "clipboard": False, "screen": False}},
+                     **(_companion_cfg_full.get("companion") or {})}
+    sensors_cfg = companion_cfg.get("sensors", {})
+
+    aw_sensor = ActiveWindowSensor(interval_seconds=2)
+    at_sensor = ActivityTracker(interval_seconds=30)
+    it_tracker = IdleStateTracker()
+    clip_sensor = ClipboardSensor(interval_seconds=1, enabled=bool(sensors_cfg.get("clipboard", False)))
+    screen_sensor = ScreenSensor(enabled=bool(sensors_cfg.get("screen", False)))
+
+    companion_ctrl = CompanionController(
+        config=companion_cfg,
+        llm_config={
+            "endpoint": _companion_cfg_full.get("endpoint", ""),
+            "api_key": _companion_cfg_full.get("api_key", ""),
+            "model": _companion_cfg_full.get("model", ""),
+        },
+    )
+
+    def _companion_on_delta(text: str) -> None:
+        """companion 回复流式 delta，复用 PetWindow._agent_delta。"""
+        try:
+            pet._agent_delta(text)
+        except Exception:
+            pass
+
+    def _companion_on_status(text: str) -> None:
+        """companion 状态文本，复用 PetWindow._show_status。"""
+        try:
+            pet._show_status(text)
+        except Exception:
+            pass
+
+    def _companion_tick() -> None:
+        """周期性检查 companion 触发（每 30s 一次）。"""
+        if not companion_cfg.get("enabled"):
+            return
+        try:
+            aw_sensor._poll()
+            at_sensor._poll()
+            it_tracker.update(at_sensor.idle_seconds)
+            now = _dt_datetime.now()
+            local_time = now.strftime("%H:%M 周%w")
+            is_deep_night = 23 <= now.hour or now.hour < 6
+            snap = build_snapshot(
+                active_window=aw_sensor, activity=at_sensor, idle=it_tracker,
+                clipboard=clip_sensor, screen=screen_sensor,
+                last_greeting_ts=companion_storage.last_greeting_ts(),
+                last_topic=None,  # 简化，下个版本从 storage 取
+                greeting_count=companion_storage.greeting_count_today(),
+                local_time=local_time, is_deep_night=is_deep_night,
+            )
+            companion_ctrl.handle_signal(
+                snap, local_hour=now.hour + now.minute / 60,
+                on_delta=_companion_on_delta, on_status=_companion_on_status,
+            )
+        except Exception:
+            pass  # companion 永不影响主流程
+
+    companion_timer = QTimer(pet)
+    companion_timer.timeout.connect(_companion_tick)
+    companion_timer.start(30000)  # 30s 周期
+
+    # 启动各传感器独立 QTimer（parent=pet 保证随 pet 销毁）
+    aw_sensor.start(parent=pet)
+    at_sensor.start(parent=pet)
+    clip_sensor.start(parent=pet)
+
+    # 用户发消息时更新 companion 冷却时间戳（包装原 _send）
+    _original_pet_send = pet._send
+
+    def _send_with_companion_cooldown(*args, **kwargs):
+        companion_ctrl.on_user_message()
+        return _original_pet_send(*args, **kwargs)
+
+    pet._send = _send_with_companion_cooldown
     if os.environ.get("AMADEUS_UI_SNAPSHOT"):
         def save_snapshot() -> None:
             if os.environ.get("AMADEUS_UI_SNAPSHOT") == "history":
