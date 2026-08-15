@@ -496,6 +496,42 @@ PowerShell 的字符串编码默认用系统编码（GBK），ConvertTo-Json 不
 不用 PowerShell Invoke-WebRequest（编码不可靠）。或用 `-ContentType "application/json; charset=utf-8"`
 + `[System.Text.Encoding]::UTF8.GetBytes($json)` 显式指定 UTF-8 编码。
 
+## 2026-08-15 Agent 模式实施（Task 1-7）
+
+### 1. 中文意图正则必须覆盖口语插入字与跨距，plan 里的正则会被 TDD 打回
+计划中 AGENT/GUI 正则有三个缺口，全部被参数化测试当场抓获：
+`帮我搜一下`（`帮我(写|整理|运行|分析|找)` 漏了 `搜|查`）、`读一下 D 盘的文件`
+（`读.{0,4}文件` 跨距不够，实际"一下 D 盘的"7 字符）、`截个屏`（`截屏` 不匹配
+插入"个"字的口语）。修正：`帮我(写|整理|运行|分析|找|搜|查)`、`读.{0,8}文件`、
+`截.?屏|截.?图`。**教训**：中文 NLU 关键词正则的测试用例必须来自真实口语样本
+（带插入字/空格/跨距），plan 里的正则是初稿不是终稿，RED 阶段的失败是设计反馈。
+
+### 2. 函数内延迟导入让 monkeypatch 模块属性天然生效（backend_router 可测性设计）
+route_and_send 把 `from core.agent_client import run_local_run` 等放在函数体内，
+导入发生在每次调用时 → 测试 `monkeypatch.setattr(core.agent_client, "run_local_run", ...)`
+直接生效，无需 patch backend_router 自身的命名空间。对照 lessons（8-15 superpowers
+教训 3：延迟导入的依赖要 patch 源模块）——本轮是该教训的正面运用：**依赖注入点
+放在函数内 import 源模块，是"零依赖注入参数 + 可 mock"的两全做法**。
+
+### 3. 测试 mock 双层罩住策略成功防住真实 config 写入（8-15 事故教训的直接复用）
+test_settings_agent_tab 的 `_make_dialog` 罩构造期 load/save，`test_agent_tab_save`
+再用第二个 with 块罩住 `dlg._save()` 调用——上轮"真实 data/config.json 被覆盖丢 key"
+事故的修复模式首次在新测试中落地即通过。**教训**：凡测 `_save()` 类落盘方法，
+mock 作用域必须显式罩住被测调用行，不能依赖构造期的 patch 残留。
+
+### 4. 执行计划前核实依赖签名，本次零偏离完成 Task 4-6
+动手前 Grep 核实了 run_local_run/run_hermes_run 签名、config 四常量、APP_DIR、
+settings_dialog 的锚点行与 QWidget 导入，全部与计划假设一致，三个 task 一次通过。
+**教训**：lessons（8-15 superpowers 教训 4"执行旧计划前先核实文件现状"）的成本
+极低（3 个并行 Grep），收益是整个实施期零返工。
+
+### 5. codex 真机事件与 fixture 的宽容契约设计经受住了校准
+parse_event_line 对未知结构返回 None 的"宽容契约"让 codex 版本间事件格式差异
+被隔离在适配层；真机校准（Task 3 已做）确认 agent_message 全量快照语义后，
+Task 4-6 的流式增量转换（快照→增量）未再出问题。**教训**：跨进程 JSONL 适配
+层宁可漏事件（None）不可错解析，配合"产物文件是真相兜底"的双通道设计，
+流式 UI 与最终回复可以各自容错。
+
 ## 2026-08-15 superpowers 计划收尾（P0 Task4-7 + Agent Task6 + Phone Task9）
 
 ### 1. 【事故】测试 mock 作用域没罩住被测调用，真实 data/config.json 被覆盖丢 key
