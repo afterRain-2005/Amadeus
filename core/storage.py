@@ -10,18 +10,28 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from pathlib import Path
 from typing import Any
 
 
-# 默认存储到项目本地 amadeus-py/data/，避免用户目录权限问题
-# 若环境变量 AMADEUS_DATA_DIR 被设置则优先使用
-_APP_DIR_ENV = os.environ.get("AMADEUS_DATA_DIR")
-if _APP_DIR_ENV:
-    APP_DIR = Path(_APP_DIR_ENV)
-else:
+def _resolve_app_dir() -> Path:
+    """数据目录解析（抽出便于测试）。
+
+    优先级：AMADEUS_DATA_DIR 环境变量 > frozen 时 exe 同级 data/ > 项目 data/。
+    frozen（onefile）时 __file__ 位于 _MEIPASS 临时解压目录——目录名每次启动
+    随机，配置写进去即丢（实测 API key 反复丢失的根因），必须落到 exe 旁。
+    """
+    env_dir = os.environ.get("AMADEUS_DATA_DIR")
+    if env_dir:
+        return Path(env_dir)
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent / "data"
     # amadeus-py/core/storage.py → amadeus-py/data/
-    APP_DIR = Path(__file__).resolve().parent.parent / "data"
+    return Path(__file__).resolve().parent.parent / "data"
+
+
+APP_DIR = _resolve_app_dir()
 
 
 def _ensure_dir() -> None:
