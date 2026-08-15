@@ -55,6 +55,18 @@ OPENCLAW_DEFAULTS: dict[str, object] = {
     "timeout": 120,                            # GUI 操作可能耗时，给足超时（秒）
 }
 
+# === Agent 模式路由默认配置（2026-08-15 agent-mode spec §4.4）===
+# mode: "chat"=本地直连(现状) | "hermes"=Hermes 网关(deepseek模式) | "codex"=codex 子进程 | "auto"=gate 分流
+# 运行时被 data/config.json 的 agent_router 键覆盖（{**DEFAULTS, **config["agent_router"]}）。
+AGENT_ROUTER_DEFAULTS: dict[str, object] = {
+    "mode": "chat",
+    "codex": {
+        "workspace": "data/codex_workspace",   # AGENTS.md 与 codex 会话工作根目录（相对项目根）
+        "sandbox": "read-only",                # codex 沙箱：read-only | workspace-write
+        "timeout": 120,                        # codex exec 单轮超时（秒）
+    },
+}
+
 
 # === 电话模式默认配置 ===
 # 电话模式 = 与红莉栖 AI 半双工语音通话 + 屏幕共享给 AI 看（豆包语音电话模式）。
