@@ -86,6 +86,72 @@ class SettingsDialog(QDialog):
         agent_form.addRow("codex 沙箱", self.codex_sandbox)
         tabs.addTab(agent_page, "Agent 模式")
 
+        # === Companion 主动问候（2026-08-16 spec §8）===
+        from config import COMPANION_DEFAULTS
+        companion_page = QWidget()
+        companion_form = QFormLayout(companion_page)
+        companion_cfg = {**COMPANION_DEFAULTS, **(config.get("companion") or {})}
+        self.companion_enabled = QCheckBox("启用主动陪伴（伪春菜式）")
+        self.companion_enabled.setChecked(bool(companion_cfg.get("enabled", True)))
+        companion_form.addRow(self.companion_enabled)
+
+        # 传感器逐项开关
+        sensors_cfg = {**COMPANION_DEFAULTS["sensors"], **(companion_cfg.get("sensors") or {})}
+        self.sensor_active_window = QCheckBox("前台窗口检测（2s）")
+        self.sensor_active_window.setChecked(bool(sensors_cfg.get("active_window", True)))
+        companion_form.addRow(self.sensor_active_window)
+        self.sensor_activity = QCheckBox("工作节奏检测（30s）")
+        self.sensor_activity.setChecked(bool(sensors_cfg.get("activity", True)))
+        companion_form.addRow(self.sensor_activity)
+        self.sensor_idle = QCheckBox("空闲状态检测（派生）")
+        self.sensor_idle.setChecked(bool(sensors_cfg.get("idle", True)))
+        companion_form.addRow(self.sensor_idle)
+        self.sensor_clipboard = QCheckBox("剪贴板检测（默认关，中隐私）")
+        self.sensor_clipboard.setChecked(bool(sensors_cfg.get("clipboard", False)))
+        companion_form.addRow(self.sensor_clipboard)
+        self.sensor_screen = QCheckBox("屏幕感知（默认关，高隐私，成本高）")
+        self.sensor_screen.setChecked(bool(sensors_cfg.get("screen", False)))
+        companion_form.addRow(self.sensor_screen)
+
+        # 静音时段
+        qh = companion_cfg.get("quiet_hours", {"start": "23:00", "end": "08:00"})
+        self.quiet_start = QLineEdit(str(qh.get("start", "23:00")))
+        self.quiet_end = QLineEdit(str(qh.get("end", "08:00")))
+        companion_form.addRow("静音开始", self.quiet_start)
+        companion_form.addRow("静音结束", self.quiet_end)
+
+        # 频率
+        self.companion_freq = QComboBox()
+        self.companion_freq.addItem("低（20%）", "low")
+        self.companion_freq.addItem("中（50%）", "mid")
+        self.companion_freq.addItem("高（100%）", "high")
+        idx = self.companion_freq.findData(str(companion_cfg.get("frequency", "mid")))
+        self.companion_freq.setCurrentIndex(max(idx, 0))
+        companion_form.addRow("触发频率", self.companion_freq)
+
+        # 每日上限
+        self.companion_daily_limit = QLineEdit(str(companion_cfg.get("daily_limit", 30)))
+        companion_form.addRow("每日上限", self.companion_daily_limit)
+
+        # 当前上下文预览（只读）
+        self.companion_preview = QLabel("（启动后显示）")
+        self.companion_preview.setStyleSheet("color:#8a7f63; font-family: monospace;")
+        self.companion_preview.setWordWrap(True)
+        companion_form.addRow("当前上下文", self.companion_preview)
+
+        # 测试问候 + 清空记忆按钮
+        from PySide6.QtWidgets import QHBoxLayout
+        btn_row = QHBoxLayout()
+        test_btn = QPushButton("测试问候")
+        test_btn.clicked.connect(self._test_companion)
+        btn_row.addWidget(test_btn)
+        clear_btn = QPushButton("清空记忆")
+        clear_btn.clicked.connect(self._clear_companion_memory)
+        btn_row.addWidget(clear_btn)
+        companion_form.addRow(btn_row)
+
+        tabs.addTab(companion_page, "Companion")
+
         # === 关于 / 版本 ===
         from core.version import __version__
         about_page = QWidget()
@@ -143,6 +209,46 @@ class SettingsDialog(QDialog):
         self.hermes_status.setText("在线" if ok else "离线")
         self.hermes_status.setStyleSheet("color:#34c759" if ok else "color:#d2738a")
 
+    def _test_companion(self) -> None:
+        """手动触发一次 companion 问候（用于设置页验收）。"""
+        from core.companion.evaluator import Evaluator
+        from core.companion.sensors import ContextSnapshot
+        from datetime import datetime
+        now = datetime.now()
+        local_time = now.strftime("%H:%M 周%w")
+        is_deep_night = 23 <= now.hour or now.hour < 6
+        snap = ContextSnapshot(
+            timestamp=now.isoformat(), local_time=local_time,
+            is_deep_night=is_deep_night, idle_seconds=10,
+            work_session_minutes=5, idle_state="active",
+            active_window_title="（测试）", active_process="test.exe",
+            window_changed_recently=False,
+            last_companion_greeting_ts=None,
+            last_companion_topic=None, greeting_count_today=0,
+        )
+        ev = Evaluator()
+        # 强制走 LLM 路径（即便 L1 不命中）
+        cfg = load_config()
+        decision = ev.evaluate(
+            snap, allow_llm=True, signal_type="test",
+            llm_endpoint=cfg.get("endpoint", ""),
+            llm_api_key=cfg.get("api_key", ""),
+            llm_model=cfg.get("model", ""),
+        )
+        if decision:
+            self.companion_preview.setText(
+                f"[{decision.source}] {decision.emotion}: {decision.text}"
+            )
+        else:
+            self.companion_preview.setText("（LLM 判断不说话）")
+
+    def _clear_companion_memory(self) -> None:
+        """清空 lightweight_memory 表。"""
+        from core.companion.storage import clear_all, init_schema
+        init_schema()
+        clear_all()
+        self.companion_preview.setText("已清空记忆")
+
     def _save(self) -> None:
         config = load_config()
         config.update({
@@ -160,5 +266,26 @@ class SettingsDialog(QDialog):
         hermes_cfg = {**HERMES_DEFAULTS, **(config.get("hermes") or {})}
         hermes_cfg["api_key"] = self.hermes_key.text().strip()
         config["hermes"] = hermes_cfg
+        # companion 配置
+        from config import COMPANION_DEFAULTS
+        companion_cfg = {**COMPANION_DEFAULTS, **(config.get("companion") or {})}
+        companion_cfg["enabled"] = self.companion_enabled.isChecked()
+        companion_cfg["sensors"] = {
+            "active_window": self.sensor_active_window.isChecked(),
+            "activity": self.sensor_activity.isChecked(),
+            "idle": self.sensor_idle.isChecked(),
+            "clipboard": self.sensor_clipboard.isChecked(),
+            "screen": self.sensor_screen.isChecked(),
+        }
+        companion_cfg["quiet_hours"] = {
+            "start": self.quiet_start.text().strip(),
+            "end": self.quiet_end.text().strip(),
+        }
+        companion_cfg["frequency"] = self.companion_freq.currentData()
+        try:
+            companion_cfg["daily_limit"] = int(self.companion_daily_limit.text().strip())
+        except ValueError:
+            companion_cfg["daily_limit"] = 30
+        config["companion"] = companion_cfg
         save_config(config)
         self.accept()

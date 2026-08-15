@@ -67,6 +67,23 @@ AGENT_ROUTER_DEFAULTS: dict[str, object] = {
     },
 }
 
+# === Companion 主动问候默认配置（2026-08-16 companion-proactive-greeting spec §8）===
+# amadeus-py 的 companion 子系统：伪春菜式主动陪伴，检测用户活动并吐槽/关心。
+# 5 个传感器逐项开关；剪贴板/屏幕默认关（隐私边界，产品化设计 §6）。
+COMPANION_DEFAULTS: dict[str, object] = {
+    "enabled": True,                            # 总开关
+    "sensors": {
+        "active_window": True,                  # 前台窗口检测（2s 轮询，低隐私）
+        "activity": True,                        # 工作节奏检测（30s 轮询，低隐私）
+        "idle": True,                            # 空闲状态检测（派生自 activity）
+        "clipboard": False,                     # 剪贴板检测（默认关，中隐私）
+        "screen": False,                        # 屏幕感知（默认关，高隐私，成本高）
+    },
+    "quiet_hours": {"start": "23:00", "end": "08:00"},  # 静音时段
+    "frequency": "mid",                         # low=20% / mid=50% / high=100% 触发概率
+    "daily_limit": 30,                          # 每日问候上限
+}
+
 
 # === 电话模式默认配置 ===
 # 电话模式 = 与红莉栖 AI 半双工语音通话 + 屏幕共享给 AI 看（豆包语音电话模式）。
