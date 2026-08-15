@@ -422,3 +422,35 @@ PowerShell 的字符串编码默认用系统编码（GBK），ConvertTo-Json 不
 **教训**：测试含非 ASCII 字符（日语/中文）的 HTTP API 时，必须用 Python 发请求，
 不用 PowerShell Invoke-WebRequest（编码不可靠）。或用 `-ContentType "application/json; charset=utf-8"`
 + `[System.Text.Encoding]::UTF8.GetBytes($json)` 显式指定 UTF-8 编码。
+
+## 2026-08-15 superpowers 计划收尾（P0 Task4-7 + Agent Task6 + Phone Task9）
+
+### 1. 【事故】测试 mock 作用域没罩住被测调用，真实 data/config.json 被覆盖丢 key
+test_settings_about 的 _save 测试：_make_dialog 里 patch 的 save_config 随 with 块退出，
+dlg._save() 调到了真实 save_config，把只含表单默认值的部分 config 写进 data/config.json，
+用户真实 api_key/asr_api_key 等全部丢失（该文件在 gitignore，无法从 git 恢复）。
+**教训**：测落盘方法时，load/save 的 mock 作用域必须完整罩住被测调用；
+真实 config.json 这类敏感不可恢复文件，改配置类代码前先手工备份一份。
+
+### 2. PATH 里的 python 未必是项目环境，本项目命令一律用绝对路径
+Hermes 安装后 `C:\Users\23733\AppData\Local\hermes\...\venv\Scripts\python.exe` 抢占了 PATH，
+`python -m pytest` 报 No module named pytest。
+**教训**：本项目（anaconda base 是运行环境）所有 python 命令显式用 `D:\anaconda\python.exe`。
+
+### 3. 延迟导入的依赖要 patch 源模块，且 conftest 注入 .libs 路径
+DDGS 改为 desktop_tools 函数内延迟导入后，`patch("core.desktop_tools.DDGS")` 报
+AttributeError（模块级无该属性）。正确做法 `patch("ddgs.DDGS")`（patch 导入源）。
+mss 装在 .libs（pip --target），测试进程看不到 → 新建 conftest.py 把 .libs 插入 sys.path。
+**教训**：mock 跟着 import 位置走；--target 安装的依赖需要 conftest 统一注入路径。
+
+### 4. 执行旧计划前先核实文件现状，按现实适配而非照抄计划
+P0 Task4 计划假设设置页有 Hermes tab（实际无）；Agent Task6 计划假设 openclaw_runner.py
+不存在（实际 _operate_gui 已用 Gateway HTTP API 实现，只缺测试）；Amadeus.spec 计划里
+说修改（实际文件已丢失，需新建）。
+**教训**：逐条执行计划文档前，先 grep/glob 核实每个目标文件的真实状态，
+"改什么"以磁盘为准，计划只是意图。
+
+### 5. PowerShell 给原生命令传含双引号的参数会被拆碎
+`git commit -m $msg`（$msg 是 here-string，内含 "Chat 模型"）→ 双引号在 Win32 参数
+解析时被剥掉，git 收到断裂的多段参数报 pathspec 错误。
+**教训**：commit message 里避免英文双引号（中文引号安全），或改用 `git commit -F 文件`。
