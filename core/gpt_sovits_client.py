@@ -1,180 +1,146 @@
-# core/gpt_sovits_client.py
-"""GPT-SoVITS V3 少样本推理 TTS 客户端。
+"""HTTP client for Kurisu voice synthesis through GPT-SoVITS api_v2.
 
-使用 voice_sample.mp3（15s 红莉栖干净人声）做参考音频，调用 GPT-SoVITS V3
-Python API 进行少样本语音克隆推理。
+Run the local GPT-SoVITS server first:
+    powershell -ExecutionPolicy Bypass -File scripts/start_gpt_sovits_api.ps1
 
-使用方式：
-  from core.gpt_sovits_client import KurisuTTS
-  tts = KurisuTTS()  # 自动加载模型和参考音频
-  audio_bytes = tts.synthesize("こんにちは")  # 返回 PCM 16-bit 单声道 wav bytes
-
-前置条件：
-  GPT-SoVITS V3 已安装到项目根目录 GPT-SoVITS/ 下。
-  运行 python GPT-SoVITS/install.py 安装依赖和下载预训练模型。
-
-数学本质：
-  GPT-SoVITS = GPT（文本→语义token）+ SoVITS（语义token + 参考音频→波形）。
-  少样本推理：pretrained GPT 将输入文本映射为语义 token 序列，
-  SoVITS 将语义 token + 参考音频 mel 谱拼接后通过 VITS decoder 生成波形。
-  参考音频提供音色（timbre）和韵律（prosody）约束，不提供内容。
-
-形象理解：
-  像给 AI 听一段红莉栖说话（voice_sample.mp3），然后让 AI 用红莉栖的声音
-  念出你给的台词。模型学会了她的音色和说话习惯，但台词内容由你决定。
+红莉栖声线配置要点：
+  - REF_AUDIO: voice_sample_clip_v2.wav（从 voice_sample.mp3 截取 7-13s，6 秒片段，
+    F0 260-280Hz 稳定，红莉栖声线特征最明显；原 mp3 15.3s 超出 GPT-SoVITS 3-10s 限制）
+  - prompt_text: ASR(SenseVoiceSmall) 识别 clip_v2.wav 得到的对应日语文本，
+    用于 GPT-SoVITS 声线克隆对齐
+  - prompt_lang/text_lang=ja：红莉栖讲日语（需 py311 venv + pyopenjtalk）
 """
 from __future__ import annotations
 
-import io
-import wave
+import json
 from pathlib import Path
 from typing import Optional
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 
-import numpy as np
+from config import PHONE_DEFAULTS
 
-# === 配置 ===
+
 ROOT = Path(__file__).resolve().parent.parent
-SOVITS_DIR = ROOT / "GPT-SoVITS"
-REF_AUDIO = ROOT / "resources" / "voice_sample.mp3"
+# 截取后的 6 秒片段（7-13s），红莉栖声线特征最明显
+REF_AUDIO = ROOT / "resources" / "voice_sample_clip_v2.wav"
+DEFAULT_BASE_URL = str(PHONE_DEFAULTS.get("gpt_sovits_url", "http://127.0.0.1:9880"))
 
-# GPT-SoVITS V3 默认参数（少样本推理最佳实践）
-DEFAULT_PARAMS = {
+
+DEFAULT_PARAMS: dict[str, object] = {
     "ref_audio_path": str(REF_AUDIO),
-    "prompt_text": "",              # 参考音频对应文本（留空则用默认 ASR 推理）
-    "prompt_lang": "ja",            # 日语
-    "text_lang": "ja",              # 日语
-    "top_k": 15,                    # GPT 采样 top-k
-    "top_p": 0.6,                   # GPT 采样 top-p
-    "temperature": 0.6,             # GPT 采样温度
-    "speed": 1.0,                   # 语速
+    "aux_ref_audio_paths": [],
+    # prompt_text 由 ASR(SenseVoiceSmall) 识别 voice_sample_clip_v2.wav 得到，
+    # 对应片段 7-13s 的日语文本，用于 GPT-SoVITS 声线克隆对齐
+    "prompt_text": "技術的及びデータセットの制限により現在成熟していません",
+    # prompt_lang=ja：红莉栖讲日语，需 py311 venv（pyopenjtalk 在 py3.13 编译失败）
+    # py311 venv 路径：gpt_sovits_venv_py311\Scripts\python.exe
+    "prompt_lang": "ja",
+    "text_lang": "ja",
+    "top_k": 15,
+    "top_p": 0.8,
+    "temperature": 0.8,
+    "text_split_method": "cut5",
+    "batch_size": 1,
+    "batch_threshold": 0.75,
+    "split_bucket": True,
+    "speed_factor": 1.0,
+    "fragment_interval": 0.3,
+    "seed": -1,
+    "media_type": "wav",
+    "parallel_infer": True,
+    "repetition_penalty": 1.35,
+    "sample_steps": 32,
+    "super_sampling": False,
+    "streaming_mode": False,
 }
 
 
+def infer_text_lang(text: str) -> str:
+    """Infer a GPT-SoVITS language tag from text content."""
+    sample = (text or "").strip()
+    if not sample:
+        return str(DEFAULT_PARAMS["text_lang"])
+    # 含平假名/片假名 → ja
+    if any(("\u3040" <= ch <= "\u30ff") or ("\u31f0" <= ch <= "\u31ff") for ch in sample):
+        return "ja"
+    # 含汉字（无假名）→ zh
+    if any("\u4e00" <= ch <= "\u9fff" for ch in sample):
+        return "zh"
+    return str(DEFAULT_PARAMS["text_lang"])
+
+
 class KurisuTTS:
-    """红莉栖 TTS：GPT-SoVITS V3 少样本推理。
+    """Small GPT-SoVITS HTTP wrapper returning wav bytes."""
 
-    单例模式：模型只加载一次，避免重复加载消耗显存。
-    """
-
-    _instance: Optional[KurisuTTS] = None
-    _ready: bool = False
-
-    def __new__(cls) -> KurisuTTS:
-        if cls._instance is None:
-            cls._instance = super().__new__(cls)
-            cls._instance._initialized = False
-        return cls._instance
-
-    def __init__(self) -> None:
-        if self._initialized:
-            return
-        self._initialized = True
-        self._tts = None
-        self._available = self._check_ready()
-
-    def _check_ready(self) -> bool:
-        """检查 GPT-SoVITS 是否可用。"""
-        if not SOVITS_DIR.exists():
-            return False
-        try:
-            import torch
-            return True
-        except ImportError:
-            return False
+    def __init__(
+        self,
+        base_url: str | None = None,
+        ref_audio_path: str | Path | None = None,
+        timeout: float = 90.0,
+    ) -> None:
+        self.base_url = (base_url or DEFAULT_BASE_URL).rstrip("/")
+        self.ref_audio_path = Path(ref_audio_path or REF_AUDIO)
+        self.timeout = timeout
 
     @property
     def available(self) -> bool:
-        return self._available
-
-    def _lazy_load(self) -> bool:
-        """延迟加载 GPT-SoVITS 模型（首次调用 synthesize 时）。"""
-        if self._ready:
-            return True
-        if not self._available:
+        if not self.ref_audio_path.exists():
             return False
         try:
-            # GPT-SoVITS V3 推理 API
-            # 路径：GPT-SoVITS/GPT_SoVITS/TTS_infer_pack/TTS.py
-            import sys
-            sovits_path = str(SOVITS_DIR.resolve())
-            if sovits_path not in sys.path:
-                sys.path.insert(0, sovits_path)
-
-            from GPT_SoVITS.TTS_infer_pack.TTS import TTS, TTS_Config
-
-            config = TTS_Config(str(SOVITS_DIR / "GPT_SoVITS" / "configs" / "tts_infer.yaml"))
-            self._tts = TTS(config)
-            self._ready = True
-            return True
-        except Exception as e:
-            print(f"[KurisuTTS] 模型加载失败: {e}")
+            with urlopen(f"{self.base_url}/docs", timeout=1.0) as response:
+                return response.status < 500
+        except (HTTPError, URLError, TimeoutError, OSError):
             return False
 
-    def synthesize(self, text: str, ref_audio: str | None = None) -> Optional[bytes]:
-        """合成语音。
-
-        Args:
-            text: 要合成的文本（日语）。
-            ref_audio: 参考音频路径，默认用 voice_sample.mp3。
-
-        Returns:
-            PCM 16-bit 单声道 wav bytes，失败返回 None。
-        """
-        if not text.strip():
+    def synthesize(
+        self,
+        text: str,
+        ref_audio: str | Path | None = None,
+        *,
+        text_lang: str | None = None,
+        prompt_text: str | None = None,
+        prompt_lang: str | None = None,
+        allow_fallback: bool = False,
+    ) -> Optional[bytes]:
+        """Synthesize text and return wav bytes, or None on failure."""
+        text = (text or "").strip()
+        if not text:
             return None
 
-        if not self._lazy_load():
+        ref_path = Path(ref_audio or self.ref_audio_path)
+        if not ref_path.exists():
+            print(f"[KurisuTTS] reference audio not found: {ref_path}")
             return None
+
+        payload = dict(DEFAULT_PARAMS)
+        payload.update(
+            {
+                "text": text,
+                "ref_audio_path": str(ref_path),
+                "text_lang": (text_lang or infer_text_lang(text) or str(payload["text_lang"])).lower(),
+                "prompt_lang": (prompt_lang or str(payload["prompt_lang"])).lower(),
+            }
+        )
+        if prompt_text is not None:
+            payload["prompt_text"] = prompt_text
 
         try:
-            ref_path = ref_audio or DEFAULT_PARAMS["ref_audio_path"]
-            if not Path(ref_path).exists():
-                print(f"[KurisuTTS] 参考音频不存在: {ref_path}")
-                return None
-
-            # GPT-SoVITS V3 API: tts.run(text, ref_audio_path, prompt_text, ...)
-            # 返回 (sample_rate, audio_numpy)
-            sr, audio = self._tts.run(
-                text=text,
-                ref_audio_path=ref_path,
-                prompt_text=DEFAULT_PARAMS["prompt_text"],
-                prompt_lang=DEFAULT_PARAMS["prompt_lang"],
-                text_lang=DEFAULT_PARAMS["text_lang"],
-                top_k=DEFAULT_PARAMS["top_k"],
-                top_p=DEFAULT_PARAMS["top_p"],
-                temperature=DEFAULT_PARAMS["temperature"],
-                speed=DEFAULT_PARAMS["speed"],
+            request = Request(
+                f"{self.base_url}/tts",
+                data=json.dumps(payload).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+                method="POST",
             )
-
-            # 转为 PCM 16-bit wav bytes
-            audio_16 = np.clip(audio, -1, 1)
-            pcm = (audio_16 * 32767).astype(np.int16).tobytes()
-
-            buf = io.BytesIO()
-            with wave.open(buf, "wb") as w:
-                w.setnchannels(1)
-                w.setsampwidth(2)
-                w.setframerate(sr)
-                w.writeframes(pcm)
-            return buf.getvalue()
-
-        except Exception as e:
-            print(f"[KurisuTTS] 合成失败: {e}")
+            with urlopen(request, timeout=self.timeout) as response:
+                content = response.read()
+            if not content:
+                return None
+            return content
+        except HTTPError as exc:
+            detail = exc.read(300).decode("utf-8", errors="ignore")
+            print(f"[KurisuTTS] GPT-SoVITS rejected request: {detail}")
             return None
-
-
-def _mp3_to_wav(mp3_path: str) -> Optional[str]:
-    """将 mp3 参考音频转为 wav（GPT-SoVITS 推荐 wav 格式）。"""
-    try:
-        from pydub import AudioSegment
-        audio = AudioSegment.from_mp3(mp3_path)
-        wav_path = mp3_path.rsplit(".", 1)[0] + "_ref.wav"
-        audio = audio.set_frame_rate(16000).set_channels(1)
-        audio.export(wav_path, format="wav")
-        return wav_path
-    except ImportError:
-        print("[KurisuTTS] pydub 未安装，无法转换 mp3→wav。请手动转换或 pip install pydub")
-        return None
-    except Exception as e:
-        print(f"[KurisuTTS] mp3→wav 转换失败: {e}")
-        return None
+        except (URLError, TimeoutError, OSError) as exc:
+            print(f"[KurisuTTS] GPT-SoVITS unavailable: {exc}")
+            return None

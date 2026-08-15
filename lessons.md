@@ -373,3 +373,52 @@ CUDA DLL 污染了 site-packages，QtWebEngineProcess 子进程加载到错误 D
 **教训**：UI 主题接入属于"高风险改动"（触及主进程导入链），必须：
 1) 先 git stash 保存当前状态；2) 改动后单独测试 Live2D 渲染；3) 确认无误再 commit。
 不要把主题改动和架构改动混在一次 commit。
+
+## 2026-08-15 GPT-SoVITS 功能损坏修复
+
+### 1. tts_client.py 的 _speak_kurisu 必须传递 text_lang 等参数给 synthesize()
+**事故**：`_speak_kurisu` 方法接收了 `text_lang`、`prompt_text`、`prompt_lang` 参数，
+但调用 `tts.synthesize(text)` 时没有传递这些参数，导致 `text_lang="ja"` 被吞掉。
+`gpt_sovits_client.py` 的 `synthesize` 会用 `infer_text_lang(text)` 推断语言，对日文
+返回 `zh`（因日文中无假名时被误判），导致 GPT-SoVITS 返回 400 Bad Request。
+**修复**：`tts.synthesize(text, text_lang=text_lang, prompt_text=prompt_text, prompt_lang=prompt_lang)`
+**教训**：重构方法签名时，必须审计所有调用点，确保参数被正确传递，不能只改签名不改调用。
+依据：tts_client.py 第 97 行 `wav_bytes = tts.synthesize(text)` 未传参 → 400 Bad Request。
+
+### 2. torchaudio.load 在新版 torch 会触发 torchcodec 加载，必须改用 librosa.load
+**事故**：TTS.py 第 772 行 `torchaudio.load(ref_audio_path)` 在 torch 2.13.0+cu126 下
+触发 torchcodec 加载 FFmpeg DLL，找不到 `libtorchcodec_core4-9.dll` 导致 TTS 失败。
+8-15 1:42 的 lessons 已记录此教训，但本轮修复时发现 TTS.py 的修改被回滚了（可能用户
+手动 checkout 导致）。
+**修复**：改为 `librosa.load(ref_audio_path, sr=None, mono=False)`，注意返回值格式转换
+（librosa 返回 numpy array，需 `torch.from_numpy` + `unsqueeze(0)` 处理单声道）。
+**教训**：第三方库的 API 变更（torchaudio 从独立库变成依赖 torchcodec）会导致既有代码失效，
+修复后必须在 lessons.md 中记录，防止回滚后重新踩坑。
+
+### 3. GPT-SoVITS 配置文件 tts_infer.yaml 必须存在于 configs/ 目录
+**事故**：`GPT-SoVITS/GPT_SoVITS/configs/tts_infer.yaml` 文件缺失，api_v2.py 启动时
+`TTS_Config(config_path)` 报错。GPT-SoVITS 目录是 git 未跟踪的（.gitignore），
+配置文件不会被 git 管理，重装/清理后容易丢失。
+**修复**：从 TTS.py 中的注释模板创建 tts_infer.yaml，device=cuda, is_half=true, version=v3。
+**教训**：GPT-SoVITS 的配置文件（tts_infer.yaml）、预训练模型（pretrained_models/）、
+G2PWModel 都是 git 未跟踪的，但都是运行必需的。修复环境问题时先检查这些文件是否存在。
+
+### 4. gpt_sovits_venv (py3.13) 才是正确的运行环境，不是 gpt_sovits_venv_py311
+**事故**：8-15 lessons 记录"py311 venv 路径：gpt_sovits_venv_py311\Scripts\python.exe"，
+误以为必须用 py311 环境。实际验证发现 `gpt_sovits_venv` (py3.13) 同时有
+torch 2.13.0+cu126 + pyopenjtalk-plus + CUDA，是完整的运行环境；
+`gpt_sovits_venv_py311` (py3.11) 反而没有 torch，无法运行 GPT-SoVITS。
+**修复**：start.bat 用 `gpt_sovits_venv\Scripts\pythonw.exe`（之前也是这个，曾一度改成 py311 后撤回）。
+**教训**：lessons.md 中的记录可能过时或不准确，动手前必须用 `python -c "import torch; ..."`
+实际验证环境，不能盲信文档。两个 venv 的用途要分清：
+- gpt_sovits_venv (py3.13)：主运行环境，有 torch + pyopenjtalk-plus + CUDA
+- gpt_sovits_venv_py311 (py3.11)：备用环境，无 torch（可能是早期安装 pyopenjtalk 时创建的残留）
+
+### 5. PowerShell Invoke-WebRequest 发送日语文本会变成问号，必须用 Python 发送
+**事故**：用 PowerShell 的 `Invoke-WebRequest -Body $json` 发送含日文的 JSON，
+API 日志显示 `实际输入的参考文本: ??????????????????????????`，日文字符全变成问号。
+PowerShell 的字符串编码默认用系统编码（GBK），ConvertTo-Json 不保证 UTF-8 输出。
+**修复**：改用 Python `urllib.request` + `json.dumps(payload).encode('utf-8')` 发送请求。
+**教训**：测试含非 ASCII 字符（日语/中文）的 HTTP API 时，必须用 Python 发请求，
+不用 PowerShell Invoke-WebRequest（编码不可靠）。或用 `-ContentType "application/json; charset=utf-8"`
++ `[System.Text.Encoding]::UTF8.GetBytes($json)` 显式指定 UTF-8 编码。
