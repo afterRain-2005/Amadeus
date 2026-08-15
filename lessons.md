@@ -35,6 +35,14 @@ SpeechPlayer 重构时最易踩的坑：用户发新消息 → speak() → stop(
 Get-CimInstance Win32_Process 的 ProcessId/ParentProcessId/CommandLine 三元组
 是标准盘点手段；包装成一行的清理命令值得复用。
 
+### 6. （同轮追加）frozen 应用的可写数据绝不能落 _MEIPASS：用证据定位「配置不保存」
+「API key 每次都要重新写」的根因：onefile 下 storage 的 `__file__` 位于
+_MEIPASS 临时解压目录（每次启动随机名），config 写进去即丢。定位手段不是读代码
+而是搜证据——`Get-ChildItem $env:TEMP -Filter _MEI*` 找到两个含用户真实 key 的
+残留 config.json，铁证。修复：frozen 时 APP_DIR = exe 同级 data/。冒烟验证：
+启动 exe 后 dist\data\desktop_pet.ready 出现即证明路径生效。附带教训：密钥落
+temp 是安全隐患，修复后应清理残留并迁移 key。
+
 ## 2026-08-15 PyInstaller 打包验证（mp worker 递归爆炸修复）
 
 ### 1. PyInstaller 6.21 frozen 下 freeze_support 不可靠，用 mp.parent_process() 兜底
