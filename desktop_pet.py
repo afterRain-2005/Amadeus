@@ -255,8 +255,8 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
                 QGraphicsOpacityEffect,
             )
 
-    from config import HERMES_DEFAULTS, KURISU_OUTPUT_FORMAT, get_character_by_id, get_random_greeting
-    from core.agent_client import _load_soul_md, run_local_run
+    from config import get_character_by_id, get_random_greeting
+    from core.agent_client import _load_soul_md
     from core.emotion_parser import parse_reply
     from core.ipc_command import serialize_command
     from core.session_manager import active_session, add_message, load_state, save_state
@@ -292,13 +292,11 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             # 读取 SOUL.md（若存在），否则回退到 config.py 中的 KURISU_PERSONALITY
             soul_md = _load_soul_md("kurisu") or character.personality
             try:
-                reply = run_local_run(
-                    endpoint=config.get("endpoint", ""),
-                    api_key=config.get("api_key", ""),
-                    model=config.get("model", ""),
-                    soul_md=soul_md,
-                    instructions=KURISU_OUTPUT_FORMAT,
+                from core.backend_router import route_and_send
+                reply, _backend = route_and_send(
+                    config=config,
                     input_text=self.history[-1]["content"],
+                    soul_md=soul_md,
                     conversation_history=self.history[:-1],
                     memories=self.memories,
                     on_status=self.signals.status.emit,
