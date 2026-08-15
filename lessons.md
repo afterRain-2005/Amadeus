@@ -606,3 +606,48 @@ stop() 要往两个队列都 put(None) 唤醒，否则任一线程卡死会让 s
 按 8-14 教训 5"pythonw 静默吞错误"改用 `python.exe main.py 2>&1` 后台运行，stderr 重定向到
 stdout，能看到启动日志。**教训**：pythonw.exe 启动失败时改用 python.exe 前台/后台跑捕获 stderr；
 启动成功后再换回 pythonw.exe 释放终端。诊断优先于美观。
+
+## 2026-08-16 companion 主动问候实施（Task 1-8）
+
+### 1. Plan 接入点架构假设需核实：行号与运行时对象可用性都要验证
+plan 假设 desktop_pet.py 接入点在 276 行 `class AgentSignals` 之前，但实际接入点应在
+1248 行 `pet = PetWindow()` 之后、run_overlay 函数内部（1257 行导入 companion 模块）。
+原因：plan 假设 `_agent_delta`/`_show_status` 是 run_overlay 闭包内函数，实际是 PetWindow
+的方法，接入必须在 pet 实例创建后才能引用 pet 的方法。**教训**：集成任务的 subagent 必须
+先读全量代码确认接入点的运行时对象可用性（对象已创建 + 在正确作用域），不依赖计划文档的
+行号假设；plan 的行号是计划阶段静态读码的产物，实施期代码可能已变。
+参考：desktop_pet.py:248 (run_overlay), :276 (AgentSignals), :1248 (pet=PetWindow()),
+:1257 (companion 导入)。
+
+### 2. desktop_pet.py 顶部禁止 import PySide6 约束再次复用
+Task 6 严格遵守 8-15 严重事故教训（"desktop_pet.py 主进程禁止顶部导入 PySide6"），
+companion 模块导入（core.companion.controller / sensors / storage）全部放在 run_overlay
+函数内部（1257 行），QTimer 直接复用 run_overlay 顶部 249 行已 import 的
+`PySide6.QtCore.QTimer`，未在文件顶部引入任何新的 import。**教训**：desktop_pet.py 的
+主进程（run_overlay 函数之前）绝对不能 import PySide6/Qt，否则子进程的 QtWebEngine 渲染
+必崩（8-15 事故已证实）。该约束是项目级红线，所有接入 desktop_pet.py 的功能都必须遵守。
+依据：8-15 Live2D 渲染崩溃事故教训 1；desktop_pet.py:249 (run_overlay 内 QTimer 导入),
+:1257-1262 (companion 延迟导入)。
+
+### 3. Plan 测试与实现的不自洽需最小修复：TDD 的 RED→GREEN 是发现 plan 缺陷的反馈机制
+Task 1 发现 fake_run_local_run 返回元组（plan 写 `return "reply", "chat"`）与 run_local_run
+真实签名（返回 str）不符；Task 2 发现测试 import 列表有 CompanionStorage 但 plan 实现没
+定义该名字；Task 3 发现 ClipboardSensor 测试未传 enabled=True 导致默认禁用。**教训**：
+Plan 代码 ≠ 可运行代码，TDD 的 RED→GREEN 阶段是发现 plan 缺陷的反馈机制，发现不自洽时
+最小修复并报告偏离原因，不盲目照抄也不盲目重写。这是 8-13 电话模式教训 1"Plan 代码 ≠ 可运行
+代码"的再次验证。
+
+### 4. PowerShell 5.1 写 UTF-8 文件默认带 BOM，git commit -F 会把 BOM 塞进 commit message
+用 `Set-Content -Encoding UTF8` 写 commit message 文件，`git commit -F` 会把 BOM 字符
+塞进 commit message 第一行（变成 `﻿feat`）。正确做法用 .NET API：
+`[System.IO.File]::WriteAllText($path, $msg, [System.Text.UTF8Encoding]::new($false))`
+显式无 BOM。**教训**：PowerShell 5.1 的 UTF8 编码默认带 BOM，git 操作（commit -F / tag -F /
+rebase -F 等读文件的命令）必须用 .NET API 显式无 BOM；8-13 教训 4"PowerShell 不支持 bash
+heredoc 用 -F 文件"在本轮升级为"-F 文件还要保证无 BOM"。
+
+### 5. subagent 全量回归用 pytest tests/ 而非裸 pytest
+项目无 pytest.ini，裸 `pytest` 会递归扫描 .venv / gpt_sovits_venv / .libs/numpy 等目录，
+导致 156 个 collection error（第三方库里的 test_*.py 被误收集）。**教训**：本项目全量回归
+必须显式指定 tests/ 目录（`pytest tests/`），或在项目根放 pytest.ini 配置
+`testpaths = tests`。subagent 执行 plan 里的 `python -m pytest tests/ -v` 时不能图省事
+省略 tests/ 路径参数。本轮全量回归 171 passed（既有 129 + companion 新增 42）。
