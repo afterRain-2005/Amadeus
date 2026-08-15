@@ -7,7 +7,7 @@ def test_web_search_returns_formatted_results():
     fake_results = [
         {"title": "上海天气", "body": "今天晴 28度", "href": "https://example.com/1"},
     ]
-    with patch("core.desktop_tools.DDGS") as mock_ddgs:
+    with patch("ddgs.DDGS") as mock_ddgs:  # DDGS 在 desktop_tools 内延迟导入，mock 源模块
         instance = MagicMock()
         instance.text.return_value = fake_results
         mock_ddgs.return_value.__enter__.return_value = instance

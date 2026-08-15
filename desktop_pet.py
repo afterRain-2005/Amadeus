@@ -21,11 +21,11 @@ if not getattr(sys, 'frozen', False):
     _libs = ROOT / ".libs"
     if _libs.is_dir():
         sys.path.insert(0, str(_libs))
-# 通信文件必须用 storage.APP_DIR（exe 同目录/data/），与 pet_controller.py 保持一致；
-# 不能用 ROOT/data，因为冻结模式下 ROOT=sys._MEIPASS 是临时解压目录，会与发送端失联。
+# 通信走 mp.Pipe(duplex=True) 双向管道（frame 下行 / command 上行），
+# 不再用 data/pet_command.json 文件轮询。
+from core.ipc_command import apply_command_js
 from core.storage import APP_DIR as _APP_DIR
 READY_FILE = _APP_DIR / "desktop_pet.ready"
-COMMAND_FILE = _APP_DIR / "pet_command.json"
 
 
 class QuietHandler(SimpleHTTPRequestHandler):
@@ -66,19 +66,17 @@ def renderer_process(connection: Connection) -> None:
                     return
 
                 script = "window.__amadeus.app.renderer.extract.canvas(window.__amadeus.app.stage).toDataURL('image/png')"
-                last_command_time = 0.0
                 while True:
-                    try:
-                        command = __import__("json").loads(COMMAND_FILE.read_text(encoding="utf-8"))
-                        if command.get("timestamp", 0) > last_command_time:
-                            last_command_time = command["timestamp"]
-                            if "emotion" in command:
-                                window.evaluate_js(f"window.__amadeus.setEmotion({command['emotion']!r})")
-                            if "speaking" in command:
-                                value = "true" if command["speaking"] else "false"
-                                window.evaluate_js(f"window.__amadeus.setSpeaking({value})")
-                    except (OSError, ValueError):
-                        pass
+                    # 接收 overlay→renderer 命令（非阻塞，drain 队列）
+                    while connection.poll():
+                        try:
+                            kind, payload = connection.recv()
+                        except (EOFError, OSError):
+                            break
+                        if kind == "command":
+                            js = apply_command_js(payload)
+                            if js:
+                                window.evaluate_js(js)
                     data_url = window.evaluate_js(script)
                     frame = base64.b64decode(data_url.split(",", 1)[1])
                     connection.send(("frame", frame))
@@ -202,13 +200,20 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
     from config import HERMES_DEFAULTS, KURISU_OUTPUT_FORMAT, get_character_by_id, get_random_greeting
     from core.agent_client import _load_soul_md, run_local_run
     from core.emotion_parser import parse_reply
-    from core.pet_controller import send_pet_command
+    from core.ipc_command import serialize_command
     from core.session_manager import active_session, add_message, load_state, save_state
     from core.storage import load_config
     from core.tts_client import SpeechPlayer
     from ui.settings_dialog import SettingsDialog
 
     character = get_character_by_id("kurisu")
+
+    def send_command(**payload) -> None:
+        """overlay→renderer 发送命令（emotion/speaking），走 duplex 管道。"""
+        try:
+            connection.send(serialize_command(**payload))
+        except (BrokenPipeError, OSError):
+            pass
 
     class AgentSignals(QObject):
         status = Signal(str)
@@ -448,7 +453,7 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             self._inactivity_timer.timeout.connect(self._hide_idle_bubble)
             self._state = load_state(character.id, get_random_greeting(character.id))
             self.speech = SpeechPlayer(self)
-            self.speech.speaking_changed.connect(lambda value: send_pet_command(speaking=value))
+            self.speech.speaking_changed.connect(lambda value: send_command(speaking=value))
             self.setWindowTitle("牧濑红莉栖 [PY]")
             self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool)
             self.setAttribute(Qt.WA_TranslucentBackground, True)
@@ -670,13 +675,8 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
                 self._thinking_anim.start()
 
         def _send_emotion(self, emotion: str) -> None:
-            """经 pet_command.json 发送 emotion 到 renderer（即时，不等 LLM）。"""
-            import json, time
-            try:
-                cmd = {"timestamp": time.time(), "emotion": emotion}
-                COMMAND_FILE.write_text(json.dumps(cmd), encoding="utf-8")
-            except OSError:
-                pass
+            """经 duplex 管道发送 emotion 到 renderer（即时，不等 LLM）。"""
+            send_command(emotion=emotion)
 
         # ===== 通话态切换 =====
         def _toggle_call(self) -> None:
@@ -773,9 +773,9 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
                 self._send_emotion(emotion)
             # speaking 态驱动 Live2D 口型
             if phase == "speaking":
-                send_pet_command(speaking=True)
+                send_command(speaking=True)
             elif phase in ("listening", "ended"):
-                send_pet_command(speaking=False)
+                send_command(speaking=False)
 
         def _on_call_you_said(self, text: str) -> None:
             """通话中用户说的话（暂不显示，避免干扰红莉栖字幕）。"""
@@ -1017,7 +1017,7 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             self._streamed_reply = ""
             self.send_button.setDisabled(False)
             parsed = parse_reply(reply)
-            send_pet_command(emotion=parsed.emotion)
+            send_command(emotion=parsed.emotion)
             # TTS：气泡显示中文（_latest_line 已提取 chinese），语音读日语（ja 路径）
             # text_lang="ja" 必传，否则 infer_text_lang 对日文返回 zh 导致 GPT-SoVITS 400
             config = load_config()
@@ -1040,7 +1040,7 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             self._busy = False
             self._streamed_reply = ""
             self.send_button.setDisabled(False)
-            send_pet_command(emotion="angry")
+            send_command(emotion="angry")
 
         def read_frames(self) -> None:
             latest = None
@@ -1167,7 +1167,7 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
 def main() -> int:
     mp.freeze_support()
     READY_FILE.unlink(missing_ok=True)
-    parent_connection, child_connection = mp.Pipe(duplex=False)
+    parent_connection, child_connection = mp.Pipe(duplex=True)
     renderer = mp.Process(target=renderer_process, args=(child_connection,), daemon=True)
     renderer.start()
     try:
