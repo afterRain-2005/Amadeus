@@ -9,6 +9,7 @@ from multiprocessing.connection import Connection
 from pathlib import Path
 import socket
 import os
+import subprocess
 import sys
 import threading
 import time
@@ -40,6 +41,63 @@ def free_port() -> int:
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
         return sock.getsockname()[1]
+
+
+def _locate_gpt_sovits(root: Path) -> tuple[Path, Path] | None:
+    """定位 (venv_python, GPT-SoVITS 目录)。
+
+    dev：ROOT/gpt_sovits_venv + ROOT/GPT-SoVITS。
+    frozen：ROOT 是 _MEIPASS 临时目录不可用，改探 exe 同级及其父级
+    （exe 常放 dist\，父级即项目根）。
+    """
+    exe_dir = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else root
+    for base in (root, root.parent, exe_dir, exe_dir.parent):
+        venv_python = base / "gpt_sovits_venv" / "Scripts" / "python.exe"
+        api_dir = base / "GPT-SoVITS"
+        if venv_python.exists() and (api_dir / "api_v2.py").exists():
+            return venv_python, api_dir
+    return None
+
+
+def maybe_start_gpt_sovits(spawn=subprocess.Popen) -> bool:
+    """GPT-SoVITS API 不在线时后台拉起（幂等：在线则跳过）。
+
+    返回是否发起了启动进程。拉起后模型加载需数十秒，由 SpeechPlayer
+    的 available TTL 重查（60s）自愈衔接，不阻塞 UI。
+    """
+    try:
+        from core.gpt_sovits_client import KurisuTTS
+        if KurisuTTS().available:
+            return False
+    except Exception:
+        pass
+    located = _locate_gpt_sovits(ROOT)
+    if not located:
+        return False
+    venv_python, api_dir = located
+    creation = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+    # stdout/stderr 必须重定向：CREATE_NO_WINDOW 且无重定向时 std 句柄为 NULL，
+    # sys.stdout/stderr 为 None，GPT-SoVITS 加载途中会静默死亡（实测）。
+    # 重定向到日志同时保留 GPU/模型加载诊断信息。
+    log_file = None
+    try:
+        log_file = open(api_dir / "api_autostart.log", "w", encoding="utf-8", errors="replace")
+        stdout = log_file
+    except OSError:
+        stdout = subprocess.DEVNULL
+    try:
+        spawn(
+            [str(venv_python), "api_v2.py"],
+            cwd=str(api_dir),
+            stdout=stdout,
+            stderr=subprocess.STDOUT,
+            creationflags=creation,
+        )
+        return True
+    except OSError:
+        if log_file is not None:
+            log_file.close()
+        return False
 
 
 def renderer_process(connection: Connection) -> None:
@@ -454,6 +512,9 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             self._state = load_state(character.id, get_random_greeting(character.id))
             self.speech = SpeechPlayer(self)
             self.speech.speaking_changed.connect(lambda value: send_command(speaking=value))
+            # 语音服务离线：气泡序列末尾追加提示（信号在 TTS 工作线程发射，
+            # queued connection 回到主线程，追加列表安全）
+            self.speech.tts_offline.connect(self._notify_tts_offline)
             self.setWindowTitle("牧濑红莉栖 [PY]")
             self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool)
             self.setAttribute(Qt.WA_TranslucentBackground, True)
@@ -846,6 +907,13 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             self._bubble_segments = []
             self._bubble_index = 0
 
+        def _notify_tts_offline(self) -> None:
+            """语音服务离线提示：在当前气泡序列末尾追加一条，不打断展示。"""
+            notice = "（语音服务离线）"
+            segments = getattr(self, "_bubble_segments", [])
+            if notice not in segments:
+                self._bubble_segments = segments + [notice]
+
         def _animate_to(self, target: QPoint) -> None:
             """平滑滑动到目标位置（300ms OutCubic 缓动）。"""
             if self._snap_anim is not None:
@@ -1166,6 +1234,12 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
 
 def main() -> int:
     mp.freeze_support()
+    # 语音服务随主进程自启：不在线则后台拉起 GPT-SoVITS API
+    # （失败不阻塞桌宠，SpeechPlayer 的 TTL 重查 + 离线气泡提示兜底）
+    try:
+        maybe_start_gpt_sovits()
+    except Exception:
+        pass
     READY_FILE.unlink(missing_ok=True)
     parent_connection, child_connection = mp.Pipe(duplex=True)
     renderer = mp.Process(target=renderer_process, args=(child_connection,), daemon=True)

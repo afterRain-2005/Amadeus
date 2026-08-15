@@ -2,6 +2,39 @@
 
 > 每轮对话结束时记录 5 条最重要的教训。开始项目时首先查看本文件。
 
+## 2026-08-15 语音无声排查（TTS 自愈三件套）
+
+### 1. 「无语音」先查服务再查代码：外部依赖生命周期是第一嫌疑人
+打字对话无声的直接原因不是代码 bug，而是 GPT-SoVITS API 进程没在运行
+（重启后未拉起）。先 `Invoke-WebRequest http://127.0.0.1:9880/docs` 探活，
+再读调用链。代码层的两个放大器：available 永久缓存 False 不自愈 +
+allow_fallback=False 静默无声。修复三件套：60s TTL 重查自愈 + tts_offline
+信号气泡提示 + maybe_start_gpt_sovits 随桌宠主进程自启（幂等，在线则跳过）。
+参考：core/tts_client.py _available_expired, desktop_pet.py maybe_start_gpt_sovits。
+
+### 2. 沙箱终端会杀进程树：后台子进程的「静默死亡」可能是测试环境假象
+沙箱 RunCommand 的命令结束时 job object 会 kill 整个进程树——所有
+Start-Process/CREATE_NO_WINDOW 拉起的子进程在命令退出后即被杀，表现为
+「拉起后静默退出、日志全空」，极易误判为代码 bug。验证方法：让发起 spawn
+的命令本身保持存活并轮询（long_running_process），子进程就能正常完成加载。
+真实应用（桌宠长存进程）不受沙箱影响。
+
+### 3. CREATE_NO_WINDOW 必须配 std 重定向，否则 sys.stdout=None 可致子进程暴毙
+无控制台且无重定向时 std 句柄为 NULL → Python 把 sys.stdout/stderr 置 None
+→ 依赖标准流的库（GPT-SoVITS 加载链）可能静默死亡。标准做法：
+subprocess.Popen(..., stdout=open(log,'w'), stderr=STDOUT, creationflags=
+CREATE_NO_WINDOW)。重定向到日志还附带 GPU/模型加载诊断信息，一举两得。
+
+### 4. 打断与真失败要分流：stop_event 是语音 worker 的关键判据
+SpeechPlayer 重构时最易踩的坑：用户发新消息 → speak() → stop() 置位 →
+上一条 worker 的合成返回 False——这不是「离线」，不能发 tts_offline 信号、
+不能翻转缓存。所有失败分支必须先查 _stop_event.is_set()。
+
+### 5. 僵尸进程常态化清理：验收异常前先盘点进程指纹
+本轮发现 10 个凌晨遗留的 pythonw main.py 僵尸（占资源、干扰判断）。
+Get-CimInstance Win32_Process 的 ProcessId/ParentProcessId/CommandLine 三元组
+是标准盘点手段；包装成一行的清理命令值得复用。
+
 ## 2026-08-15 PyInstaller 打包验证（mp worker 递归爆炸修复）
 
 ### 1. PyInstaller 6.21 frozen 下 freeze_support 不可靠，用 mp.parent_process() 兜底

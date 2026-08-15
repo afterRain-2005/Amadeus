@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import io
 import threading
+import time
 import wave
 
 import numpy as np
@@ -12,12 +13,19 @@ from PySide6.QtCore import QObject, Signal
 class SpeechPlayer(QObject):
     speaking_changed = Signal(bool)
     playback_started = Signal(float)
+    # GPT-SoVITS 不可用且无 SAPI 兜底时发射（UI 层据此提示「语音服务离线」）
+    tts_offline = Signal()
+
+    # 可用性缓存 TTL：不可用时每隔 60s 重查一次，API 中途启动可自愈，
+    # 不必重启桌宠（曾因永久缓存 False 导致整轮会话无声）。
+    _AVAILABLE_TTL = 60.0
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self.rate = 0
         self._stop_event = threading.Event()
         self._kurisu_available: bool | None = None
+        self._available_checked_at: float = 0.0
 
     def set_rate(self, rate: int) -> None:
         self.rate = rate
@@ -54,6 +62,14 @@ class SpeechPlayer(QObject):
         except Exception:
             return False
 
+    def _available_expired(self) -> bool:
+        """可用性缓存是否过期需重查。可用时不重查（合成失败会翻转缓存走 TTL）。"""
+        if self._kurisu_available is None:
+            return True
+        if self._kurisu_available:
+            return False
+        return (time.monotonic() - self._available_checked_at) > self._AVAILABLE_TTL
+
     def _speak_worker(
         self,
         text: str,
@@ -64,19 +80,27 @@ class SpeechPlayer(QObject):
     ) -> None:
         self.speaking_changed.emit(True)
         try:
-            if self._kurisu_available is None:
+            if self._available_expired():
                 self._kurisu_available = self._check_kurisu()
-            if self._kurisu_available and self._speak_kurisu(
-                text,
-                text_lang=text_lang,
-                prompt_text=prompt_text,
-                prompt_lang=prompt_lang,
-            ):
-                return
-            if allow_fallback:
-                self._speak_sapi_blocking(text)
-            else:
-                print("[SpeechPlayer] GPT-SoVITS unavailable, skipping SAPI fallback")
+                self._available_checked_at = time.monotonic()
+            spoke = False
+            if self._kurisu_available:
+                spoke = self._speak_kurisu(
+                    text,
+                    text_lang=text_lang,
+                    prompt_text=prompt_text,
+                    prompt_lang=prompt_lang,
+                )
+                if not spoke and not self._stop_event.is_set():
+                    # 真实失败（非用户打断）：翻转缓存，等待 TTL 重查自愈
+                    self._kurisu_available = False
+                    self._available_checked_at = time.monotonic()
+            if not spoke and not self._stop_event.is_set():
+                if allow_fallback:
+                    self._speak_sapi_blocking(text)
+                else:
+                    self.tts_offline.emit()
+                    print("[SpeechPlayer] GPT-SoVITS offline, no fallback allowed")
         finally:
             self.speaking_changed.emit(False)
 
