@@ -9,9 +9,13 @@
 - 保存 Popen 句柄，退出时 terminate（lessons 2026-08-17 教训 1：句柄必须保存）
 - test() 用 `ssh <host> echo ok` 探测连通性，与隧道分离
 - is_alive() 用 poll() 检查进程是否还在
+- 自动定位 ssh.exe 全路径：Windows 下 System32/OpenSSH 可能不在 PATH 里
+  （桌宠进程启动时继承的 PATH 可能不含 OpenSSH 目录，即使系统已装）
 """
 from __future__ import annotations
 
+import os
+import shutil
 import subprocess
 import sys
 import time
@@ -25,6 +29,28 @@ class TunnelStatus:
     """隧道状态探测结果。"""
     ok: bool
     message: str
+
+
+def _find_ssh_executable() -> str:
+    """定位 ssh 可执行文件全路径。
+
+    优先级：
+    1. shutil.which("ssh") —— PATH 里能找到就用（最快）
+    2. Windows 常见路径：C:/Windows/System32/OpenSSH/ssh.exe
+    3. 找不到返回 "ssh"，让 subprocess 报原始错误
+    """
+    found = shutil.which("ssh")
+    if found:
+        return found
+    if sys.platform == "win32":
+        candidates = [
+            os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32", "OpenSSH", "ssh.exe"),
+            r"C:\Windows\System32\OpenSSH\ssh.exe",
+        ]
+        for path in candidates:
+            if os.path.isfile(path):
+                return path
+    return "ssh"
 
 
 class SSHTunnel:
@@ -51,7 +77,7 @@ class SSHTunnel:
         不用 BatchMode=yes：用户可能用密钥也可能用密码，BatchMode 会拒绝密码交互。
         """
         cmd = [
-            "ssh",
+            _find_ssh_executable(),
             "-o", f"ConnectTimeout={timeout}",
             "-o", "StrictHostKeyChecking=accept-new",
             self.host.host,
@@ -92,7 +118,7 @@ class SSHTunnel:
             return TunnelStatus(True, "隧道已在运行")
 
         cmd = [
-            "ssh",
+            _find_ssh_executable(),
             "-L", f"{self.local_port}:localhost:{self.remote_port}",
             "-N",
             "-f",
