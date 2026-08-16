@@ -1,25 +1,87 @@
 """Application settings with model, voice, input and about tabs."""
 from __future__ import annotations
 
+from PySide6.QtCore import QPoint, Qt
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QDialog, QDialogButtonBox,
-    QFormLayout, QLabel, QLineEdit, QPushButton, QTabWidget, QVBoxLayout,
-    QWidget,
+    QFormLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, QScrollArea, QTabWidget,
+    QVBoxLayout, QWidget,
 )
 
 from core.storage import load_config, save_config
+
+CRT_QSS = """
+QDialog#settingsDialog { background-color: #171114; color: #c1b492; border: 1px solid #d2738a; }
+QWidget#settingsTitleBar { background-color: #21171b; border: 1px solid #d2738a; border-left: 8px solid #d2738a; }
+QLabel#settingsTitle { color: #c1b492; font: 700 12px "Consolas", "SimSun"; letter-spacing: 0px; }
+QLabel#settingsSignature { color: #8a7f63; font: 10px "Consolas", "SimSun"; }
+QPushButton#settingsClose { background: #171114; color: #d2738a; border: 1px solid #d2738a; min-width: 24px; max-width: 24px; min-height: 22px; max-height: 22px; padding: 0; font: 700 14px "Consolas"; }
+QPushButton#settingsClose:hover { background: #d2738a; color: #171114; }
+QTabWidget::pane { border: 1px solid #d2738a; background: #171114; top: -1px; }
+QTabBar::tab { background: #21171b; color: #8a7f63; border: 1px solid #8a7f63; border-bottom: 0; padding: 7px 12px; min-width: 72px; font: 12px "Times New Roman", "SimSun"; }
+QTabBar::tab:selected { background: #d2738a; color: #171114; border-color: #d2738a; }
+QTabBar::tab:hover:!selected { color: #c1b492; border-color: #d2738a; }
+QWidget#settingsPage { background-color: #171114; }
+QScrollArea { background: transparent; border: 0; }
+QScrollArea > QWidget > QWidget { background-color: #171114; }
+QLabel { color: #c1b492; font: 13px "Times New Roman", "SimSun"; }
+QLabel#sectionHeader { color: #d2738a; border-left: 3px solid #d2738a; padding: 3px 0 3px 8px; font: 700 12px "Times New Roman", "SimSun"; }
+QLineEdit, QComboBox { background-color: #21171b; color: #c1b492; border: 1px solid #8a7f63; border-radius: 0; padding: 7px 9px; min-height: 22px; selection-background-color: #d2738a; selection-color: #171114; font: 13px "Consolas", "SimSun"; }
+QLineEdit:focus, QComboBox:focus { border-color: #d2738a; background-color: #171114; }
+QComboBox::drop-down { border-left: 1px solid #8a7f63; width: 24px; }
+QComboBox QAbstractItemView { background-color: #171114; color: #c1b492; border: 1px solid #d2738a; selection-background-color: #d2738a; selection-color: #171114; }
+QCheckBox { color: #c1b492; spacing: 8px; font: 13px "Times New Roman", "SimSun"; }
+QCheckBox::indicator { width: 14px; height: 14px; border: 1px solid #8a7f63; background: #21171b; }
+QCheckBox::indicator:checked { background: #d2738a; border-color: #d2738a; }
+QPushButton { background-color: #21171b; color: #c1b492; border: 1px solid #c1b492; border-radius: 0; padding: 7px 13px; min-height: 24px; font: 700 12px "Times New Roman", "SimSun"; }
+QPushButton:hover { background-color: #d2738a; color: #171114; border-color: #d2738a; }
+QPushButton:pressed { background-color: #c1b492; color: #171114; }
+QDialogButtonBox QPushButton { min-width: 88px; }
+QScrollBar:vertical { background: #21171b; width: 8px; margin: 0; }
+QScrollBar::handle:vertical { background: #d2738a; min-height: 30px; }
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
+QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: transparent; }
+"""
+
+
+def _section(title: str) -> QLabel:
+    label = QLabel(title)
+    label.setObjectName("sectionHeader")
+    return label
+
+
+def _tune_form(form: QFormLayout) -> None:
+    form.setContentsMargins(18, 18, 18, 18)
+    form.setHorizontalSpacing(16)
+    form.setVerticalSpacing(11)
+    form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
+    form.setLabelAlignment(Qt.AlignRight)
+
+
+def _scroll_page(page: QWidget) -> QScrollArea:
+    page.setObjectName("settingsPage")
+    scroll = QScrollArea()
+    scroll.setWidgetResizable(True)
+    scroll.setFrameShape(QScrollArea.NoFrame)
+    scroll.setWidget(page)
+    return scroll
 
 
 class SettingsDialog(QDialog):
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
+        self.setObjectName("settingsDialog")
         self.setWindowTitle("Amadeus 设置")
-        self.setMinimumSize(520, 360)
+        self.setMinimumSize(680, 500)
+        self.resize(760, 560)
+        self.setStyleSheet(CRT_QSS)
         config = load_config()
         tabs = QTabWidget()
 
         model_page = QWidget()
         model_form = QFormLayout(model_page)
+        _tune_form(model_form)
+        model_form.addRow(_section("NETWORK / MODEL"))
         model_form.addRow(QLabel("默认后端：直连 OpenAI 兼容 API。"))
         self.endpoint = QLineEdit(config.get("endpoint", "https://api.deepseek.com/v1"))
         self.api_key = QLineEdit(config.get("api_key", ""))
@@ -28,10 +90,12 @@ class SettingsDialog(QDialog):
         model_form.addRow("API Endpoint", self.endpoint)
         model_form.addRow("API Key", self.api_key)
         model_form.addRow("模型", self.model)
-        tabs.addTab(model_page, "直连模型（默认）")
+        tabs.addTab(_scroll_page(model_page), "直连模型（默认）")
 
         voice_page = QWidget()
         voice_form = QFormLayout(voice_page)
+        _tune_form(voice_form)
+        voice_form.addRow(_section("VOICE OUTPUT"))
         self.tts_enabled = QCheckBox("回复后自动朗读日语")
         self.tts_enabled.setChecked(config.get("tts_enabled", True))
         self.tts_rate = QComboBox()
@@ -39,10 +103,12 @@ class SettingsDialog(QDialog):
         self.tts_rate.setCurrentIndex(config.get("tts_rate", 1))
         voice_form.addRow(self.tts_enabled)
         voice_form.addRow("语速", self.tts_rate)
-        tabs.addTab(voice_page, "语音合成")
+        tabs.addTab(_scroll_page(voice_page), "语音合成")
 
         asr_page = QWidget()
         asr_form = QFormLayout(asr_page)
+        _tune_form(asr_form)
+        asr_form.addRow(_section("VOICE INPUT"))
         self.asr_endpoint = QLineEdit(config.get("asr_endpoint", "https://api.xiaomimimo.com/v1"))
         self.asr_key = QLineEdit(config.get("asr_api_key", ""))
         self.asr_key.setEchoMode(QLineEdit.Password)
@@ -50,12 +116,14 @@ class SettingsDialog(QDialog):
         asr_form.addRow("ASR Endpoint", self.asr_endpoint)
         asr_form.addRow("ASR API Key", self.asr_key)
         asr_form.addRow("ASR 模型", self.asr_model)
-        tabs.addTab(asr_page, "语音输入")
+        tabs.addTab(_scroll_page(asr_page), "语音输入")
 
         # === Agent 模式（2026-08-15 agent-mode spec §4.4）===
         from config import AGENT_ROUTER_DEFAULTS, HERMES_DEFAULTS
         agent_page = QWidget()
         agent_form = QFormLayout(agent_page)
+        _tune_form(agent_form)
+        agent_form.addRow(_section("AGENT ROUTER"))
         router_cfg = {**AGENT_ROUTER_DEFAULTS, **(config.get("agent_router") or {})}
         self.agent_mode = QComboBox()
         self.agent_mode.addItem("本地直连（默认）", "chat")
@@ -84,12 +152,14 @@ class SettingsDialog(QDialog):
         idx = self.codex_sandbox.findData(str(codex_cfg.get("sandbox", "read-only")))
         self.codex_sandbox.setCurrentIndex(max(idx, 0))
         agent_form.addRow("codex 沙箱", self.codex_sandbox)
-        tabs.addTab(agent_page, "Agent 模式")
+        tabs.addTab(_scroll_page(agent_page), "Agent 模式")
 
         # === Companion 主动问候（2026-08-16 spec §8）===
         from config import COMPANION_DEFAULTS
         companion_page = QWidget()
         companion_form = QFormLayout(companion_page)
+        _tune_form(companion_form)
+        companion_form.addRow(_section("COMPANION SIGNALS"))
         companion_cfg = {**COMPANION_DEFAULTS, **(config.get("companion") or {})}
         self.companion_enabled = QCheckBox("启用主动陪伴（伪春菜式）")
         self.companion_enabled.setChecked(bool(companion_cfg.get("enabled", True)))
@@ -150,12 +220,14 @@ class SettingsDialog(QDialog):
         btn_row.addWidget(clear_btn)
         companion_form.addRow(btn_row)
 
-        tabs.addTab(companion_page, "Companion")
+        tabs.addTab(_scroll_page(companion_page), "Companion")
 
         # === 关于 / 版本 ===
         from core.version import __version__
         about_page = QWidget()
         about_form = QFormLayout(about_page)
+        _tune_form(about_form)
+        about_form.addRow(_section("BUILD / UPDATE"))
         about_form.addRow("当前版本", QLabel(__version__))
         self.version_check_url = QLineEdit(config.get("version_check_url", ""))
         self.version_check_url.setPlaceholderText("远程版本检查 URL（纯文本，可留空）")
@@ -166,14 +238,53 @@ class SettingsDialog(QDialog):
         check_btn = QPushButton("检查更新")
         check_btn.clicked.connect(self._check_update)
         about_form.addRow(check_btn)
-        tabs.addTab(about_page, "关于")
+        tabs.addTab(_scroll_page(about_page), "关于")
 
         buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
         buttons.accepted.connect(self._save)
         buttons.rejected.connect(self.reject)
+        title_bar = QWidget(self)
+        title_bar.setObjectName("settingsTitleBar")
+        title_layout = QHBoxLayout(title_bar)
+        title_layout.setContentsMargins(10, 4, 6, 4)
+        title_layout.setSpacing(8)
+        title = QLabel("AMADEUS CONFIG", title_bar)
+        title.setObjectName("settingsTitle")
+        signature = QLabel("tait-crt-interface-skill", title_bar)
+        signature.setObjectName("settingsSignature")
+        close_btn = QPushButton("X", title_bar)
+        close_btn.setObjectName("settingsClose")
+        close_btn.setToolTip("??")
+        close_btn.clicked.connect(self.reject)
+        title_layout.addWidget(title)
+        title_layout.addWidget(signature)
+        title_layout.addStretch()
+        title_layout.addWidget(close_btn)
+
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(10)
+        layout.addWidget(title_bar)
         layout.addWidget(tabs)
         layout.addWidget(buttons)
+
+    def mousePressEvent(self, event) -> None:
+        if event.button() == Qt.LeftButton and event.position().y() <= 42:
+            self._drag_pos = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event) -> None:
+        if event.buttons() & Qt.LeftButton and not self._drag_pos.isNull():
+            self.move(event.globalPosition().toPoint() - self._drag_pos)
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event) -> None:
+        self._drag_pos = QPoint()
+        super().mouseReleaseEvent(event)
 
     def _check_update(self) -> None:
         from core.version import __version__, check_latest_version, parse_version

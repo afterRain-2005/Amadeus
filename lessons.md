@@ -2,6 +2,61 @@
 
 > 每轮对话结束时记录 5 条最重要的教训。开始项目时首先查看本文件。
 
+## 2026-08-17 桌宠退出遗留 GPT-SoVITS 孤儿进程修复
+
+### 1. 【根因】subprocess.Popen 拉起子进程不保存句柄 → 退出时无法清理
+**现象**：用户反馈"开启桌宠后自动打开语音服务，关闭时全部一并关闭，而不是进后台"，实际桌宠退出后 GPT-SoVITS api_v2.py 进程仍在跑（占显存/9880 端口）。
+**根因**：[desktop_pet.py maybe_start_gpt_sovits](file:///d:/Desktop/Ideas/Amadeus2026/amadeus-py/desktop_pet.py#L67) 用 `subprocess.Popen(...)` 拉起 GPT-SoVITS，但**返回值未保存**——调用方拿不到句柄，无法事后 terminate。
+**修复**：新增模块级 `_gpt_sovits_proc`，`maybe_start_gpt_sovits` 启动后赋值；新增 `stop_gpt_sovits(timeout=5.0)` 三段式终止（terminate→wait→kill）；`_cleanup_on_quit` 和 `main()` finally 双保险调用。
+**教训**：用 `subprocess.Popen` 启动长生命周期子进程时，**句柄必须保存**，否则就成了"启动即忘"，无法在父进程退出时清理。
+
+### 2. 【进程生命周期】Windows TerminateProcess 是硬杀，不触发 aboutToQuit
+[main.py _on_quit](file:///d:/Desktop/Ideas/Amadeus2026/amadeus-py/main.py#L75) 用 `_pet_process.terminate()`，在 Windows 上等同于 `TerminateProcess`，**硬杀子进程**——Python 解释器来不及跑 atexit / Qt `aboutToQuit` handlers。
+**后果**：frozen 模式（dist\Amadeus-0.2.0.exe，即用户实际用的形态）下，本次 `stop_gpt_sovits` 修复**无效**——`_cleanup_on_quit` 永远不会执行。
+**当前选择**：用户决定 dev 模式生效即可，frozen 模式后续再说。
+**待选方案**（按优雅度排序）：
+- Windows Job Object（约 30 行 ctypes，main 退出时所有子孙进程自动被杀，最干净）
+- main 改软退出（给 desktop_pet 发 quit IPC 命令让它自己 `app.quit()`，触发 aboutToQuit）
+- main._on_quit 扫描 9880 端口对应 PID 并杀掉（hack，不优雅）
+**教训**：跨进程退出语义在 Windows 上有陷阱——`Popen.terminate()` 是硬杀，不会触发被杀进程的清理回调；要做优雅退出必须走 IPC 或 Job Object。
+
+### 3. 【运维排查】PowerShell 下 tasklist 不可用，进程排查走 Get-CimInstance
+Windows PowerShell（不是 cmd）下 `tasklist` 报 `CommandNotFoundException`。正确姿势：
+```powershell
+Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -match "amadeus|gpt.sovits" } | Select-Object ProcessId, Name, CommandLine
+```
+`CommandLine` 字段比 `Name` 信息量大得多（能区分 `python conda info` vs `python api_v2.py`）。
+**端口探活**：`Get-NetTCPConnection -LocalPort 9880 -State Listen`（无输出即未监听）。
+
+### 4. 【测试验证】项目 .venv PySide6 DLL 加载失败是预存问题，与本次修改无关
+跑 `tests/` 出现 `ImportError: DLL load failed while importing QtWidgets/QtCore: 找不到指定的程序`。
+**不是本次修改引入**：是项目当前 venv 的 PySide6 安装问题，影响 `test_call_view.py`、`test_voice_call.py`、`test_tts_selfheal.py` 等。
+**验证策略**：跑非 Qt 测试套件 130 项全过，3 项失败均为 PySide6 DLL 问题。这种"环境性失败"应该独立 issue 跟踪，不要阻塞本次 PR。
+
+### 5. 【设计反思】"启动即忘"是 Python subprocess 子进程管理的常见反模式
+本次修复前 `maybe_start_gpt_sovits` 返回 `bool`（是否启动），看似"幂等：在线则跳过"——但**返回值丢失了句柄语义**：调用方只能知道"我启动了"，无法事后说"我退出时把它停掉"。
+**改进模式**：长生命周期子进程管理函数应满足三件事：
+1. 保存句柄到模块级/类成员变量
+2. 暴露对应的 `stop_xxx()` 函数（含 timeout 和 kill 兜底）
+3. 在退出路径（aboutToQuit / finally / atexit）三处显式调用 stop
+参考 Unix daemon 化的设计哲学：fork-and-forget 适合 fire-and-forget 任务（日志轮转），但**不适合**需要随父进程退出的服务（语音服务、API server）。
+
+## 2026-08-17 GPT-SoVITS 在日文 Windows 编码崩溃导致 400 Bad Request
+
+### 1. 【根因】GPT-SoVITS 内部 print 中文时走 cp932 抛 UnicodeEncodeError 被 except 捕获返回 400
+**现象**：所有 `/tts` 请求返回 `{"message":"tts failed","Exception":"'cp932' codec can't encode character '\\u5f00' in position 7: illegal multibyte sequence"}`。
+**根因**：Windows 日文环境默认控制台编码为 cp932（Shift-JIS）。GPT-SoVITS 内部 `tts_pipeline.run(req)` 处理含中文（如「牧濑红莉栖」「开」）的文本/异常时调用 `print()` 写 stdout，cp932 无法编码中文字符（`\u5f00`=「开」），抛 UnicodeEncodeError。该异常被 [api_v2.py:443](file:///d:/Desktop/Ideas/Amadeus2026/amadeus-py/GPT-SoVITS/api_v2.py#L443) 的 `except Exception as e: return JSONResponse(status_code=400, content={"message": "tts failed", "Exception": str(e)})` 捕获，返回 400。
+**修复**：在 [start.bat](file:///d:/Desktop/Ideas/Amadeus2026/amadeus-py/start.bat) 和 [desktop_pet.py maybe_start_gpt_sovits](file:///d:/Desktop/Ideas/Amadeus2026/amadeus-py/desktop_pet.py#L85) 中设 `PYTHONUTF8=1` + `PYTHONIOENCODING=utf-8` 环境变量，强制 Python 走 UTF-8 模式。
+**教训**：Windows 上跑 Python 服务，尤其是处理多语言文本的，**必须设 PYTHONUTF8=1**。日文/中文 Windows 的 cp932/gbk 控制台编码是定时炸弹。
+
+### 2. 【诊断方法】GPT-SoVITS 报错只看 HTTP 400 不够，要看 Exception 字段里的真实异常
+[api_v2.py:444](file:///d:/Desktop/Ideas/Amadeus2026/amadeus-py/GPT-SoVITS/api_v2.py#L444) 把内部异常 `str(e)` 塞进 JSONResponse 的 `Exception` 字段返回。诊断时必须读 response body 的 `Exception` 字段，而不是只看 400 状态码。用 Python `urllib.request` + `HTTPError.read()` 比 PowerShell `Invoke-WebRequest` 更容易拿到完整 body。
+
+### 3. 【僵尸进程】桌宠多次重启会累积 15 个 pythonw.exe main.py 进程
+**现象**：用户反馈无声时排查发现 15 个 main.py pythonw 进程在跑。
+**原因**：pythonw.exe 后台启动不阻塞，但旧进程没被杀干净，新进程启动时端口/资源可能冲突。
+**修复**：重启前先 `Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like "*main.py*" } | Stop-Process -Force`。建议在 start.bat 启动前加 taskkill。
+
 ## 2026-08-15 语音无声排查（TTS 自愈三件套）
 
 ### 1. 「无语音」先查服务再查代码：外部依赖生命周期是第一嫌疑人

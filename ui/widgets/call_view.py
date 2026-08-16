@@ -104,15 +104,15 @@ class CallView(QWidget):
         top = QHBoxLayout()
         top.setSpacing(6)
         self._dot = QLabel("●", self)
-        self._dot.setStyleSheet("color:#c1b492; font-size:10px")
+        self._dot.setStyleSheet("color:#c1b492; font-size:10px; padding-left:4px")
         self.status_label = QLabel("正在接通…", self)
         self.status_label.setStyleSheet(
-            "color:#c1b492; font:12px 'Times New Roman','SimSun';"
-            "background:#171114; border:1px solid #d2738a;"
-            "border-radius:0px; padding:3px 10px"
+            "color:#c1b492; font:700 12px 'Consolas','SimSun';"
+            "background:#171114; border:1px solid #d2738a; border-left:6px solid #d2738a;"
+            "border-radius:0px; padding:4px 11px"
         )
         self.elapsed_label = QLabel("0:00", self)
-        self.elapsed_label.setStyleSheet("color:#8a7f63; font:11px 'Times New Roman','SimSun'")
+        self.elapsed_label.setStyleSheet("color:#8a7f63; font:11px 'Consolas','SimSun'; background:#171114; border:1px solid #8a7f63; padding:3px 7px")
         top.addWidget(self._dot)
         top.addWidget(self.status_label)
         top.addStretch()
@@ -125,8 +125,8 @@ class CallView(QWidget):
         self.subtitle_label.setWordWrap(True)
         self.subtitle_label.setStyleSheet(
             "color:#c1b492; font:14px 'Times New Roman','SimSun';"
-            "background:#171114; border:1px solid #d2738a;"
-            "border-radius:0px; padding:10px 16px"
+            "background:#171114; border:1px solid #d2738a; border-top:5px solid #d2738a;"
+            "border-radius:0px; padding:12px 16px"
         )
         layout.addWidget(self.subtitle_label)
 
