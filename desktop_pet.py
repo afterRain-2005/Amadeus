@@ -64,6 +64,11 @@ def maybe_start_gpt_sovits(spawn=subprocess.Popen) -> bool:
 
     返回是否发起了启动进程。拉起后模型加载需数十秒，由 SpeechPlayer
     的 available TTL 重查（60s）自愈衔接，不阻塞 UI。
+
+    根据 config.gpt_sovits.mode 选择：
+    - local：拉本地子进程（要求本机有 GPU）
+    - ssh：建 SSH 隧道到远程 GPU 服务器
+    - auto：优先 SSH（若配置了 ssh_host），失败回退本地
     """
     try:
         from core.gpt_sovits_client import KurisuTTS
@@ -71,6 +76,27 @@ def maybe_start_gpt_sovits(spawn=subprocess.Popen) -> bool:
             return False
     except Exception:
         pass
+
+    # 读取 GPT-SoVITS 运行模式配置
+    try:
+        from config import GPT_SOVITS_DEFAULTS
+        from core.storage import load_config
+        cfg = {**GPT_SOVITS_DEFAULTS, **(load_config().get("gpt_sovits") or {})}
+    except Exception:
+        cfg = dict(GPT_SOVITS_DEFAULTS) if 'GPT_SOVITS_DEFAULTS' in dir() else {"mode": "local", "ssh_host": "", "local_port": 9880, "remote_port": 9880}
+
+    mode = str(cfg.get("mode", "auto"))
+    ssh_host_alias = str(cfg.get("ssh_host", ""))
+
+    # auto 模式：配置了 ssh_host 时优先 SSH，失败回退本地
+    if mode in ("ssh", "auto") and ssh_host_alias:
+        if _start_ssh_tunnel(ssh_host_alias, cfg):
+            return True
+        if mode == "ssh":
+            return False  # SSH 模式失败不回退本地
+        # auto 模式继续尝试本地
+
+    # 本地启动
     located = _locate_gpt_sovits(ROOT)
     if not located:
         return False
@@ -86,7 +112,8 @@ def maybe_start_gpt_sovits(spawn=subprocess.Popen) -> bool:
     except OSError:
         stdout = subprocess.DEVNULL
     try:
-        spawn(
+        global _gpt_sovits_proc
+        _gpt_sovits_proc = spawn(
             [str(venv_python), "api_v2.py"],
             cwd=str(api_dir),
             stdout=stdout,
@@ -99,6 +126,73 @@ def maybe_start_gpt_sovits(spawn=subprocess.Popen) -> bool:
         if log_file is not None:
             log_file.close()
         return False
+
+
+# 模块级句柄：本地子进程 + SSH 隧道，退出时清理（lessons 2026-08-17 教训 1）
+_gpt_sovits_proc = None
+_ssh_tunnel = None
+
+
+def _start_ssh_tunnel(host_alias: str, cfg: dict) -> bool:
+    """根据 host 别名建 SSH 隧道。成功返回 True。
+
+    从 ~/.ssh/config 解析 Host 信息，用 SSHTunnel 建隧道。
+    隧道句柄保存到模块级 _ssh_tunnel，供 stop_gpt_sovits 清理。
+    """
+    global _ssh_tunnel
+    try:
+        from core.ssh_config_parser import parse_ssh_config
+        from core.ssh_tunnel import SSHTunnel
+    except ImportError:
+        return False
+
+    hosts = parse_ssh_config()
+    host_obj = next((h for h in hosts if h.host == host_alias), None)
+    if host_obj is None:
+        return False
+
+    try:
+        local_port = int(cfg.get("local_port", 9880))
+        remote_port = int(cfg.get("remote_port", 9880))
+    except (TypeError, ValueError):
+        local_port, remote_port = 9880, 9880
+
+    tunnel = SSHTunnel(host_obj, local_port=local_port, remote_port=remote_port)
+    status = tunnel.start()
+    if status.ok:
+        _ssh_tunnel = tunnel
+        return True
+    return False
+
+
+def stop_gpt_sovits(timeout: float = 5.0) -> None:
+    """退出时清理：终止本地子进程 + 停止 SSH 隧道。
+
+    三段式终止：terminate → wait → kill（lessons 2026-08-17 教训 1）。
+    """
+    global _gpt_sovits_proc, _ssh_tunnel
+    # 清理本地子进程
+    proc = _gpt_sovits_proc
+    if proc is not None:
+        try:
+            proc.terminate()
+            try:
+                proc.wait(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+        except Exception:
+            pass
+        finally:
+            _gpt_sovits_proc = None
+    # 清理 SSH 隧道
+    tunnel = _ssh_tunnel
+    if tunnel is not None:
+        try:
+            tunnel.stop()
+        except Exception:
+            pass
+        finally:
+            _ssh_tunnel = None
 
 
 def renderer_process(connection: Connection) -> None:
@@ -1375,6 +1469,11 @@ def main() -> int:
         if renderer.is_alive():
             renderer.terminate()
         renderer.join(timeout=2)
+        # 清理 GPT-SoVITS 本地子进程 + SSH 隧道（避免孤儿进程占显存/端口）
+        try:
+            stop_gpt_sovits()
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":

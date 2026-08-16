@@ -99,6 +99,17 @@ PHONE_DEFAULTS: dict[str, object] = {
     "capture_interval_ms": 2500,                        # mss 截帧间隔（2.5s 一次，仅缓存最新帧）
 }
 
+# === GPT-SoVITS 运行模式（本地启动 / SSH 隧道 / 自动） ===
+# 本地启动：maybe_start_gpt_sovits 拉本地子进程（要求本机有 GPU）
+# SSH 隧道：用 ssh -L 9880:localhost:9880 <host> -N 建隧道，远程 GPU 服务器跑 GPT-SoVITS
+# 自动：优先 SSH（若已配置 host），失败回退本地，再失败回退 SAPI
+GPT_SOVITS_DEFAULTS: dict[str, object] = {
+    "mode": "auto",                # local / ssh / auto
+    "ssh_host": "",                # SSH Host 别名（对应 ~/.ssh/config 中的 Host 名）
+    "local_port": 9880,            # 本地监听端口（隧道模式时本地 KurisuTTS 连此端口）
+    "remote_port": 9880,           # 远程 GPT-SoVITS 端口
+}
+
 # === VAD 参数（移植原项目 amadeus/src/components/VoiceCall.tsx:23-27）===
 # 数学本质：RMS = sqrt(mean(x^2))，信号能量度量。
 # 滞回阈值：START_THRESH > END_THRESH，留缓冲带防边界抖动（单阈值时噪声在阈值附近波动会反复触发）。

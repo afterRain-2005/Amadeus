@@ -118,6 +118,59 @@ class SettingsDialog(QDialog):
         asr_form.addRow("ASR 模型", self.asr_model)
         tabs.addTab(_scroll_page(asr_page), "语音输入")
 
+        # === GPT-SoVITS 运行模式（本地 / SSH 隧道 / 自动）===
+        from config import GPT_SOVITS_DEFAULTS
+        from core.ssh_config_parser import parse_ssh_config
+        from core.ssh_tunnel import SSHTunnel
+        gpt_page = QWidget()
+        gpt_form = QFormLayout(gpt_page)
+        _tune_form(gpt_form)
+        gpt_form.addRow(_section("GPT-SOVITS BACKEND"))
+        gpt_cfg = {**GPT_SOVITS_DEFAULTS, **(config.get("gpt_sovits") or {})}
+        self.gpt_mode = QComboBox()
+        self.gpt_mode.addItem("本地启动（本机 GPU）", "local")
+        self.gpt_mode.addItem("SSH 隧道（远程 GPU）", "ssh")
+        self.gpt_mode.addItem("自动（优先 SSH，回退本地）", "auto")
+        idx = self.gpt_mode.findData(str(gpt_cfg.get("mode", "auto")))
+        self.gpt_mode.setCurrentIndex(max(idx, 0))
+        gpt_form.addRow("运行模式", self.gpt_mode)
+
+        self.gpt_ssh_host = QComboBox()
+        self.gpt_ssh_host.setEditable(False)
+        ssh_hosts = parse_ssh_config()
+        self._ssh_hosts = ssh_hosts
+        current_ssh = str(gpt_cfg.get("ssh_host", ""))
+        for h in ssh_hosts:
+            self.gpt_ssh_host.addItem(h.display(), h.host)
+        if current_ssh:
+            idx = self.gpt_ssh_host.findData(current_ssh)
+            if idx >= 0:
+                self.gpt_ssh_host.setCurrentIndex(idx)
+        gpt_form.addRow("SSH Host（读自 ~/.ssh/config）", self.gpt_ssh_host)
+
+        if not ssh_hosts:
+            ssh_hint = QLabel("未找到 ~/.ssh/config，请先创建（可空文件即可，Host 条目手动填）")
+            ssh_hint.setStyleSheet("color:#8a7f63")
+            gpt_form.addRow(ssh_hint)
+
+        self.gpt_ssh_status = QLabel("未测试")
+        self.gpt_ssh_status.setStyleSheet("color:#8a7f63")
+        self.gpt_ssh_status.setWordWrap(True)
+        test_btn = QPushButton("测试 SSH 连接")
+        test_btn.clicked.connect(self._test_ssh)
+        gpt_form.addRow(self.gpt_ssh_status, test_btn)
+
+        self.gpt_local_port = QLineEdit(str(gpt_cfg.get("local_port", 9880)))
+        gpt_form.addRow("本地端口", self.gpt_local_port)
+        self.gpt_remote_port = QLineEdit(str(gpt_cfg.get("remote_port", 9880)))
+        gpt_form.addRow("远程端口", self.gpt_remote_port)
+
+        tunnel_btn = QPushButton("建立隧道（测试用）")
+        tunnel_btn.clicked.connect(self._test_tunnel)
+        self._tunnel: SSHTunnel | None = None
+        gpt_form.addRow(tunnel_btn)
+        tabs.addTab(_scroll_page(gpt_page), "GPT-SoVITS")
+
         # === Agent 模式（2026-08-15 agent-mode spec §4.4）===
         from config import AGENT_ROUTER_DEFAULTS, HERMES_DEFAULTS
         agent_page = QWidget()
@@ -360,6 +413,81 @@ class SettingsDialog(QDialog):
         clear_all()
         self.companion_preview.setText("已清空记忆")
 
+    def _test_ssh(self) -> None:
+        """测试 SSH 连接（不建隧道，只探测连通性）。"""
+        from core.ssh_tunnel import SSHTunnel
+        host_alias = self.gpt_ssh_host.currentData()
+        if not host_alias:
+            self.gpt_ssh_status.setText("请先选择 SSH Host")
+            self.gpt_ssh_status.setStyleSheet("color:#d2738a")
+            return
+        host_obj = next((h for h in self._ssh_hosts if h.host == host_alias), None)
+        if host_obj is None:
+            self.gpt_ssh_status.setText("Host 信息丢失，请重开设置")
+            self.gpt_ssh_status.setStyleSheet("color:#d2738a")
+            return
+        self.gpt_ssh_status.setText("测试中...")
+        self.gpt_ssh_status.setStyleSheet("color:#c1b492")
+        QApplication.processEvents()
+        tunnel = SSHTunnel(host_obj, local_port=9880, remote_port=9880)
+        status = tunnel.test(timeout=5)
+        if status.ok:
+            self.gpt_ssh_status.setText(f"✓ {status.message}")
+            self.gpt_ssh_status.setStyleSheet("color:#6abf69")
+        else:
+            self.gpt_ssh_status.setText(f"✗ {status.message}")
+            self.gpt_ssh_status.setStyleSheet("color:#d2738a")
+
+    def _test_tunnel(self) -> None:
+        """建立隧道并探测 GPT-SoVITS API 是否可用。"""
+        from core.ssh_tunnel import SSHTunnel
+        from core.gpt_sovits_client import KurisuTTS
+        host_alias = self.gpt_ssh_host.currentData()
+        if not host_alias:
+            self.gpt_ssh_status.setText("请先选择 SSH Host")
+            self.gpt_ssh_status.setStyleSheet("color:#d2738a")
+            return
+        host_obj = next((h for h in self._ssh_hosts if h.host == host_alias), None)
+        if host_obj is None:
+            return
+        try:
+            local_port = int(self.gpt_local_port.text().strip())
+            remote_port = int(self.gpt_remote_port.text().strip())
+        except ValueError:
+            self.gpt_ssh_status.setText("端口必须是数字")
+            self.gpt_ssh_status.setStyleSheet("color:#d2738a")
+            return
+
+        if self._tunnel is not None:
+            self._tunnel.stop()
+            self._tunnel = None
+        self.gpt_ssh_status.setText("建立隧道中...")
+        self.gpt_ssh_status.setStyleSheet("color:#c1b492")
+        QApplication.processEvents()
+
+        self._tunnel = SSHTunnel(host_obj, local_port=local_port, remote_port=remote_port)
+        status = self._tunnel.start()
+        if not status.ok:
+            self.gpt_ssh_status.setText(f"✗ {status.message}")
+            self.gpt_ssh_status.setStyleSheet("color:#d2738a")
+            self._tunnel = None
+            return
+
+        # 探测 GPT-SoVITS API
+        import urllib.request
+        url = f"http://127.0.0.1:{local_port}/docs"
+        try:
+            with urllib.request.urlopen(url, timeout=3.0) as resp:
+                if resp.status == 200:
+                    self.gpt_ssh_status.setText(f"✓ 隧道+API 可用（{status.message}）")
+                    self.gpt_ssh_status.setStyleSheet("color:#6abf69")
+                else:
+                    self.gpt_ssh_status.setText(f"✗ API 返回 {resp.status}")
+                    self.gpt_ssh_status.setStyleSheet("color:#d2738a")
+        except Exception as e:
+            self.gpt_ssh_status.setText(f"✗ 隧道已建立但 API 不可达：{e}（服务器上 GPT-SoVITS 启动了吗？）")
+            self.gpt_ssh_status.setStyleSheet("color:#d2738a")
+
     def _save(self) -> None:
         config = load_config()
         config.update({
@@ -398,5 +526,21 @@ class SettingsDialog(QDialog):
         except ValueError:
             companion_cfg["daily_limit"] = 30
         config["companion"] = companion_cfg
+        # GPT-SoVITS 运行模式配置
+        try:
+            local_port = int(self.gpt_local_port.text().strip())
+            remote_port = int(self.gpt_remote_port.text().strip())
+        except ValueError:
+            local_port, remote_port = 9880, 9880
+        config["gpt_sovits"] = {
+            "mode": self.gpt_mode.currentData(),
+            "ssh_host": self.gpt_ssh_host.currentData() or "",
+            "local_port": local_port,
+            "remote_port": remote_port,
+        }
+        # 关闭测试隧道（避免留下孤儿进程）
+        if self._tunnel is not None:
+            self._tunnel.stop()
+            self._tunnel = None
         save_config(config)
         self.accept()
