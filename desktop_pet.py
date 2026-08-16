@@ -92,6 +92,7 @@ def maybe_start_gpt_sovits(spawn=subprocess.Popen) -> bool:
             stdout=stdout,
             stderr=subprocess.STDOUT,
             creationflags=creation,
+            env={**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"},
         )
         return True
     except OSError:
@@ -1127,7 +1128,8 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
                 )
             self._stream_japanese_started = False
             if not self._history_expanded:
-                self._show_layered_bubbles(self._latest_line(reply))
+                # 分层气泡需要完整中文做分段展示，_latest_line 的 105 字截断会丢段
+                self._show_layered_bubbles(parse_reply(reply).chinese)
 
         def _hide_idle_bubble(self) -> None:
             if not self._busy and not self._history_expanded:

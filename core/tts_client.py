@@ -25,12 +25,13 @@ class SpeechPlayer(QObject):
     # 流式合成：句末标点（日语/中文/英文），遇到即送 TTS
     _SENTENCE_END_RE = re.compile(r"[。！？!?\n]")
 
-    # 短句合并阈值：GPT-SoVITS 合成地板约 3-4s（与文本长度无关），
-    # 短句（< 14 字）播放时间 < 合成时间，导致双缓冲失败（S > P）。
-    # 合并短句到 ≥ 14 字，让 S < P 恢复双缓冲收益。
-    # 实验依据：14 字「こんにちは、牧濑红莉栖です。」S=4.06 P=4.43 (S<P)
-    #           3 字「はい。」S=3.25 P=1.26 (S>P，双缓冲失败)
+    # 合并阈值：所有句子进 _merge_buffer 累积，达阈值送队列。
+    # _MERGE_THRESHOLD=14：首句合并目标（保首句延迟 ~4s，14 字 S=4.06 P=4.43 S<P）
+    # _MERGE_UPPER=32：后续句合并上限（减少段数，避免 TTS 听感太碎）
+    # 物理依据：14 字是双缓冲 S<P 临界点；32 字合成 ~5-6s 仍 S<P（播放 8-10s），
+    # 且 cut5 切分后段长 5-15 字相似，batch_size=5 并行有效（lessons 8-15 教训 1b）。
     _MERGE_THRESHOLD = 14
+    _MERGE_UPPER = 32
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -45,8 +46,10 @@ class SpeechPlayer(QObject):
         # 双缓冲播放队列：合成线程往里塞 wav，播放线程从中取 wav 播放
         self._playback_queue: queue.Queue[bytes | None] = queue.Queue()
         self._stream_lang: str | None = "ja"
-        # 短句合并缓冲：暂存 < _MERGE_THRESHOLD 的短句，用逗号连接合并
+        # 合并缓冲：暂存待合并的句子，用逗号连接
         self._merge_buffer = ""
+        # 首句标记：True 时按 _MERGE_THRESHOLD 送（保首句延迟），False 后按 _MERGE_UPPER 送
+        self._merge_first = True
 
     def set_rate(self, rate: int) -> None:
         self.rate = rate
@@ -84,6 +87,7 @@ class SpeechPlayer(QObject):
         self._stop_event.clear()
         self._stream_buffer = ""
         self._merge_buffer = ""
+        self._merge_first = True
         # 清空队列
         while not self._stream_queue.empty():
             try:
@@ -120,19 +124,20 @@ class SpeechPlayer(QObject):
         # 剩余未结束的文本保留在 _stream_buffer
 
     def _dispatch_sentence(self, sentence: str) -> None:
-        """分发句子：短句合并到 _merge_buffer，长句直接送队列。"""
-        # 去掉句末标点计算实际字数
+        """分发句子：所有句子进入合并缓冲，达阈值送队列。
+
+        首句按 _MERGE_THRESHOLD 送（保首句延迟 ~4s），后续句按 _MERGE_UPPER 送
+        （减少段数，避免 TTS 听感太碎）。所有句子用逗号连接合并，让 cut5 切分后
+        段长相似，batch_size=5 并行生效（lessons 8-15 教训 1b）。
+        """
         bare = self._SENTENCE_END_RE.sub("", sentence).strip()
-        if len(bare) >= self._MERGE_THRESHOLD:
-            # 长句：先刷新合并缓冲（避免短句被长句隔断），再送长句
+        if not bare:
+            return
+        self._merge_buffer += bare + "、"
+        target = self._MERGE_THRESHOLD if self._merge_first else self._MERGE_UPPER
+        if len(self._merge_buffer) >= target:
             self._flush_merge_buffer()
-            self._stream_queue.put((sentence, self._stream_lang))
-        else:
-            # 短句：去掉句末标点，用逗号连接合并
-            self._merge_buffer += bare + "、"
-            # 合并后总字数 ≥ 阈值：送队列
-            if len(self._merge_buffer) >= self._MERGE_THRESHOLD:
-                self._flush_merge_buffer()
+            self._merge_first = False
 
     def _flush_merge_buffer(self) -> None:
         """刷新合并缓冲：把暂存的短句合并后送队列。"""
