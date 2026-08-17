@@ -1240,55 +1240,68 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
                 self._set_bubble_text(self._streamed_reply)
             if should_show_thinking:
                 self._show_thinking_dots()
-            # 流式 TTS：[emotion:xxx] + === 双重切段（修复多段 LLM 输出 bug）
-            # LLM 输出格式 75% 概率为「中文1 === 日语1 \n\n [emotion:xxx]中文2 === 日语2」
-            # 段间用空行 + [emotion:xxx] 标签分隔（非 ===）
-            # 用 [emotion:xxx] 重置 sep_count=0（新回复），再用 === 切中日段
-            # 奇数段（1,3,5...）= 日语段 → 追加 TTS
-            # 偶数段（0,2,4...）= 中文段 → 跳过
+            # 流式 TTS：纯 === 切段 + 日语字符过滤（修复多段 === + emotion 错位 bug）
+            # LLM 实际输出格式（dist/data/sessions.json 实测）：
+            #   中文1
+            #   ===
+            #   日语1 \n\n [emotion:neutral]中文2     ← [emotion] 在 === 后，与日语1 同段
+            #   ===
+            #   日语2 \n\n [emotion:neutral]中文3
+            #   ===
+            #   日语3 \n\n 中文4（无 emotion）
+            #   ===
+            #   日语4
+            # 用 === 切所有段，对每段用 has_japanese() 判断：
+            #   - 含假名（平假名/片假名）→ 日语段，提取假名部分送 TTS
+            #   - 纯汉字/无假名 → 中文段，跳过
+            # 数学本质：日语必有假名（U+3040-309F 平假名 + U+30A0-30FF 片假名），
+            # CJK 汉字中日韩共用手写汉字（U+4E00-9FFF）无法区分，但日语段必含假名。
+            # 形象理解：每段用 === 切开后扫假名，有假名的是日语段送 TTS。
             config = load_config()
             if not config.get("tts_enabled", True):
                 return
             if not text:
                 return
-            # 先按 [emotion:xxx] 切分（保留分隔符）
-            import re
-            emotion_parts = re.split(r"(\[emotion:(?:neutral|blush|angry|smile|sad)\])", text)
-            for part in emotion_parts:
-                if not part:
-                    continue
-                if part.startswith("[emotion:"):
-                    # emotion 标签：新回复开始，重置 sep_count
-                    self._stream_sep_count = 0
-                    continue
-                # part 是 emotion 标签之间的内容，按 === 切分
-                sep_parts = part.split("===")
-                if len(sep_parts) == 1:
-                    self._append_tts_segment(sep_parts[0])
-                else:
-                    self._append_tts_segment(sep_parts[0])
-                    for j in range(1, len(sep_parts)):
-                        self._stream_sep_count += 1
-                        seg = sep_parts[j].lstrip("=\r\n")
-                        self._append_tts_segment(seg)
+            # 把 delta 按 === 切分：parts[0] 是当前段尾部，parts[1:] 是新切段开头
+            parts = text.split("===")
+            if len(parts) == 1:
+                # 无新 ===：当前段增量追加（按假名判断是否送 TTS）
+                self._append_tts_segment_by_japanese(parts[0])
+            else:
+                # 有新 ===：先处理当前段尾部，再逐个切段
+                self._append_tts_segment_by_japanese(parts[0])
+                for i in range(1, len(parts)):
+                    seg = parts[i].lstrip("=\r\n")
+                    self._append_tts_segment_by_japanese(seg)
 
-        def _append_tts_segment(self, text: str) -> None:
-            """按当前 === 段奇偶决定是否追加 TTS。
+        def _append_tts_segment_by_japanese(self, text: str) -> None:
+            """按假名判断是否追加 TTS：含假名的是日语段，提取假名段送 TTS。
 
-            奇数段（_stream_sep_count 为 1,3,5...）是日语段，追加到 TTS；
-            首次进入日语段时启动 speak_streaming_start 会话。
-            偶数段（0,2,4...）是中文段，跳过。
-            text 为空时也启动 TTS（标记进入日语段），但不追加 append。
+            LLM 把日语 + 中文混在同一段（如「日语1 \\n\\n [emotion:neutral]中文2」），
+            用策略：先按 [emotion:xxx] 标签切分（去掉标签），再按空白行切段，
+            对每段用 has_japanese() 判断含假名则送 TTS，跳过纯中文段。
             """
-            if self._stream_sep_count % 2 == 1:
-                # 当前在日语段，首次进入时启动流式 TTS 会话
+            if not text:
+                return
+            import re
+            # 去掉 [emotion:xxx] 标签
+            cleaned = re.sub(r"\[emotion:[^\]]+\]", "", text)
+            # 按空白行（\\n\\n 或 \\n）切段
+            chunks = re.split(r"\n\s*\n", cleaned)
+            for chunk in chunks:
+                segment = chunk.strip()
+                if not segment:
+                    continue
+                # 必须含至少 1 个假名才算日语段
+                if not re.search(r"[\u3040-\u309F\u30A0-\u30FF]", segment):
+                    continue
+                # 首次进入日语段时启动流式 TTS 会话
                 if not self._stream_tts_started:
                     config = load_config()
                     self.speech.set_rate([-2, 0, 2][config.get("tts_rate", 1)])
                     self.speech.speak_streaming_start(text_lang="ja")
                     self._stream_tts_started = True
-                if text:
-                    self.speech.speak_streaming_append(text)
+                self.speech.speak_streaming_append(segment)
 
         def _agent_finished(self, reply: str) -> None:
             session = active_session(self._state)

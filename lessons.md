@@ -893,3 +893,53 @@ tests/test_voice_call.py:181-208。
 无需再改。**教训**：每次代码修复后，frozen exe 用户必须重新下载新版本才能生效。源码模式
 （python desktop_pet.py）用户直接拉代码即可。打包前必须全量 pytest 通过（209 passed），
 避免 frozen 模式运行时才发现 bug（frozen 模式调试成本高，无 stderr 实时输出）。
+
+## 2026-08-17 双重切段引入无声 bug 修复（0.3.1 → 0.3.2）
+
+### 1. 【回归】0.3.1 引入新 bug：双重切段把日语段错当中文段，TTS 全跳过 → 无声
+用户报告"这一版没有语音声音了"。0.3.0 能听到语音，0.3.1 无声。查 dist/data/sessions.json
+最近一次 LLM 回复（1098 字，5 个 === + 2 个 [emotion:]）：LLM 把 [emotion:xxx] 标签放在
+=== 后的日语段里（如「日语1 \\n\\n [emotion:neutral]中文2 === 日语2」），违反 prompt
+约定"情绪标签在最开头"。0.3.1 的双重切段逻辑用 [emotion:xxx] 重置 sep_count=0，把日语段1
+（含 [emotion] 标签）错当新回复的中文段，后续 sep_count 全错位 → TTS 全跳过 → 无声。
+**教训**：bug 修复引入新 bug 是常见陷阱（修复 A 暴露 B）。每次修复后必须实测 frozen exe
+验证，不能只靠单元测试通过就认为修复成功——单元测试 mock 的 LLM 输出格式与真实输出
+格式可能不同。依据：dist/data/characters/kurisu/sessions.json 真实 LLM 输出。
+
+### 2. 【根因】LLM 不遵守 prompt 约定是常态，不能按约定设计切段逻辑
+KURISU_OUTPUT_FORMAT 明确写"[emotion:xxx]在最开头"+"=== 独占一行"+"日语之后不输出
+任何内容"。但实测 LLM 输出：
+- [emotion:xxx] 出现在 === 后的日语段里（不是开头）
+- 段间用空行 + [emotion:xxx] 分隔（不是 ===）
+- 单次回复含多段 === 交替（75% 概率）
+原版 _on_llm_delta 假设单段 === 格式（split('===', 1)[1]），0.3.1 假设 [emotion] 在 === 前
+（双重切段重置）。两者都基于 prompt 约定设计，实际 LLM 输出都不遵守。
+**教训**：移植外部项目或设计 LLM 输出解析逻辑时，必须实测真实 LLM 输出格式（查
+sessions.json），不能按 prompt 约定设计。LLM 输出格式不稳定是常态，解析逻辑要鲁棒到
+容忍各种格式变体。
+
+### 3. 【算法】纯 === 切段 + 假名过滤：不依赖 [emotion] 标签位置
+放弃用 [emotion] 重置 sep_count。新方案：纯 === 切段，对每段去 [emotion] 标签后按空白行
+切块，每块用 has_japanese() 判断含假名则送 TTS，跳过纯中文段。
+- 数学本质：日语必有假名（U+3040-309F 平假名 + U+30A0-30FF 片假名），CJK 汉字
+  中日韩共用手写汉字（U+4E00-9FFF）无法区分但日语段必含假名。
+- 形象理解：每段用 === 切开后扫假名，有假名的是日语段送 TTS。
+- 边界场景：纯汉字日语词（如"元気"）无假名会被误判为中文跳过，但实际 LLM 输出的
+  日语句子几乎都有假名结尾（助词/句尾），此边界场景罕见。
+依据：desktop_pet.py:1277-1304 _append_tts_segment_by_japanese；
+core/voice_call.py:364-396 同步实现。
+
+### 4. 【测试】测试数据要真实，mock 不能用纯汉字"日语"词
+0.3.1 测试用例 mock_append 期望"日本語短句1"被追加，但"日本語"3 字都是 CJK 汉字无假名，
+被 has_japanese() 误判为中文跳过。改用真实日语"ええ、どうしたの？"（含平假名）。
+**教训**：TTS 相关测试用例必须用真实日语样本（含平假名/片假名），不能用"日本語"这种
+看似日语但纯汉字的词。CJK 汉字无法区分中日韩，has_japanese 判断依赖假名存在。
+依据：tests/test_voice_call.py:182-207 test_on_llm_delta_multi_separator_skips_chinese_segments。
+
+### 5. 【控制变量】frozen vs 源码模式差异排查：frozen exe 内 miniaudio DLL 检查
+排查"0.3.1 无声"时先怀疑 frozen exe 没打包 miniaudio。用 PyInstaller CArchiveReader
+检查（API 在 6.21 版本变了，archive_viewer 命令行更稳定）。实测 0.3.0 和 0.3.1 exe
+大小几乎一样（123551454 vs 123552035 bytes），说明 miniaudio 已打包，排除环境因素。
+**教训**：frozen 模式 bug 排查先排除环境因素（依赖打包/DLL 冲突），再查代码逻辑。
+版本间 exe 大小对比是快速判断"是否打包层面变化"的指标——大小相近说明打包无变化，
+bug 在代码逻辑层。本次 0.3.0 → 0.3.1 exe 大小差 581 bytes，说明仅代码层变化。

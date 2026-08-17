@@ -336,64 +336,64 @@ class VoiceCallController(QObject):
         return content.strip()
 
     def _on_llm_delta(self, delta: str) -> None:
-        """LLM 流式 delta 回调：[emotion:xxx] + === 双重切段（修复多段 LLM 输出 bug）。
+        """LLM 流式 delta 回调：纯 === 切段 + 日语字符过滤（与 desktop_pet._agent_delta 对齐）。
 
-        与 desktop_pet._agent_delta 完全对齐：
-        1. 累积 delta 到 _streamed_reply
-        2. 先按 [emotion:xxx] 切分：每个 emotion 标签视为新回复开始，重置 sep_count=0
-        3. 再按 === 切分：每遇 === 切段，sep_count += 1
-        4. 奇数段（1,3,5...）= 日语段 → 追加 TTS
-        5. 偶数段（0,2,4...）= 中文段 → 跳过
+        修复 bug：LLM 把 [emotion:xxx] 放在 === 后的日语段里（违反 prompt 约定），
+        双重切段逻辑会错误把日语段1重置为中文段，后续 TTS 全跳过 → 无声。
+        新方案：纯 === 切段，对每段用 has_japanese() 判断含假名则送 TTS。
 
-        修复 bug：LLM 输出 75% 概率为「中文1 === 日语1 \\n\\n [emotion:xxx]中文2 === 日语2」
-        多段格式，段间用空行 + [emotion:xxx] 标签分隔（非 ===）。原版只按 === 切段会把
-        「日语1 + 中文2」整体当日语段送 TTS，导致中文被日语 TTS 引擎读出。
-
-        物理意义：[emotion:xxx] 是 LLM 标记的新回复边界，=== 是回复内部的中日分界。
-        双重切段才能正确识别多段输出中的日语段。
+        物理意义：LLM 生成与 TTS 合成是 producer-consumer 关系。LLM 生成第一句日语
+        时立即启动 TTS，TTS 合成线程与 LLM 生成线程并行。相比"等 LLM 全部完成再合成"，
+        首句语音延迟从「LLM 总时长 + TTS 合成」降到「LLM 首句时长 + TTS 合成」。
         """
         if not delta:
             return
         self._streamed_reply += delta
-        # 先按 [emotion:xxx] 切分（保留分隔符）
-        import re
-        emotion_parts = re.split(r"(\[emotion:(?:neutral|blush|angry|smile|sad)\])", delta)
-        for part in emotion_parts:
-            if not part:
-                continue
-            if part.startswith("[emotion:"):
-                # emotion 标签：新回复开始，重置 sep_count
-                self._stream_sep_count = 0
-                continue
-            # part 是 emotion 标签之间的内容，按 === 切分
-            sep_parts = part.split("===")
-            if len(sep_parts) == 1:
-                self._append_tts_segment(sep_parts[0])
-            else:
-                self._append_tts_segment(sep_parts[0])
-                for j in range(1, len(sep_parts)):
-                    self._stream_sep_count += 1
-                    seg = sep_parts[j].lstrip("=\r\n")
-                    self._append_tts_segment(seg)
+        # 把 delta 按 === 切分：parts[0] 是当前段尾部，parts[1:] 是新切段开头
+        parts = delta.split("===")
+        if len(parts) == 1:
+            # 无新 ===：当前段增量追加（按假名判断是否送 TTS）
+            self._append_tts_segment_by_japanese(parts[0])
+        else:
+            # 有新 ===：先处理当前段尾部，再逐个切段
+            self._append_tts_segment_by_japanese(parts[0])
+            for i in range(1, len(parts)):
+                seg = parts[i].lstrip("=\r\n")
+                self._append_tts_segment_by_japanese(seg)
 
-    def _append_tts_segment(self, text: str) -> None:
-        """按当前 === 段奇偶决定是否追加 TTS。
+    def _append_tts_segment_by_japanese(self, text: str) -> None:
+        """按假名判断是否追加 TTS：含假名的是日语段，提取假名段送 TTS。
 
-        奇数段（_stream_sep_count 为 1,3,5...）是日语段，追加到 TTS；
-        首次进入日语段时启动 speak_streaming_start + 切 phase 到 speaking（半双工）。
-        偶数段（0,2,4...）是中文段，跳过。
-        text 为空时也启动 TTS（标记进入日语段），但不追加 append。
+        LLM 把日语 + 中文混在同一段（如「日语1 \\n\\n [emotion:neutral]中文2」），
+        用策略：先按 [emotion:xxx] 标签切分（去掉标签），再按空白行切段，
+        对每段用 has_japanese() 判断含假名则送 TTS，跳过纯中文段。
+
+        物理意义：日语必有假名（U+3040-309F 平假名 + U+30A0-30FF 片假名），
+        CJK 汉字无法区分但日语段必含假名。
+        形象理解：把文本按空白行切块，每块扫假名，有假名的是日语块送 TTS。
         """
-        if self._stream_sep_count % 2 == 1:
-            # 当前在日语段，首次进入时启动流式 TTS 会话
+        if not text:
+            return
+        import re
+        # 去掉 [emotion:xxx] 标签
+        cleaned = re.sub(r"\[emotion:[^\]]+\]", "", text)
+        # 按空白行（\\n\\n 或 \\n）切段
+        chunks = re.split(r"\n\s*\n", cleaned)
+        for chunk in chunks:
+            segment = chunk.strip()
+            if not segment:
+                continue
+            # 必须含至少 1 个假名才算日语段
+            if not re.search(r"[\u3040-\u309F\u30A0-\u30FF]", segment):
+                continue
+            # 首次进入日语段时启动流式 TTS 会话
             if not self._stream_tts_started:
                 self._tts.speak_streaming_start(text_lang="ja")
                 self._stream_tts_started = True
                 # phase 切到 speaking（VAD 保持暂停，半双工）
                 self._set_phase("speaking")
                 self.subtitle.emit(f"{self._character.name} 正在说话…")
-            if text:
-                self._tts.speak_streaming_append(text)
+            self._tts.speak_streaming_append(segment)
 
     def _on_tts_speaking_changed(self, speaking: bool) -> None:
         """TTS 播放状态变化：speaking=False 时回 listening（半双工恢复）。"""
