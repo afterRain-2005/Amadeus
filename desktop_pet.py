@@ -71,6 +71,15 @@ def maybe_start_gpt_sovits(spawn=subprocess.Popen) -> bool:
     - auto：优先 SSH（若配置了 ssh_host），失败回退本地
     """
     try:
+        from config import TTS_PROVIDER_DEFAULT
+        from core.storage import load_config
+        provider = load_config().get("tts_provider", TTS_PROVIDER_DEFAULT)
+        if provider == "aliyun":
+            return False
+    except Exception:
+        pass
+
+    try:
         from core.gpt_sovits_client import KurisuTTS
         if KurisuTTS().available:
             return False
@@ -121,11 +130,58 @@ def maybe_start_gpt_sovits(spawn=subprocess.Popen) -> bool:
             creationflags=creation,
             env={**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"},
         )
+        # 后台预热：拉起子进程后立即轮询 available，可达即发一次空合成
+        # 让模型加载到 GPU。GPT-SoVITS 首次合成需加载模型（冷启动 +10-20s），
+        # 预热让真实首句跳过冷启动，首句延迟从 ~14s 降到 ~4s。
+        # 预热线程 daemon=True，不阻塞 UI，失败仅打日志。
+        threading.Thread(target=_warmup_gpt_sovits, daemon=True).start()
         return True
     except OSError:
         if log_file is not None:
             log_file.close()
         return False
+
+
+def _warmup_gpt_sovits(max_wait: float = 90.0) -> None:
+    """后台预热 GPT-SoVITS 模型到 GPU。
+
+    GPT-SoVITS API 启动后首次合成会触发模型加载（torch 加载权重到 GPU
+    约 10-20s）。若不预热，用户首句话需等「拉起子进程→API ready→首次合成
+    加载模型→合成」全链路，首句延迟可达 14-24s。
+
+    预热策略：轮询 KurisuTTS.available（每 0.5s 一次，最多 90s），可达即
+    发一次极短日语文本 "あ。" 合成请求让模型加载到 GPU。合成结果丢弃。
+
+    失败不抛异常：预热是优化项，失败不影响主流程（用户首次合成会触发
+    模型加载，仅延迟较高）。
+    """
+    try:
+        from core.gpt_sovits_client import KurisuTTS
+    except ImportError:
+        return
+    tts = KurisuTTS(timeout=15.0)
+    deadline = time.monotonic() + max_wait
+    while time.monotonic() < deadline:
+        # 子进程已死 → API 永远不会可达，立即退出（避免无意义轮询 90s）
+        proc = _gpt_sovits_proc
+        if proc is not None and hasattr(proc, "poll") and proc.poll() is not None:
+            print("[warmup] GPT-SoVITS subprocess died, give up")
+            return
+        try:
+            if tts.available:
+                break
+        except Exception:
+            pass
+        time.sleep(0.5)
+    else:
+        print("[warmup] GPT-SoVITS not online within {max_wait:.0f}s, give up".format(max_wait=max_wait))
+        return
+    try:
+        wav = tts.synthesize("あ。", text_lang="ja")
+        size = len(wav) if wav else 0
+        print("[warmup] success, wav bytes={}".format(size))
+    except Exception as exc:
+        print("[warmup] synthesize failed: {}".format(exc))
 
 
 # 模块级句柄：本地子进程 + SSH 隧道，退出时清理（lessons 2026-08-17 教训 1）
@@ -1395,6 +1451,18 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
         except Exception:
             pass
 
+    def _companion_on_finished(reply: str) -> None:
+        """companion 完整回复落到桌宠气泡，不写入聊天历史。"""
+        try:
+            parsed = parse_reply(reply)
+            send_command(emotion=parsed.emotion)
+            pet._streamed_reply = ""
+            pet._stream_japanese_started = False
+            if not pet._history_expanded:
+                pet._show_layered_bubbles(parsed.chinese)
+        except Exception:
+            pass
+
     def _companion_tick() -> None:
         """周期性检查 companion 触发（每 30s 一次）。"""
         if not companion_cfg.get("enabled"):
@@ -1417,6 +1485,7 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             companion_ctrl.handle_signal(
                 snap, local_hour=now.hour + now.minute / 60,
                 on_delta=_companion_on_delta, on_status=_companion_on_status,
+                on_finished=_companion_on_finished,
             )
         except Exception:
             pass  # companion 永不影响主流程

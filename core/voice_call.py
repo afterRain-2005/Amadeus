@@ -8,8 +8,17 @@
         回流被误判为用户说话。
 屏幕附帧：utterance end 时取最新缓存帧给视觉模型，频率=说话频率（省钱）。
 
-TTS 降级：StreamingTTS(UI redesign §7.3) 未实现，先用 SAPI SpeechPlayer。
-          speaking_changed 信号判断播放结束 → 回 listening。
+流式 TTS（与 amadeus src/lib/tts.ts + src/components/VoiceCall.tsx 对齐）：
+- LLM 流式输出 → on_delta 回调检测 === 分隔符，日语段进入 speak_streaming_start
+- speak_streaming_append 增量推送日语 delta 到 TTS 合成队列
+- speak_streaming_end 在 LLM 完成时刷新剩余缓冲
+- speaking_changed(False) → 回 listening（半双工恢复）
+- 兜底：LLM 无 === 分隔符时整段 speak_with_options 合成
+
+数学本质：LLM 生成与 TTS 合成是 producer-consumer 关系，用 SpeechPlayer 内部
+双缓冲队列解耦（_stream_queue 连接 LLM→合成，_playback_queue 连接合成→播放）。
+总时延 ≈ max(LLM 生成, TTS 合成, 音频播放)，相比串行省 min(LLM, TTS)。
+形象理解：LLM 是"做菜师傅"，TTS 是"传菜员"，师傅不必等传菜员传完才做下一道菜。
 """
 from __future__ import annotations
 
@@ -65,10 +74,14 @@ class VoiceCallController(QObject):
         self._connecting_timer.timeout.connect(self._enter_listening)
         self._last_user_message = ""
         self._soul_md = _load_soul_md("kurisu") or self._character.personality
-        # TTS：先用 SAPI SpeechPlayer 降级，StreamingTTS 就绪后切换
+        # TTS：流式 SpeechPlayer，默认走 aliyun CosyVoice（与普通对话对齐），
+        # SAPI 仅作 allow_fallback 兜底
         from core.tts_client import SpeechPlayer
         self._tts = SpeechPlayer(self)
         self._tts.speaking_changed.connect(self._on_tts_speaking_changed)
+        # 流式 LLM/TTS 状态：照搬 desktop_pet._agent_delta 的 === 分隔符检测
+        self._stream_japanese_started = False
+        self._streamed_reply = ""
 
     # ===== 属性 =====
     @property
@@ -212,9 +225,19 @@ class VoiceCallController(QObject):
             # 转写 + LLM + TTS 在后台线程跑，避免阻塞音频回调
             threading.Thread(target=self._handle_utterance, args=(audio,), daemon=True).start()
 
-    # ===== 管线：STT → 视觉附帧 → LLM → TTS =====
+    # ===== 管线：STT → 视觉附帧 → LLM → 流式 TTS =====
     def _handle_utterance(self, audio: np.ndarray) -> None:
-        """处理一次"说完的话"：STT → 视觉附帧 → LLM → TTS。后台线程跑。"""
+        """处理一次"说完的话"：STT → 视觉附帧 → 流式 LLM + 流式 TTS。后台线程跑。
+
+        流式 TTS 触发流程（与 desktop_pet._agent_delta/_agent_finished 对齐）：
+        1. _stream_llm 启动流式 LLM，on_delta 回调到 _on_llm_delta
+        2. _on_llm_delta 检测 === 分隔符，首次出现时启动 speak_streaming_start，
+           之后增量追加日语 delta 到 TTS 合成队列
+        3. _stream_llm 返回后：
+           - 若 _stream_japanese_started=True，调 speak_streaming_end 刷新剩余缓冲，
+             speaking_changed(False) → _on_tts_speaking_changed → 回 listening
+           - 否则兜底整段合成（用 parse_reply 提取日语/中文）
+        """
         try:
             wav_bytes = encode_wav(audio, 16000)
             text = self._transcribe(wav_bytes)
@@ -242,25 +265,41 @@ class VoiceCallController(QObject):
             self._last_user_message = user_msg
             self.subtitle.emit("思考中…")
 
+            # 重置流式 TTS 状态：照搬 desktop_pet._agent_delta 的 === 检测
+            self._stream_japanese_started = False
+            self._streamed_reply = ""
+
             reply = self._stream_llm(user_msg)
             if not reply:
                 self._set_phase("listening")
                 self.subtitle.emit("聆听中，请说话")
                 return
 
-            # TTS：解析日语部分播放（与 desktop_pet 一致）
-            parsed = parse_reply(reply)
-            self._set_phase("speaking")
-            self.subtitle.emit(f"{self._character.name} 正在说话…")
-            tts_text = parsed.japanese or parsed.chinese
-            if tts_text:
-                self._play_tts(tts_text)
+            # TTS 收尾
+            if self._stream_japanese_started:
+                # 流式 TTS 会话结束：刷新剩余缓冲，speaking_changed(False) → 回 listening
+                self._tts.speak_streaming_end()
             else:
-                # 无 TTS 内容，直接回 listening
-                self._set_phase("listening")
-                self.subtitle.emit("聆听中，请说话")
+                # 兜底：LLM 没输出 === 分隔符（异常），整段合成日语/中文部分
+                parsed = parse_reply(reply)
+                tts_text = parsed.japanese or parsed.chinese
+                if tts_text:
+                    self._set_phase("speaking")
+                    self.subtitle.emit(f"{self._character.name} 正在说话…")
+                    self._tts.speak_with_options(
+                        tts_text,
+                        text_lang="ja",
+                        allow_fallback=False,
+                    )
+                else:
+                    # 无 TTS 内容，直接回 listening
+                    self._set_phase("listening")
+                    self.subtitle.emit("聆听中，请说话")
         except Exception as exc:
             self.error.emit(f"处理失败：{exc}")
+            # 停止可能悬挂的流式 TTS（已启动 speak_streaming_start 但中途失败）
+            if self._stream_japanese_started:
+                self._tts.stop()
             self._set_phase("listening")
             self.subtitle.emit("聆听中，请说话")
 
@@ -273,7 +312,12 @@ class VoiceCallController(QObject):
         )
 
     def _stream_llm(self, user_text: str) -> str:
-        """流式 LLM（复用 _stream_turn_direct，不带工具）。"""
+        """流式 LLM（复用 _stream_turn_direct，不带工具）。
+
+        on_delta 回调到 _on_llm_delta，照搬 desktop_pet._agent_delta 的 === 检测逻辑：
+        检测到中日分隔符 === 后启动流式 TTS，只把日语段追加到 TTS 合成队列，
+        中文段不送 TTS（与 desktop_pet 普通对话完全对齐）。
+        """
         url = self._config["endpoint"].rstrip("/") + "/chat/completions"
         headers = {"Authorization": f"Bearer {self._config['api_key']}"}
         system = self._soul_md + "\n\n" + KURISU_OUTPUT_FORMAT
@@ -283,16 +327,50 @@ class VoiceCallController(QObject):
         ]
         content, _ = _stream_turn_direct(
             url, headers, self._config["model"], messages,
-            on_delta=lambda t: None,  # 电话模式不实时打字，TTS 分句时再驱动字幕
+            on_delta=self._on_llm_delta,
         )
         return content.strip()
 
-    def _play_tts(self, text: str) -> None:
-        """TTS 播放（SAPI 降级）。speaking_changed(False) 触发回 listening。"""
-        self._tts.speak(text)
+    def _on_llm_delta(self, delta: str) -> None:
+        """LLM 流式 delta 回调：照搬 desktop_pet._agent_delta 的流式 TTS 触发。
+
+        与 desktop_pet.py:1232-1250 完全对齐：
+        1. 累积 delta 到 _streamed_reply
+        2. 检测首次 === 分隔符：
+           - 启动 speak_streaming_start 会话
+           - 切换 phase 到 speaking（VAD 保持暂停，避免麦克风拾取自身语音）
+           - 提取 === 之后的日语部分追加到 TTS
+        3. 后续 delta 已在日语段，去掉可能残留的 === 后增量追加
+
+        物理意义：LLM 生成与 TTS 合成是 producer-consumer 关系。LLM 生成第一句日语
+        时立即启动 TTS，TTS 合成线程与 LLM 生成线程并行。相比"等 LLM 全部完成再合成"，
+        首句语音延迟从「LLM 总时长 + TTS 合成」降到「LLM 首句时长 + TTS 合成」。
+        """
+        if not delta:
+            return
+        self._streamed_reply += delta
+        if not self._stream_japanese_started:
+            if "===" in self._streamed_reply:
+                self._stream_japanese_started = True
+                # 启动流式 TTS 会话（默认 text_lang="ja"）
+                self._tts.speak_streaming_start(text_lang="ja")
+                # phase 切到 speaking（VAD 保持暂停，半双工）
+                self._set_phase("speaking")
+                self.subtitle.emit(f"{self._character.name} 正在说话…")
+                # 提取 === 之后的日语部分追加
+                jp_part = self._streamed_reply.split("===", 1)[1].lstrip("=\r\n").strip()
+                if jp_part:
+                    self._tts.speak_streaming_append(jp_part)
+        else:
+            # 已在日语段，增量追加（去掉可能残留的 ===）
+            t = delta
+            if "===" in t:
+                t = t.split("===", 1)[-1].lstrip("=\r\n")
+            if t:
+                self._tts.speak_streaming_append(t)
 
     def _on_tts_speaking_changed(self, speaking: bool) -> None:
-        """TTS 播放结束 → 回 listening。"""
+        """TTS 播放状态变化：speaking=False 时回 listening（半双工恢复）。"""
         if not speaking and self._phase == "speaking":
             self._set_phase("listening")
             self.subtitle.emit("聆听中，请说话")

@@ -60,7 +60,7 @@ def test_utterance_end_attaches_screen_frame():
          patch("core.voice_call.describe_screen", return_value="VS Code 编辑") as mock_vis, \
          patch.object(ctrl, "_transcribe", return_value="我在写代码"), \
          patch.object(ctrl, "_stream_llm", return_value="加油"), \
-         patch.object(ctrl, "_play_tts"):
+         patch.object(ctrl._tts, "speak_with_options"):
         ctrl._handle_utterance(b"audio bytes")
     mock_vis.assert_called_once()
     # LLM user 消息应含屏幕描述
@@ -77,7 +77,7 @@ def test_screen_share_off_skips_vision():
          patch("core.voice_call.describe_screen") as mock_vis, \
          patch.object(ctrl, "_transcribe", return_value="你好"), \
          patch.object(ctrl, "_stream_llm", return_value="こんにちは"), \
-         patch.object(ctrl, "_play_tts"):
+         patch.object(ctrl._tts, "speak_with_options"):
         ctrl._handle_utterance(b"audio")
     mock_vis.assert_not_called()
 
@@ -93,7 +93,7 @@ def test_vision_empty_key_skips_vision():
          patch("core.voice_call.describe_screen") as mock_vis, \
          patch.object(ctrl, "_transcribe", return_value="你好"), \
          patch.object(ctrl, "_stream_llm", return_value="こんにちは"), \
-         patch.object(ctrl, "_play_tts"):
+         patch.object(ctrl._tts, "speak_with_options"):
         ctrl._handle_utterance(b"audio")
     mock_vis.assert_not_called()
 
@@ -125,3 +125,99 @@ def test_toggle_screen_share_flips_state():
     assert ctrl.screen_share_on is True  # 默认开
     ctrl.toggle_screen_share()
     assert ctrl.screen_share_on is False
+
+
+def test_on_llm_delta_starts_streaming_on_separator():
+    """_on_llm_delta 检测到 === 时启动流式 TTS，切换 phase 到 speaking。"""
+    ctrl = _make_controller()
+    ctrl._set_phase("processing")
+    with patch.object(ctrl._tts, "speak_streaming_start") as mock_start, \
+         patch.object(ctrl._tts, "speak_streaming_append") as mock_append:
+        # 中文段：不启动 TTS
+        ctrl._on_llm_delta("[emotion:neutral]（歪头）嗯，怎么了？")
+        assert ctrl._stream_japanese_started is False
+        mock_start.assert_not_called()
+        # === 与首句日语同 delta（LLM 流式常见场景）：启动 TTS + 提取首句追加
+        ctrl._on_llm_delta("\n===\n（首を傾げる）ええ、どうしたの？")
+        assert ctrl._stream_japanese_started is True
+        mock_start.assert_called_once_with(text_lang="ja")
+        # phase 切到 speaking（VAD 暂停）
+        assert ctrl.phase == "speaking"
+        assert ctrl.vad_paused is True
+        # 首句日语（=== 之后部分）已追加 1 次
+        assert mock_append.call_count == 1
+        # 后续日语 delta：增量追加
+        ctrl._on_llm_delta("（微笑）")
+        ctrl._on_llm_delta("元気？")
+        assert mock_append.call_count == 3  # 首句 + 两次增量
+
+
+def test_on_llm_delta_separator_only_no_append():
+    """=== 出现但 === 后无内容时不调 speak_streaming_append（边界场景）。"""
+    ctrl = _make_controller()
+    with patch.object(ctrl._tts, "speak_streaming_start") as mock_start, \
+         patch.object(ctrl._tts, "speak_streaming_append") as mock_append:
+        ctrl._on_llm_delta("中文\n===\n")
+        assert ctrl._stream_japanese_started is True
+        mock_start.assert_called_once_with(text_lang="ja")
+        # === 后内容为空，不调 speak_streaming_append
+        mock_append.assert_not_called()
+
+
+def test_on_llm_delta_skips_chinese_before_separator():
+    """=== 之前的中文段不送 TTS（与 desktop_pet 对齐）。"""
+    ctrl = _make_controller()
+    with patch.object(ctrl._tts, "speak_streaming_start") as mock_start, \
+         patch.object(ctrl._tts, "speak_streaming_append") as mock_append:
+        # 中文段多次 delta
+        ctrl._on_llm_delta("[emotion:smile]（微笑）")
+        ctrl._on_llm_delta("你好啊。")
+        ctrl._on_llm_delta("今天天气不错。")
+        assert ctrl._stream_japanese_started is False
+        mock_start.assert_not_called()
+        mock_append.assert_not_called()
+
+
+def test_handle_utterance_streaming_path():
+    """_handle_utterance 走流式 TTS 路径：LLM 返回含 === 的 reply，调 speak_streaming_end。"""
+    ctrl = _make_controller()
+    reply_with_sep = "[emotion:neutral]（歪头）嗯，怎么了？\n===\n（首を傾げる）ええ、どうしたの？"
+
+    def fake_stream_llm(user_text):
+        # 模拟 LLM 流式：先中文，后 ===，后日语
+        ctrl._on_llm_delta("[emotion:neutral]（歪头）嗯，怎么了？")
+        ctrl._on_llm_delta("\n===\n")
+        ctrl._on_llm_delta("（首を傾げる）")
+        ctrl._on_llm_delta("ええ、どうしたの？")
+        return reply_with_sep
+
+    with patch("core.voice_call.encode_wav"), \
+         patch.object(ctrl, "_transcribe", return_value="你好"), \
+         patch.object(ctrl, "_stream_llm", side_effect=fake_stream_llm), \
+         patch.object(ctrl._tts, "speak_streaming_start") as mock_start, \
+         patch.object(ctrl._tts, "speak_streaming_append"), \
+         patch.object(ctrl._tts, "speak_streaming_end") as mock_end:
+        ctrl._handle_utterance(b"audio")
+    assert mock_start.called
+    assert mock_end.called
+    # 流式已启动，不应走兜底 speak_with_options
+    # （ctrl._tts 是真实的 SpeechPlayer，speak_with_options 没被 mock 但流式路径不会调它）
+
+
+def test_handle_utterance_fallback_no_separator():
+    """_handle_utterance 兜底路径：LLM 返回无 === 时整段合成。"""
+    ctrl = _make_controller()
+    with patch("core.voice_call.encode_wav"), \
+         patch.object(ctrl, "_transcribe", return_value="你好"), \
+         patch.object(ctrl, "_stream_llm", return_value="こんにちは"), \
+         patch.object(ctrl._tts, "speak_with_options") as mock_speak, \
+         patch.object(ctrl._tts, "speak_streaming_start") as mock_start:
+        ctrl._handle_utterance(b"audio")
+    # 走兜底，不调流式
+    mock_start.assert_not_called()
+    # 调 speak_with_options 整段合成
+    mock_speak.assert_called_once()
+    args = mock_speak.call_args
+    assert args.args[0] == "こんにちは"  # parsed.chinese（无 === 时 chinese=full）
+    assert args.kwargs["text_lang"] == "ja"
+    assert args.kwargs["allow_fallback"] is False

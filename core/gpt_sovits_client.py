@@ -122,6 +122,7 @@ class KurisuTTS:
         prompt_text: str | None = None,
         prompt_lang: str | None = None,
         allow_fallback: bool = False,
+        text_split_method: str | None = None,
     ) -> Optional[bytes]:
         """Synthesize text and return wav bytes, or None on failure."""
         text = _strip_stage_directions((text or ""))
@@ -144,6 +145,11 @@ class KurisuTTS:
         )
         if prompt_text is not None:
             payload["prompt_text"] = prompt_text
+        # 首句优化：cut1=不切分整段推理，跳过 batch 调度开销。
+        # 首句已合并到 ~14 字短句，cut5 切分后段数 ≤2 用不上 batch_size=5，
+        # cut1 单段推理更快（lessons 2026-08-17 提速优化）。
+        if text_split_method is not None:
+            payload["text_split_method"] = text_split_method
 
         try:
             request = Request(

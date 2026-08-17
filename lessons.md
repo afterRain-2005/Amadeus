@@ -706,3 +706,93 @@ heredoc 用 -F 文件"在本轮升级为"-F 文件还要保证无 BOM"。
 必须显式指定 tests/ 目录（`pytest tests/`），或在项目根放 pytest.ini 配置
 `testpaths = tests`。subagent 执行 plan 里的 `python -m pytest tests/ -v` 时不能图省事
 省略 tests/ 路径参数。本轮全量回归 171 passed（既有 129 + companion 新增 42）。
+
+## 2026-08-17 amadeus TTS 方案照搬（阿里云 CosyVoice 流式 + 通话流式 TTS）
+
+### 1. 【架构】流式 TTS 通话方案照搬：=== 分隔符检测统一中日分流
+通话功能的流式 TTS 触发逻辑与普通对话完全一致：检测 LLM 输出 `\n===\n` 分隔符，
+仅日语段送 TTS 合成（中文段不送）。voice_call._on_llm_delta 照搬 desktop_pet._agent_delta，
+避免通话场景重复造轮子。**教训**：跨场景（普通对话/通话）的 LLM 解析逻辑应统一为
+可复用模块（如 core/llm_stream_parser.py），而非每个调用方各自实现一份 === 检测。
+当前两处重复：desktop_pet.py:1232-1250（_agent_delta） / voice_call.py:_on_llm_delta。
+依据：desktop_pet.py:1232-1250, core/voice_call.py:_on_llm_delta。
+
+### 2. 【测试】删除方法前必须 grep 测试引用：_play_tts 删除导致 3 个测试失败
+voice_call.py 删除 `_play_tts` 方法后，test_voice_call.py 三个测试
+（test_utterance_end_attaches_screen_frame / test_screen_share_off_skips_vision /
+test_vision_empty_key_skips_vision）`patch.object(ctrl, "_play_tts")` 失败
+（AttributeError: does not have the attribute）。修复：替换为
+`patch.object(ctrl._tts, "speak_with_options")`。**教训**：删除实例方法前必须
+grep 测试代码引用，提前修复测试 mock；pytest collection 阶段不报错不代表运行时
+不报错。参考：tests/test_voice_call.py:52-98。
+
+### 3. 【测试】config.py 默认值改动会波及所有调用方：TTS_PROVIDER_DEFAULT=aliyun 导致 test_tts_selfheal 失败
+config.TTS_PROVIDER_DEFAULT 改为 "aliyun" 后，test_tts_selfheal 测试 `patch.object
+(player, "_check_kurisu")` 不再被调用（_check_provider_available 走 aliyun 分支不调
+_check_kurisu），test_maybe_start_spawns_when_offline 也因 provider=aliyun 直接返回
+False。修复：`_make_player` 强制 `player._get_tts_provider = lambda: "gpt_sovits"`，
+maybe_start 测试 `patch("core.storage.load_config", return_value={"tts_provider":
+"gpt_sovits"})`。**教训**：改默认配置常量时必须 grep 所有依赖该常量的代码（含测试），
+评估波及面；test_tts_selfheal 套件 mock 的是 gpt_sovits 路径，必须显式强制 provider。
+
+### 4. 【环境】测试环境分裂：miniaudio 装在 .venv，PySide6 DLL 加载失败；anaconda 有 PySide6 无 miniaudio
+.venv 装了 miniaudio 1.71 但 PySide6 6.11.1 DLL 加载失败（`ImportError: DLL load failed
+while importing QtCore`）；D:\anaconda 装了 PySide6 但没装 miniaudio。两个环境各缺一样东西。
+解决：test_mp3_decoder.py 顶部 `sys.modules['miniaudio'] = MagicMock()` 注入 fake 模块，
+让测试不依赖真实 miniaudio 安装。D:\anaconda 跑测试 208 passed。**教训**：测试环境依赖
+分裂时，对纯 IO/解码库（如 miniaudio）注入 fake 模块到 sys.modules，避免环境耦合；
+测试用例内部仍可 `patch("miniaudio.stream_any")` 覆盖具体方法。依据：
+tests/test_mp3_decoder.py:1-14。
+
+### 5. 【mock】patch 路径要匹配 import 方式：函数内 `from urllib.request import urlopen` 不能 patch 模块属性
+mp3_decoder.py 中 _HttpStreamableSource.__init__ 用 `from urllib.request import urlopen`
+局部导入，urlopen 不在 mp3_decoder 模块命名空间。`patch("core.mp3_decoder.urlopen")` 报
+`AttributeError: <module 'core.mp3_decoder'> does not have the attribute 'urlopen'`。
+正确：`patch("urllib.request.urlopen", return_value=fake_resp)`（patch 导入源模块）。
+**教训**：unittest.mock.patch 路径必须匹配实际 import 语句——
+- 模块级 `import urllib.request; urllib.request.urlopen(...)` → `patch("urllib.request.urlopen")`
+- 模块级 `from urllib.request import urlopen; urlopen(...)` → `patch("core.mp3_decoder.urlopen")`（如果模块级 import）
+- 函数内 `from urllib.request import urlopen` → 必须 `patch("urllib.request.urlopen")`，不能 patch 调用方模块
+依据：tests/test_mp3_decoder.py:30/41/52/63/96/113。
+
+## 2026-08-17 设置页 tab 合并（TTS 三合一）
+
+### 1. 【UI 重构】QFormLayout 复用合并 tab：所有 addRow 加到同一 form，_section 视觉分组
+设置页原 8 tab 体验割裂。合并方案：删除独立 `gpt_page`/`aliyun_page` QWidget 创建语句，
+让 `gpt_form = voice_form`、`aliyun_form = voice_form` 直接复用 voice_form。所有 addRow
+按视觉顺序追加到同一 form：voice 通用项 → GPT_SOVITS BACKEND section → ALIYUN BAILIAN TTS section。
+`_section("XXX")` 返回的 QLabel（带左边框样式）充当视觉分组锚点，免新建 widget。**教训**：
+Qt 多 tab 合并的本质是「QFormLayout 复用 + _section 视觉分组」，不需要为每个分区新建
+QWidget/QScrollArea；先合并 form 后再 `tabs.removeTab` 旧 tab 即可。依据：
+ui/settings_dialog.py:120-220（合并后单 tab 内三段 section）。
+
+### 2. 【流程】删 tab 前先 grep 测试引用：settings_dialog 测试可能直接断言 tab 数
+合并 tab 前担心 test_settings_*.py 里 `tabs.count()` 或 `tabs.tabText("GPT-SoVITS")` 断言
+失败。先 `Select-String -Path tests\*.py "tabText|tabText|tabs.count|GPT-SoVITS.*tab|阿里云.*tab"`
+确认无断言后再删。本次合并未破坏既有 settings 测试（test_settings_about/agent/companion）。
+**教训**：UI 结构变更（tab 增删/控件重排）前必须 grep 测试代码对结构的断言，避免运行时
+IndexError/AttributeError；pytest collection 阶段不报错不代表运行时不报错（8-17 教训 2 复用）。
+
+### 3. 【用户偏好】同类型分区合并是 user_profile 已记录的 UI/UX 偏好
+user_profile.md 明确记录「设置页 8 个 tab 合并方案 = TTS 三合一 + 模型二合一」是用户偏好。
+合并 TTS 三合一（GPT-SoVITS + 阿里云 + 通用语音输出）属于直接落地该偏好。模型二合一
+（chat 模型 + vision 模型合并为「模型」tab）是后续工作。**教训**：UI/UX 改动前先查
+user_profile.md，已有的偏好直接落地不重新征求，未记录的偏好用 AskUserQuestion 确认。
+
+### 4. 【git】定向 add 排除无关改动（8-13 教训 5 第六次复用）
+本次工作区有 6 个无关改动（codex_client/backend_router/companion/controller + 3 个对应 test，
+属于"codex 记忆注入 + companion on_finished 回调"另一项工作）+ 大量未追踪调试产物
+（probe4.log/probe4_err.log/scripts/mic_probe.py/AMDS-RE/tait-crt-interface-skill/data/）。
+git add 时严格定向 16 个 TTS 任务文件 + lessons.md，不动其他。**教训**：本项目工作区长期
+有"半成品多任务并行"状态，每次 commit 都用定向 add，commit 纯度是回溯诊断的前提。
+PRD_aliyun_tts.md 已过时（写明不做流式、仅 Qwen3-TTS-VC，与当前 CosyVoice 多引擎实现冲突），
+本次不提交，待后续修订 PRD 时单独提交。
+
+### 5. 【文档】PRD 与实现冲突时优先标记过时而非删除
+PRD_aliyun_tts.md 1.3 非目标写「不做流式合成」「仅 Qwen3-TTS-VC」「不做 CosyVoice」，
+与当前实现（CosyVoice v3.5-flash 默认 + 流式 OSS URL 播放 + 多引擎下拉）正面冲突。
+处理选择：(a) 不入库待后续修订（本次采用）；(b) 一并入库作为历史归档；(c) 当场修订。
+选 (a) 的理由：本次 commit 主题是「TTS 方案照搬」，修订 PRD 是独立工作（需要重新设计
+CosyVoice 多引擎架构图、流式时延预算等），混入会让 commit 主题不纯。**教训**：过时 PRD
+不应删除（承载历史决策上下文），但也不应与冲突的实现混在同一 commit；标记「已过时」
+单独留作后续修订任务，是文档与代码解耦的标准做法。

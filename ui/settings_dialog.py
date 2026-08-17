@@ -1,7 +1,9 @@
 """Application settings with model, voice, input and about tabs."""
 from __future__ import annotations
 
-from PySide6.QtCore import QPoint, Qt
+import threading
+
+from PySide6.QtCore import Q_ARG, QMetaObject, QPoint, Qt, Slot
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QDialog, QDialogButtonBox,
     QFormLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, QScrollArea, QTabWidget,
@@ -96,11 +98,18 @@ class SettingsDialog(QDialog):
         voice_form = QFormLayout(voice_page)
         _tune_form(voice_form)
         voice_form.addRow(_section("VOICE OUTPUT"))
+        from config import TTS_PROVIDER_DEFAULT
+        self.tts_provider = QComboBox()
+        self.tts_provider.addItem("GPT-SoVITS（本地/SSH）", "gpt_sovits")
+        self.tts_provider.addItem("阿里云百炼 Qwen-TTS", "aliyun")
+        idx = self.tts_provider.findData(config.get("tts_provider", TTS_PROVIDER_DEFAULT))
+        self.tts_provider.setCurrentIndex(max(idx, 0))
         self.tts_enabled = QCheckBox("回复后自动朗读日语")
         self.tts_enabled.setChecked(config.get("tts_enabled", True))
         self.tts_rate = QComboBox()
         self.tts_rate.addItems(["慢", "正常", "快"])
         self.tts_rate.setCurrentIndex(config.get("tts_rate", 1))
+        voice_form.addRow("TTS Provider", self.tts_provider)
         voice_form.addRow(self.tts_enabled)
         voice_form.addRow("语速", self.tts_rate)
         tabs.addTab(_scroll_page(voice_page), "语音合成")
@@ -118,13 +127,11 @@ class SettingsDialog(QDialog):
         asr_form.addRow("ASR 模型", self.asr_model)
         tabs.addTab(_scroll_page(asr_page), "语音输入")
 
-        # === GPT-SoVITS 运行模式（本地 / SSH 隧道 / 自动）===
+        # === GPT-SoVITS 运行模式（合并到「语音合成」tab 内）===
         from config import GPT_SOVITS_DEFAULTS
         from core.ssh_config_parser import parse_ssh_config
         from core.ssh_tunnel import SSHTunnel
-        gpt_page = QWidget()
-        gpt_form = QFormLayout(gpt_page)
-        _tune_form(gpt_form)
+        gpt_form = voice_form  # 合并到语音合成 tab：复用 voice_form
         gpt_form.addRow(_section("GPT-SOVITS BACKEND"))
         gpt_cfg = {**GPT_SOVITS_DEFAULTS, **(config.get("gpt_sovits") or {})}
         self.gpt_mode = QComboBox()
@@ -169,7 +176,39 @@ class SettingsDialog(QDialog):
         tunnel_btn.clicked.connect(self._test_tunnel)
         self._tunnel: SSHTunnel | None = None
         gpt_form.addRow(tunnel_btn)
-        tabs.addTab(_scroll_page(gpt_page), "GPT-SoVITS")
+
+        # === 阿里云百炼 TTS（合并到「语音合成」tab 内）===
+        from config import ALIYUN_TTS_DEFAULTS, ALIYUN_TTS_ENGINES
+        aliyun_form = voice_form  # 合并到语音合成 tab：复用 voice_form
+        aliyun_form.addRow(_section("ALIYUN BAILIAN TTS"))
+        aliyun_cfg = {**ALIYUN_TTS_DEFAULTS, **(config.get("aliyun_tts") or {})}
+        self.aliyun_api_key = QLineEdit(str(aliyun_cfg.get("api_key", "")))
+        self.aliyun_api_key.setEchoMode(QLineEdit.Password)
+        aliyun_form.addRow("API Key", self.aliyun_api_key)
+
+        self.aliyun_voice_id = QLineEdit(str(aliyun_cfg.get("voice_id", "")))
+        aliyun_form.addRow("音色 ID", self.aliyun_voice_id)
+
+        self.aliyun_preferred_name = QLineEdit(str(aliyun_cfg.get("preferred_name", "amadeus_kurisu")))
+        aliyun_form.addRow("克隆名称", self.aliyun_preferred_name)
+
+        # 合成引擎（移植 amadeus src/lib/tts.ts:36-42）：CosyVoice v3.5-flash 默认快、Qwen3-TTS-VC 备选
+        self.aliyun_engine = QComboBox()
+        for label, value in ALIYUN_TTS_ENGINES:
+            self.aliyun_engine.addItem(label, value)
+        current_engine = str(aliyun_cfg.get("engine", ALIYUN_TTS_DEFAULTS["engine"]))
+        idx = self.aliyun_engine.findData(current_engine)
+        self.aliyun_engine.setCurrentIndex(max(idx, 0))
+        aliyun_form.addRow("合成引擎", self.aliyun_engine)
+
+        self.aliyun_status = QLabel(
+            "已克隆" if aliyun_cfg.get("voice_cloned") else "未克隆"
+        )
+        self.aliyun_status.setStyleSheet("color:#8a7f63")
+        self.aliyun_status.setWordWrap(True)
+        self.aliyun_clone_btn = QPushButton("一键克隆红莉栖音色")
+        self.aliyun_clone_btn.clicked.connect(self._on_clone_voice)
+        aliyun_form.addRow(self.aliyun_status, self.aliyun_clone_btn)
 
         # === Agent 模式（2026-08-15 agent-mode spec §4.4）===
         from config import AGENT_ROUTER_DEFAULTS, HERMES_DEFAULTS
@@ -488,11 +527,67 @@ class SettingsDialog(QDialog):
             self.gpt_ssh_status.setText(f"✗ 隧道已建立但 API 不可达：{e}（服务器上 GPT-SoVITS 启动了吗？）")
             self.gpt_ssh_status.setStyleSheet("color:#d2738a")
 
+    def _on_clone_voice(self) -> None:
+        api_key = self.aliyun_api_key.text().strip()
+        if not api_key:
+            self.aliyun_status.setText("请先填写 API Key")
+            self.aliyun_status.setStyleSheet("color:#d2738a")
+            return
+        self.aliyun_clone_btn.setEnabled(False)
+        self.aliyun_status.setText("克隆中...")
+        self.aliyun_status.setStyleSheet("color:#c1b492")
+        QApplication.processEvents()
+        preferred_name = self.aliyun_preferred_name.text().strip() or "amadeus_kurisu"
+        # 克隆 target_model 固定 qwen3-tts-vc-2026-01-22（与 engine 解耦，与 amadeus src/app/api/tts/clone/route.ts:88 对齐）
+        model = "qwen3-tts-vc-2026-01-22"
+
+        def worker() -> None:
+            try:
+                from config import ALIYUN_TTS_DEFAULTS, resources_path
+                from core.aliyun_tts_client import AliyunTTS
+
+                cfg = {**ALIYUN_TTS_DEFAULTS, **(load_config().get("aliyun_tts") or {})}
+                ref_audio = resources_path(str(cfg.get("ref_audio", "/voice_sample_clip_v2.wav")))
+                voice_id = AliyunTTS(api_key).clone_voice(
+                    ref_audio,
+                    preferred_name=preferred_name,
+                    target_model=model or str(ALIYUN_TTS_DEFAULTS["model"]),
+                )
+                if voice_id:
+                    QMetaObject.invokeMethod(
+                        self, "_on_clone_done", Qt.QueuedConnection, Q_ARG(str, voice_id)
+                    )
+                else:
+                    QMetaObject.invokeMethod(
+                        self, "_on_clone_failed", Qt.QueuedConnection,
+                        Q_ARG(str, "克隆失败：未返回音色 ID"),
+                    )
+            except Exception as exc:
+                QMetaObject.invokeMethod(
+                    self, "_on_clone_failed", Qt.QueuedConnection, Q_ARG(str, str(exc))
+                )
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    @Slot(str)
+    def _on_clone_done(self, voice_id: str) -> None:
+        self.aliyun_voice_id.setText(voice_id)
+        self.aliyun_status.setText(f"克隆成功：{voice_id}")
+        self.aliyun_status.setStyleSheet("color:#6abf69")
+        self.aliyun_clone_btn.setEnabled(True)
+
+    @Slot(str)
+    def _on_clone_failed(self, message: str) -> None:
+        self.aliyun_status.setText(message)
+        self.aliyun_status.setStyleSheet("color:#d2738a")
+        self.aliyun_clone_btn.setEnabled(True)
+
     def _save(self) -> None:
         config = load_config()
         config.update({
             "endpoint": self.endpoint.text().strip(), "api_key": self.api_key.text().strip(),
             "model": self.model.text().strip(), "tts_enabled": self.tts_enabled.isChecked(),
+            "tts_provider": self.tts_provider.currentData(),
             "tts_rate": self.tts_rate.currentIndex(), "asr_endpoint": self.asr_endpoint.text().strip(),
             "asr_api_key": self.asr_key.text().strip(), "asr_model": self.asr_model.text().strip(),
             "version_check_url": self.version_check_url.text().strip(),
@@ -538,6 +633,19 @@ class SettingsDialog(QDialog):
             "local_port": local_port,
             "remote_port": remote_port,
         }
+        from config import ALIYUN_TTS_DEFAULTS
+        aliyun_cfg = {**ALIYUN_TTS_DEFAULTS, **(config.get("aliyun_tts") or {})}
+        voice_id = self.aliyun_voice_id.text().strip()
+        aliyun_cfg.update({
+            "api_key": self.aliyun_api_key.text().strip(),
+            "voice_id": voice_id,
+            "voice_cloned": bool(voice_id),
+            "preferred_name": self.aliyun_preferred_name.text().strip() or "amadeus_kurisu",
+            "engine": str(self.aliyun_engine.currentData() or ALIYUN_TTS_DEFAULTS["engine"]),
+            # model 字段保留 aliyun_cfg 中的默认值（仅 qwen3-tts-vc 克隆路径用），
+            # 不再暴露为 UI 输入（与 amadeus src/components/Settings.tsx 对齐）
+        })
+        config["aliyun_tts"] = aliyun_cfg
         # 关闭测试隧道（避免留下孤儿进程）
         if self._tunnel is not None:
             self._tunnel.stop()

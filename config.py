@@ -110,6 +110,33 @@ GPT_SOVITS_DEFAULTS: dict[str, object] = {
     "remote_port": 9880,           # 远程 GPT-SoVITS 端口
 }
 
+# === TTS Provider ===
+# gpt_sovits：本地/SSH GPT-SoVITS；aliyun：阿里云百炼 CosyVoice / Qwen3-TTS-VC。
+# 默认 aliyun：与 amadeus 项目对齐，无需本地 GPU，云端合成（amadeus src/lib/tts.ts:81-83）。
+TTS_PROVIDER_DEFAULT = "aliyun"
+
+ALIYUN_TTS_DEFAULTS: dict[str, object] = {
+    "api_key": "",                         # 阿里云百炼 API Key
+    "voice_id": "",                        # 声音复刻后返回的 voice id
+    "voice_cloned": False,
+    "preferred_name": "amadeus_kurisu",
+    "engine": "cosyvoice-v3.5-flash",      # 合成引擎（与 amadeus 默认对齐）：cosyvoice-v3.5-flash / cosyvoice-v3.5-plus / cosyvoice-v3-flash / cosyvoice-v3-plus / qwen3-tts-vc
+    "model": "qwen3-tts-vc-2026-01-22",    # qwen3-tts-vc 路径专用 model id（engine=qwen3-tts-vc 时用）
+    "ref_audio": "/voice_sample_clip_v2.wav",
+    "timeout": 30,
+}
+
+# 阿里云 TTS 引擎枚举（移植 amadeus src/lib/tts.ts:36-42）
+# CosyVoice 系列：v3.5-flash 默认（合成比 plus 快 50%+，音质日常对话几乎无感）
+# Qwen3-TTS-VC：声音复刻合成（需先克隆音色，可作为备选切换）
+ALIYUN_TTS_ENGINES: list[tuple[str, str]] = [
+    ("CosyVoice v3.5 Flash（默认/快）", "cosyvoice-v3.5-flash"),
+    ("CosyVoice v3.5 Plus（高质量/慢）", "cosyvoice-v3.5-plus"),
+    ("CosyVoice v3 Flash", "cosyvoice-v3-flash"),
+    ("CosyVoice v3 Plus", "cosyvoice-v3-plus"),
+    ("Qwen3-TTS-VC（声音复刻合成）", "qwen3-tts-vc"),
+]
+
 # === VAD 参数（移植原项目 amadeus/src/components/VoiceCall.tsx:23-27）===
 # 数学本质：RMS = sqrt(mean(x^2))，信号能量度量。
 # 滞回阈值：START_THRESH > END_THRESH，留缓冲带防边界抖动（单阈值时噪声在阈值附近波动会反复触发）。

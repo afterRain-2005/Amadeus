@@ -4,8 +4,17 @@ from unittest.mock import MagicMock, patch
 
 
 def _make_player():
+    """构造测试用 SpeechPlayer，强制走 gpt_sovits provider。
+
+    config.TTS_PROVIDER_DEFAULT 已改为 "aliyun"（默认走阿里云 TTS），
+    但本测试套件 mock 的是 _check_kurisu/_speak_kurisu，需要强制 gpt_sovits
+    路径才能让 _check_provider_available 调到 _check_kurisu。
+    """
     from core.tts_client import SpeechPlayer
-    return SpeechPlayer()
+    player = SpeechPlayer()
+    # 覆盖实例方法：_get_tts_provider 始终返回 "gpt_sovits"
+    player._get_tts_provider = lambda: "gpt_sovits"
+    return player
 
 
 def test_offline_emits_signal_and_rechecks_after_ttl():
@@ -84,7 +93,10 @@ def test_maybe_start_skips_when_online():
     """API 在线 → 不启动。"""
     from desktop_pet import maybe_start_gpt_sovits
     spawn = MagicMock()
-    with patch("core.gpt_sovits_client.KurisuTTS") as mock_tts:
+    # config.TTS_PROVIDER_DEFAULT=aliyun 时 maybe_start 直接 return False，
+    # 测试需要 gpt_sovits provider 才能走到 KurisuTTS().available 检查
+    with patch("core.storage.load_config", return_value={"tts_provider": "gpt_sovits"}), \
+         patch("core.gpt_sovits_client.KurisuTTS") as mock_tts:
         mock_tts.return_value.available = True
         assert maybe_start_gpt_sovits(spawn=spawn) is False
         spawn.assert_not_called()
@@ -101,7 +113,8 @@ def test_maybe_start_spawns_when_offline(tmp_path):
     (api_dir / "api_v2.py").write_bytes(b"")
 
     spawn = MagicMock()
-    with patch("core.gpt_sovits_client.KurisuTTS") as mock_tts, \
+    with patch("core.storage.load_config", return_value={"tts_provider": "gpt_sovits"}), \
+         patch("core.gpt_sovits_client.KurisuTTS") as mock_tts, \
          patch("desktop_pet.ROOT", tmp_path):
         mock_tts.return_value.available = False
         assert maybe_start_gpt_sovits(spawn=spawn) is True
