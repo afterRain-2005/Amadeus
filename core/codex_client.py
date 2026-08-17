@@ -23,15 +23,51 @@ AGENTS_MD_HEADER = """# Kurisu（牧瀬紅莉栖）— 桌宠人格指令
 
 
 def ensure_agents_md(workspace: Path, soul_md: str, output_format: str) -> Path:
-    """workspace/AGENTS.md 不存在时写入（人设 + 输出格式）。返回其路径。"""
+    """确保 workspace/AGENTS.md 存在人设 + 输出格式，返回其路径。
+
+    仅覆盖本程序自动生成的 AGENTS.md；用户手写内容保留。
+    """
     workspace = Path(workspace)
     workspace.mkdir(parents=True, exist_ok=True)
     path = workspace / "AGENTS.md"
+    content = AGENTS_MD_HEADER + soul_md.strip() + "\n\n---\n\n" + output_format.strip() + "\n"
     if not path.exists():
-        path.write_text(
-            AGENTS_MD_HEADER + soul_md.strip() + "\n\n---\n\n" + output_format.strip() + "\n",
-            encoding="utf-8")
+        path.write_text(content, encoding="utf-8")
+    else:
+        existing = path.read_text(encoding="utf-8", errors="replace")
+        if existing.startswith(AGENTS_MD_HEADER):
+            path.write_text(content, encoding="utf-8")
     return path
+
+
+def build_codex_input(
+    input_text: str,
+    *,
+    conversation_history: list[dict] | None = None,
+    memories: list[dict] | None = None,
+) -> str:
+    """把桌宠本地记忆和最近会话上下文注入 codex 本轮输入。"""
+    blocks: list[str] = []
+    if memories:
+        memory_text = "；".join(
+            str(item.get("content", "")).strip()
+            for item in memories[-8:]
+            if str(item.get("content", "")).strip()
+        )
+        if memory_text:
+            blocks.append(f"【桌宠本地记忆】\n{memory_text}")
+    if conversation_history:
+        lines: list[str] = []
+        for message in conversation_history[-8:]:
+            role = "用户" if message.get("role") == "user" else "红莉栖"
+            content = str(message.get("content", "")).strip()
+            if content:
+                lines.append(f"{role}: {content}")
+        if lines:
+            blocks.append("【最近对话上下文】\n" + "\n".join(lines))
+    if not blocks:
+        return input_text
+    return "\n\n".join(blocks) + "\n\n【本轮用户输入】\n" + input_text
 
 
 def parse_event_line(line: str) -> tuple[str, str] | None:
@@ -70,6 +106,8 @@ def run_codex_turn(
     *,
     input_text: str,
     workspace: Path,
+    conversation_history: list[dict] | None = None,
+    memories: list[dict] | None = None,
     resume: bool = False,
     sandbox: str = "read-only",
     timeout: float = 120.0,
@@ -80,6 +118,12 @@ def run_codex_turn(
     """跑一轮 codex exec，返回最终回复文本。失败抛 RuntimeError。"""
     workspace = Path(workspace)
     out_file = workspace / "codex_last.txt"
+    out_file.unlink(missing_ok=True)
+    input_text = build_codex_input(
+        input_text,
+        conversation_history=conversation_history,
+        memories=memories,
+    )
     argv = [
         "codex", "exec", "--json", "--skip-git-repo-check",
         "-s", sandbox, "-C", str(workspace), "-o", str(out_file),

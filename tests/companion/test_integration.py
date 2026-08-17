@@ -46,6 +46,27 @@ def test_controller_idle_over_15min_triggers_template_and_calls_storage_and_rout
     assert "盯着屏幕发呆" in kwargs["input_text"]
 
 
+def test_controller_calls_finished_callback_with_full_reply():
+    """route_and_send 返回完整回复后，应通知表达层显示气泡。"""
+    ctrl = CompanionController(config={
+        "enabled": True, "frequency": "high", "daily_limit": 30,
+        "quiet_hours": {"start": "23:00", "end": "08:00"},
+        "sensors": {},
+    }, llm_config={"endpoint": "http://x", "api_key": "k", "model": "m"})
+
+    snap = _snap(idle_seconds=1000)
+    on_finished = MagicMock()
+
+    with patch("core.companion.storage.record_greeting", return_value=1), \
+         patch("core.companion.storage.last_greeting_ts", return_value=None), \
+         patch("core.companion.storage.greeting_count_today", return_value=0), \
+         patch("core.backend_router.route_and_send",
+               return_value=("[emotion:smile]\n别盯着屏幕发呆啦\n===\nねえ", "chat")):
+        ctrl.handle_signal(snap, local_hour=14, on_finished=on_finished)
+
+    on_finished.assert_called_once_with("[emotion:smile]\n别盯着屏幕发呆啦\n===\nねえ")
+
+
 def test_controller_scheduler_blocks_in_quiet_hours():
     """静音时段（非 away）不触发。"""
     ctrl = CompanionController(config={

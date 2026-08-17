@@ -9,7 +9,7 @@ import time
 
 import pytest
 
-from core.codex_client import ensure_agents_md, parse_event_line, run_codex_turn
+from core.codex_client import build_codex_input, ensure_agents_md, parse_event_line, run_codex_turn
 
 
 class FakeProc:
@@ -77,6 +77,20 @@ def test_ensure_agents_md(tmp_path):
     assert path.read_text(encoding="utf-8") == "KEEP"
 
 
+def test_build_codex_input_includes_memory_and_history():
+    text = build_codex_input(
+        "问题",
+        memories=[{"content": "我喜欢叉子"}, {"content": "我叫阿尔法"}],
+        conversation_history=[{"role": "user", "content": "上一句"}, {"role": "assistant", "content": "上一个回复"}],
+    )
+    assert "桌宠本地记忆" in text
+    assert "我喜欢叉子" in text
+    assert "最近对话上下文" in text
+    assert "用户: 上一句" in text
+    assert "红莉栖: 上一个回复" in text
+    assert text.endswith("【本轮用户输入】\n问题")
+
+
 def test_run_codex_turn_append_semantics(tmp_path):
     deltas, statuses = [], []
     reply = run_codex_turn(
@@ -88,9 +102,12 @@ def test_run_codex_turn_append_semantics(tmp_path):
 
 
 def test_run_codex_turn_output_file_truth(tmp_path):
-    (tmp_path / "codex_last.txt").write_text("最终答案", encoding="utf-8")
+    def popen(argv, **kw):
+        (tmp_path / "codex_last.txt").write_text("最终答案", encoding="utf-8")
+        return FakeProc(EVENTS)
+
     reply = run_codex_turn(
-        input_text="hi", workspace=tmp_path, popen=lambda a, **k: FakeProc(EVENTS))
+        input_text="hi", workspace=tmp_path, popen=popen)
     assert reply == "最终答案"                  # -o 产物文件是真相兜底
 
 

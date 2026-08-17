@@ -35,7 +35,7 @@ class CompanionController:
 
     def handle_signal(
         self, snapshot: ContextSnapshot, *, local_hour: float,
-        on_delta=None, on_status=None,
+        on_delta=None, on_status=None, on_finished=None,
     ) -> None:
         """传感器信号变化时调用。命中则触发问候。
 
@@ -84,9 +84,14 @@ class CompanionController:
         if decision is None:
             return
         # 触发问候
-        self._speak(decision, on_delta=on_delta, on_status=on_status)
+        self._speak(
+            decision,
+            on_delta=on_delta,
+            on_status=on_status,
+            on_finished=on_finished,
+        )
 
-    def _speak(self, decision, *, on_delta=None, on_status=None) -> None:
+    def _speak(self, decision, *, on_delta=None, on_status=None, on_finished=None) -> None:
         """写入 storage + 调 route_and_send。
 
         on_delta/on_status 回调透传给 route_and_send，由 desktop_pet 注入实际
@@ -97,7 +102,7 @@ class CompanionController:
         from core.backend_router import route_and_send
         inject = KURISU_PROACTIVE_PASS_THROUGH.format(text=decision.text)
         try:
-            route_and_send(
+            reply, _backend = route_and_send(
                 config=self._load_config(),
                 input_text=decision.text,
                 soul_md=self._load_soul_md(),
@@ -109,6 +114,8 @@ class CompanionController:
                 skip_history=True,
                 inject_system_prompt=inject,
             )
+            if on_finished is not None:
+                on_finished(reply)
         except Exception:
             pass  # companion 永不影响主流程
 

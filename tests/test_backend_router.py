@@ -95,12 +95,22 @@ def test_route_codex(monkeypatch, tmp_path):
     import core.codex_client as cc
     monkeypatch.setattr(backend_router, "_codex_session_started", False)
     monkeypatch.setattr(cc, "ensure_agents_md", lambda ws, s, o: ws / "AGENTS.md")
-    monkeypatch.setattr(cc, "run_codex_turn", lambda **kw: "codex 回复")
+    seen = {}
+
+    def fake_turn(**kw):
+        seen.update(kw)
+        return "codex 回复"
+
+    monkeypatch.setattr(cc, "run_codex_turn", fake_turn)
     cfg = _cfg("codex", codex={"workspace": str(tmp_path)})
     reply, backend = backend_router.route_and_send(
-        config=cfg, input_text="hi", soul_md="soul")
+        config=cfg, input_text="hi", soul_md="soul",
+        conversation_history=[{"role": "user", "content": "旧问题"}],
+        memories=[{"content": "记忆A"}])
     assert (reply, backend) == ("codex 回复", "codex")
     assert backend_router._codex_session_started is True
+    assert seen["conversation_history"][0]["content"] == "旧问题"
+    assert seen["memories"][0]["content"] == "记忆A"
 
 
 def test_route_auto_uses_classify(monkeypatch):

@@ -24,6 +24,7 @@ a = Analysis(
         'pywebview.platforms.edgechromium',
         'ddgs', 'trafilatura', 'mss',
         'miniaudio',  # 阿里云 TTS 流式 MP3 解码（core/mp3_decoder.py 函数内动态 import，PyInstaller 静态分析漏抓）
+        'markdown', 'markdown.extensions.fenced_code', 'markdown.extensions.tables', 'markdown.extensions.nl2br',  # 终端 markdown 渲染（extensions 动态 import）
     ],
     hookspath=[],
     hooksconfig={},

@@ -396,12 +396,68 @@ def _ensure_dither_texture() -> None:
         pass
 
 
+# ==== CRT 终端 HTML 构建（fauux 令牌：rose #d2738a / cream #c1b492 / b=rose）====
+
+_TERMINAL_ROSE = "#d2738a"
+_TERMINAL_CREAM = "#c1b492"
+_TERMINAL_DIM = "#8a7f63"
+_TERMINAL_PROMPT = "guest@wired:~$"
+
+
+def _render_markdown(text: str) -> str:
+    """把 LLM 回复渲染成 HTML（markdown 支持）。markdown 库缺失时退化为纯文本。"""
+    try:
+        import markdown
+        rendered = markdown.markdown(text, extensions=["fenced_code", "tables", "nl2br"], output_format="html5")
+    except ImportError:
+        return html.escape(text).replace("\n", "<br>")
+    # 单段落时去掉 <p> 包装，保持与 kurisu> 前缀同行
+    if rendered.startswith("<p>") and rendered.endswith("</p>") and rendered.count("<p>") == 1:
+        rendered = rendered[3:-4]
+    return rendered
+
+
+def _build_terminal_line_html(kind: str, text: str) -> str:
+    """单行终端 HTML。kind: cmd=用户命令 / out=kurisu 输出 / err=错误 / sys=分隔信息。"""
+    safe = html.escape(text).replace("\n", "<br>")
+    if kind == "cmd":
+        return (
+            f"<div style='margin:2px 0'><span style='color:{_TERMINAL_ROSE}'>"
+            f"{_TERMINAL_PROMPT}</span> <span style='color:{_TERMINAL_CREAM}'>{safe}</span></div>"
+        )
+    if kind == "out":
+        rendered = _render_markdown(text)
+        # 块级 markdown（代码块/列表/标题/多段落）用 div 包裹，前缀独立一行；否则同行
+        if any(tag in rendered for tag in ("<pre", "<ul", "<ol", "<h1", "<h2", "<h3", "<h4", "<h5", "<h6", "<blockquote", "<table", "<p>")):
+            return (
+                f"<div style='margin:2px 0'><span style='color:{_TERMINAL_ROSE}'>kurisu&gt;</span></div>"
+                f"<div style='color:{_TERMINAL_CREAM}'>{rendered}</div>"
+            )
+        return (
+            f"<div style='margin:2px 0'><span style='color:{_TERMINAL_ROSE}'>kurisu&gt;</span> "
+            f"<span style='color:{_TERMINAL_CREAM}'>{rendered}</span></div>"
+        )
+    if kind == "err":
+        return f"<div style='margin:2px 0;color:{_TERMINAL_ROSE}'>! {safe}</div>"
+    return f"<div style='margin:2px 0;color:{_TERMINAL_DIM}'>{safe}</div>"
+
+
+def _build_terminal_html(lines: list) -> str:
+    """终端完整 HTML（QTextBrowser 用，自动滚底）。"""
+    parts = [
+        f"<div style='color:{_TERMINAL_DIM};font-size:9px'>║▒░ amadeus shell — wired session</div>",
+        f"<div style='border-top:1px solid {_TERMINAL_ROSE};margin:2px 0 6px 0'></div>",
+    ]
+    parts.extend(_build_terminal_line_html(kind, text) for kind, text in lines)
+    return "".join(parts)
+
+
 def run_overlay(connection: Connection, renderer: mp.Process) -> int:
     from PySide6.QtCore import QByteArray, QEasingCurve, QObject, QPoint, QPropertyAnimation, QRect, QRectF, QRunnable, Qt, QThreadPool, QTimer, Signal
     from PySide6.QtGui import QColor, QIcon, QImage, QKeyEvent, QLinearGradient, QMouseEvent, QPainter, QPixmap
     from PySide6.QtSvg import QSvgRenderer
     from PySide6.QtWidgets import (
-                QApplication, QHBoxLayout, QLabel, QLineEdit, QMenu, QMessageBox,
+                QApplication, QDialog, QHBoxLayout, QLabel, QLineEdit, QMenu, QMessageBox,
                 QPushButton, QSystemTrayIcon, QTextBrowser, QVBoxLayout, QWidget,
                 QGraphicsOpacityEffect,
             )
@@ -539,7 +595,7 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
                 ("phone", "电话", False),
                 ("pin", "固定", False),
                 ("settings", "设置", False),
-                ("history", "记录", False),
+                ("history", "终端", False),
                 ("close", "退出", True),
             ]
             for icon_name, tooltip, is_danger in specs:
@@ -590,7 +646,7 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             self.history.setStyleSheet(
                 "QTextBrowser{background-color:#171114;background-image:url(" + _dither_texture_url() + ");"
                 "color:#c1b492;border:1px solid #d2738a;"
-                "border-radius:0px;padding:8px;font:13px 'Times New Roman','SimSun'}"
+                "border-radius:0px;padding:8px;font:13px 'Consolas','Microsoft YaHei'}"
                 "QScrollBar:vertical{background:rgba(210,115,138,0.15);width:6px;margin:4px}"
                 "QScrollBar::handle:vertical{background:#d2738a;border-radius:0px;min-height:30px}"
                 "QScrollBar::add-line:vertical,QScrollBar::sub-line:vertical{height:0}"
@@ -636,6 +692,162 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             anim.start()
             self._slide_anim = anim
 
+    class AgentTerminal(QDialog):
+        """独立 CRT 命令行 agent 窗口（fauux 风格，类 Codex CLI）。
+
+        与 SettingsDialog 同级的独立窗口。设计令牌取自
+        fauux.neocities.org/stylesheet.css 实测：rose #d2738a 强调 /
+        cream #c1b492 正文 / Times 衬线 / ⌈⌉ 角括号 / ║▒░ 分隔符 /
+        blink 光标 / wiredB text-shadow rose 1px 4px 5px 辉光。
+        """
+        submitted = Signal(str)
+
+        def __init__(self, parent=None):
+            super().__init__(parent)
+            self.setWindowTitle("Amadeus")
+            self.setWindowFlags(Qt.FramelessWindowHint | Qt.Dialog)
+            self.setObjectName("agentTerminal")
+            self.setStyleSheet(
+                "QDialog#agentTerminal{background-color:#171114;border:1px solid #d2738a;}"
+            )
+            self.setMinimumSize(520, 360)
+            self.resize(640, 460)
+            self._lines: list = []
+            layout = QVBoxLayout(self)
+            layout.setContentsMargins(12, 10, 12, 10)
+            layout.setSpacing(6)
+
+            # 标题栏：⌈⌉ 角括号 + rose 辉光（wiredB 动画的静态近似）+ 关闭按钮
+            title_row = QHBoxLayout()
+            title_row.setSpacing(6)
+            title_row.addStretch()
+            self.title = QLabel("⌈ Amadeus ⌋", self)
+            self.title.setStyleSheet(
+                f"color:{_TERMINAL_ROSE};background:transparent;"
+                "font:13px 'Consolas','Microsoft YaHei'"
+            )
+            self.title.setAlignment(Qt.AlignCenter)
+            from PySide6.QtWidgets import QGraphicsDropShadowEffect
+            glow = QGraphicsDropShadowEffect(self)
+            glow.setColor(QColor(210, 115, 138, 200))
+            glow.setBlurRadius(12)
+            glow.setOffset(1, 4)  # 对应 CSS text-shadow #d2738a 1px 4px 5px
+            self.title.setGraphicsEffect(glow)
+            title_row.addWidget(self.title)
+            title_row.addStretch()
+            self.close_btn = QPushButton("X", self)
+            self.close_btn.setFixedSize(24, 22)
+            self.close_btn.setCursor(Qt.PointingHandCursor)
+            self.close_btn.setStyleSheet(
+                f"QPushButton{{background:#171114;color:{_TERMINAL_ROSE};"
+                f"border:1px solid {_TERMINAL_ROSE};padding:0;"
+                "font:700 13px 'Consolas','Microsoft YaHei'}}"
+                f"QPushButton:hover{{background:{_TERMINAL_ROSE};color:#171114}}"
+            )
+            self.close_btn.clicked.connect(self.close)
+            title_row.addWidget(self.close_btn)
+            layout.addLayout(title_row)
+
+            # 日志区（主体）
+            self.log = QTextBrowser(self)
+            self.log.setStyleSheet(
+                "QTextBrowser{background-color:#171114;background-image:url(" + _dither_texture_url() + ");"
+                f"color:{_TERMINAL_CREAM};border:1px solid {_TERMINAL_ROSE};"
+                "border-radius:0px;padding:8px;font:13px 'Consolas','Microsoft YaHei'}"
+                f"QScrollBar:vertical{{background:rgba(210,115,138,0.15);width:6px;margin:4px}}"
+                f"QScrollBar::handle:vertical{{background:{_TERMINAL_ROSE};border-radius:0px;min-height:30px}}"
+                "QScrollBar::add-line:vertical,QScrollBar::sub-line:vertical{height:0}"
+                "QScrollBar::add-page:vertical,QScrollBar::sub-page:vertical{background:transparent}"
+            )
+            self.log.setOpenExternalLinks(False)
+            layout.addWidget(self.log, 1)
+
+            # 输入行：rose 提示符 + 输入框 + 闪烁块光标（下边框式）
+            input_row = QHBoxLayout()
+            input_row.setSpacing(6)
+            prompt = QLabel(_TERMINAL_PROMPT, self)
+            prompt.setStyleSheet(
+                f"color:{_TERMINAL_ROSE};background:transparent;font:13px 'Consolas','Microsoft YaHei'"
+            )
+            self.input = QLineEdit(self)
+            self.input.setStyleSheet(
+                "QLineEdit{background:transparent;color:#c1b492;border:0;border-bottom:1px solid #d2738a;"
+                "padding:4px 2px;font:13px 'Consolas','Microsoft YaHei'}"
+                "QLineEdit::placeholder{color:#8a7f63}"
+            )
+            self.input.setPlaceholderText("say something to kurisu…")
+            self.input.returnPressed.connect(self._submit)
+            self.cursor = QLabel("█", self)
+            self.cursor.setStyleSheet(
+                f"color:{_TERMINAL_CREAM};background:transparent;font:13px 'Consolas','Microsoft YaHei'"
+            )
+            input_row.addWidget(prompt)
+            input_row.addWidget(self.input, 1)
+            input_row.addWidget(self.cursor)
+            layout.addLayout(input_row)
+
+            # blink 光标：530ms 切换可见性（近似 CSS blink 50%→黑=隐没于黑底）
+            self._blink_timer = QTimer(self)
+            self._blink_timer.setInterval(530)
+            self._blink_timer.timeout.connect(lambda: self.cursor.setVisible(not self.cursor.isVisible()))
+            self._blink_timer.start()
+
+            # CRT 屏幕闪烁：整个窗口 opacity 轻微波动（参考 fauux 的 CRT 刷新感）
+            self._flicker_effect = QGraphicsOpacityEffect(self)
+            self._flicker_effect.setOpacity(1.0)
+            self.setGraphicsEffect(self._flicker_effect)
+            self._flicker_timer = QTimer(self)
+            self._flicker_timer.setInterval(70)
+            self._flicker_timer.timeout.connect(self._flicker)
+            self._flicker_timer.start()
+
+        def resizeEvent(self, event) -> None:
+            super().resizeEvent(event)
+            # 终端固定在主窗口左侧：尺寸变化时通知主窗口重新定位
+            p = self.parentWidget()
+            if p is not None and hasattr(p, "_position_terminal"):
+                p._position_terminal()
+
+        def _flicker(self) -> None:
+            import random
+            # 0.98~1.0 之间微调 opacity，模拟老式 CRT 屏幕的轻微闪烁
+            self._flicker_effect.setOpacity(0.98 + 0.02 * random.random())
+
+        def keyPressEvent(self, event) -> None:
+            if event.modifiers() & Qt.ControlModifier:
+                if event.key() in (Qt.Key_Plus, Qt.Key_Equal):
+                    self.log.zoomIn(1)
+                    event.accept()
+                    return
+                if event.key() == Qt.Key_Minus:
+                    self.log.zoomOut(1)
+                    event.accept()
+                    return
+            super().keyPressEvent(event)
+
+        def _submit(self) -> None:
+            text = self.input.text().strip()
+            if text:
+                self.submitted.emit(text)
+                self.input.clear()
+
+        def render_lines(self, lines: list) -> None:
+            self._lines = lines
+            self.log.setHtml(
+                "<html><body style='margin:0;background:transparent'>"
+                + _build_terminal_html(lines)
+                + "</body></html>"
+            )
+            # setHtml 后滚动条最大值尚未更新，需在事件循环空闲后再滚到底部
+            QTimer.singleShot(0, self._scroll_to_bottom)
+
+        def _scroll_to_bottom(self) -> None:
+            sb = self.log.verticalScrollBar()
+            sb.setValue(sb.maximum())
+
+        def set_busy(self, busy: bool) -> None:
+            self.input.setDisabled(busy)
+
     class PetWindow(QWidget):
         def __init__(self) -> None:
             super().__init__()
@@ -647,6 +859,8 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             self._hotkey_down = False
             self._csa_down = False
             self._history_expanded = False
+            self.terminal = None  # AgentTerminal 独立窗口，懒创建
+            self._term_lines: list = []
             self._zoom = 0.9
             self._pinned = False
             self._bubble_segments: list[str] = []
@@ -737,7 +951,7 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             self.dock_bar.button("对话").clicked.connect(self._toggle_input_panel)
             self.dock_bar.button("固定").clicked.connect(self._toggle_pin)
             self.dock_bar.button("设置").clicked.connect(lambda: SettingsDialog(self).exec())
-            self.dock_bar.button("记录").clicked.connect(self._toggle_history)
+            self.dock_bar.button("终端").clicked.connect(self._toggle_terminal)
             self.dock_bar.button("退出").clicked.connect(QApplication.quit)
             self.dock_bar.button("电话").clicked.connect(self._toggle_call)
             self.dock_bar.show()
@@ -1130,6 +1344,67 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
                 self.history_drawer.slide_out()
                 QTimer.singleShot(300, self.history_drawer.hide)
 
+        def _terminal_session_lines(self) -> list:
+            """当前会话消息 → 终端行（cmd=用户 / out=kurisu 中文）。"""
+            lines = []
+            for message in active_session(self._state)["messages"]:
+                if message["role"] == "assistant":
+                    chinese = parse_reply(message["content"]).chinese
+                    if chinese.strip():
+                        lines.append(("out", chinese))
+                else:
+                    lines.append(("cmd", message["content"]))
+            return lines
+
+        def _position_terminal(self) -> None:
+            """终端固定在主窗口左侧，随主窗口移动，不能主动拖动。"""
+            if self.terminal is None or not self.terminal.isVisible():
+                return
+            gap = 8
+            x = self.x() - self.terminal.width() - gap
+            y = self.y() + (self.height() - self.terminal.height()) // 2
+            screen = QApplication.primaryScreen().availableGeometry()
+            x = max(x, screen.left())
+            y = max(y, screen.top())
+            self.terminal.move(x, y)
+
+        def moveEvent(self, event) -> None:
+            super().moveEvent(event)
+            self._position_terminal()
+
+        def _terminal_active(self) -> bool:
+            return self.terminal is not None and self.terminal.isVisible()
+
+        def _toggle_terminal(self) -> None:
+            """Dock 终端按钮：打开/关闭独立 CRT 终端窗口。"""
+            if self._terminal_active():
+                self.terminal.close()
+                return
+            if self.terminal is None:
+                self.terminal = AgentTerminal(self)
+                self.terminal.submitted.connect(self._terminal_send)
+            if not self._term_lines:
+                self._term_lines = self._terminal_session_lines()
+            self.terminal.render_lines(self._term_lines)
+            self.terminal.show()
+            self._position_terminal()
+            self.terminal.raise_()
+            self.terminal.activateWindow()
+            self.terminal.input.setFocus()
+
+        def _terminal_send(self, text: str) -> None:
+            """终端提交：复用气泡发送管线（不显示气泡，输出回显到终端）。"""
+            if self._busy:
+                return
+            config = load_config()
+            if not all(config.get(key) for key in ("endpoint", "api_key", "model")):
+                SettingsDialog(self).exec()
+                return
+            self._term_lines.append(("cmd", text))
+            self._term_lines.append(("out", "▌"))
+            self.terminal.render_lines(self._term_lines)
+            self._send_text(text, show_bubble=False)
+
         def _hide_input_or_noop(self) -> None:
             """Escape 键：收起输入面板（若已展开），Dock 淡入恢复。"""
             if self.input_panel.isVisible() and self._input_opacity.opacity() > 0.5:
@@ -1168,19 +1443,27 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             text = self.input.text().strip()
             if not text or self._busy:
                 return
+            self._send_text(text)
+
+        def _send_text(self, text: str, show_bubble: bool = True) -> None:
+            """发送核心：气泡与终端共用（终端模式不显示气泡，回显走终端）。"""
             config = load_config()
             if not all(config.get(key) for key in ("endpoint", "api_key", "model")):
                 SettingsDialog(self).exec()
                 return
             self.input.clear()
             self._cancel_bubbles()
-            self.reply_bubble.show()
+            if show_bubble:
+                self.reply_bubble.show()
             session = active_session(self._state)
             add_message(session, "user", text)
             instant = _decide_send_instant_action()
-            self._show_thinking_dots()
+            if show_bubble:
+                self._show_thinking_dots()
             self._send_emotion(instant["emotion"])
             self._busy = True
+            if self.terminal is not None:
+                self.terminal.set_busy(True)
             self._streamed_reply = ""
             # 流式 TTS 状态：_stream_sep_count 记录已遇到的 === 数（奇数=日语段，偶数=中文段）
             # _stream_tts_started 标记是否已启动 speak_streaming_start（避免重复启动）
@@ -1227,15 +1510,20 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             request["event"].set()
 
         def _show_status(self, text: str) -> None:
-            if not self._history_expanded:
+            if not self._history_expanded and not self._terminal_active():
                 self.reply_bubble.show()
-            self._set_bubble_text(self._latest_line(text))
+                self._set_bubble_text(self._latest_line(text))
 
         def _agent_delta(self, text: str) -> None:
             new_streamed, should_show_thinking, should_set_bubble_text = _decide_delta_action(
-                self._streamed_reply, text, self._history_expanded
+                self._streamed_reply, text, self._history_expanded or self._terminal_active()
             )
             self._streamed_reply = new_streamed
+            if self._terminal_active() and self._term_lines:
+                # 终端模式：流式中文实时回显到最后一行 out
+                chinese = parse_reply(self._streamed_reply).chinese
+                self._term_lines[-1] = ("out", chinese if chinese.strip() else "▌")
+                self.terminal.render_lines(self._term_lines)
             if should_set_bubble_text:
                 self._set_bubble_text(self._streamed_reply)
             if should_show_thinking:
@@ -1332,7 +1620,12 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
                 )
             self._stream_sep_count = 0
             self._stream_tts_started = False
-            if not self._history_expanded:
+            if self.terminal is not None:
+                self.terminal.set_busy(False)
+            if self._terminal_active() and self._term_lines:
+                self._term_lines[-1] = ("out", parse_reply(reply).chinese)
+                self.terminal.render_lines(self._term_lines)
+            if not self._history_expanded and not self._terminal_active():
                 # 分层气泡需要完整中文做分段展示，_latest_line 的 105 字截断会丢段
                 self._show_layered_bubbles(parse_reply(reply).chinese)
 
@@ -1341,9 +1634,15 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
                 self.reply_bubble.hide()
 
         def _agent_failed(self, error: str) -> None:
-            self._set_bubble_text(self._latest_line(f"任务失败：{error}"))
             self._busy = False
             self._streamed_reply = ""
+            if self.terminal is not None:
+                self.terminal.set_busy(False)
+            if self._terminal_active() and self._term_lines:
+                self._term_lines[-1] = ("err", f"任务失败：{error}")
+                self.terminal.render_lines(self._term_lines)
+            else:
+                self._set_bubble_text(self._latest_line(f"任务失败：{error}"))
             self.send_button.setDisabled(False)
             send_command(emotion="angry")
 

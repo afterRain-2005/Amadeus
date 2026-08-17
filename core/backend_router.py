@@ -157,6 +157,7 @@ def route_and_send(
         ensure_agents_md(workspace, soul_md, KURISU_OUTPUT_FORMAT)
         reply = run_codex_turn(
             input_text=input_text, workspace=workspace,
+            conversation_history=conversation_history, memories=memories,
             resume=_codex_session_started,
             sandbox=str(codex_cfg.get("sandbox", "read-only")),
             timeout=float(codex_cfg.get("timeout", 120)),

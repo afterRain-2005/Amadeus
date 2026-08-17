@@ -74,6 +74,8 @@ class SettingsDialog(QDialog):
         super().__init__(parent)
         self.setObjectName("settingsDialog")
         self.setWindowTitle("Amadeus 设置")
+        self.setWindowFlags(Qt.FramelessWindowHint | Qt.Dialog)
+        self._drag_pos = QPoint()
         self.setMinimumSize(680, 500)
         self.resize(760, 560)
         self.setStyleSheet(CRT_QSS)

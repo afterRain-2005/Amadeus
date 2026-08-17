@@ -6,6 +6,7 @@ pywebview>=6.0
 pywin32>=306
 sounddevice>=0.5
 miniaudio>=1.59
+markdown>=3.0
 pytest>=8.0
 ddgs>=4.0
 trafilatura>=1.12
