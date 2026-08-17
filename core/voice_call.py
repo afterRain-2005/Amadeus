@@ -79,8 +79,11 @@ class VoiceCallController(QObject):
         from core.tts_client import SpeechPlayer
         self._tts = SpeechPlayer(self)
         self._tts.speaking_changed.connect(self._on_tts_speaking_changed)
-        # 流式 LLM/TTS 状态：照搬 desktop_pet._agent_delta 的 === 分隔符检测
-        self._stream_japanese_started = False
+        # 流式 LLM/TTS 状态：=== 计数器奇偶判断（与 desktop_pet._agent_delta 对齐）
+        # _stream_sep_count 记录已遇 === 数（奇数=日语段，偶数=中文段）
+        # _stream_tts_started 标记是否已启动 speak_streaming_start
+        self._stream_sep_count = 0
+        self._stream_tts_started = False
         self._streamed_reply = ""
 
     # ===== 属性 =====
@@ -265,8 +268,9 @@ class VoiceCallController(QObject):
             self._last_user_message = user_msg
             self.subtitle.emit("思考中…")
 
-            # 重置流式 TTS 状态：照搬 desktop_pet._agent_delta 的 === 检测
-            self._stream_japanese_started = False
+            # 重置流式 TTS 状态：与 desktop_pet._agent_delta 的 === 计数器对齐
+            self._stream_sep_count = 0
+            self._stream_tts_started = False
             self._streamed_reply = ""
 
             reply = self._stream_llm(user_msg)
@@ -276,7 +280,7 @@ class VoiceCallController(QObject):
                 return
 
             # TTS 收尾
-            if self._stream_japanese_started:
+            if self._stream_tts_started:
                 # 流式 TTS 会话结束：刷新剩余缓冲，speaking_changed(False) → 回 listening
                 self._tts.speak_streaming_end()
             else:
@@ -298,7 +302,7 @@ class VoiceCallController(QObject):
         except Exception as exc:
             self.error.emit(f"处理失败：{exc}")
             # 停止可能悬挂的流式 TTS（已启动 speak_streaming_start 但中途失败）
-            if self._stream_japanese_started:
+            if self._stream_tts_started:
                 self._tts.stop()
             self._set_phase("listening")
             self.subtitle.emit("聆听中，请说话")
@@ -332,42 +336,64 @@ class VoiceCallController(QObject):
         return content.strip()
 
     def _on_llm_delta(self, delta: str) -> None:
-        """LLM 流式 delta 回调：照搬 desktop_pet._agent_delta 的流式 TTS 触发。
+        """LLM 流式 delta 回调：[emotion:xxx] + === 双重切段（修复多段 LLM 输出 bug）。
 
-        与 desktop_pet.py:1232-1250 完全对齐：
+        与 desktop_pet._agent_delta 完全对齐：
         1. 累积 delta 到 _streamed_reply
-        2. 检测首次 === 分隔符：
-           - 启动 speak_streaming_start 会话
-           - 切换 phase 到 speaking（VAD 保持暂停，避免麦克风拾取自身语音）
-           - 提取 === 之后的日语部分追加到 TTS
-        3. 后续 delta 已在日语段，去掉可能残留的 === 后增量追加
+        2. 先按 [emotion:xxx] 切分：每个 emotion 标签视为新回复开始，重置 sep_count=0
+        3. 再按 === 切分：每遇 === 切段，sep_count += 1
+        4. 奇数段（1,3,5...）= 日语段 → 追加 TTS
+        5. 偶数段（0,2,4...）= 中文段 → 跳过
 
-        物理意义：LLM 生成与 TTS 合成是 producer-consumer 关系。LLM 生成第一句日语
-        时立即启动 TTS，TTS 合成线程与 LLM 生成线程并行。相比"等 LLM 全部完成再合成"，
-        首句语音延迟从「LLM 总时长 + TTS 合成」降到「LLM 首句时长 + TTS 合成」。
+        修复 bug：LLM 输出 75% 概率为「中文1 === 日语1 \\n\\n [emotion:xxx]中文2 === 日语2」
+        多段格式，段间用空行 + [emotion:xxx] 标签分隔（非 ===）。原版只按 === 切段会把
+        「日语1 + 中文2」整体当日语段送 TTS，导致中文被日语 TTS 引擎读出。
+
+        物理意义：[emotion:xxx] 是 LLM 标记的新回复边界，=== 是回复内部的中日分界。
+        双重切段才能正确识别多段输出中的日语段。
         """
         if not delta:
             return
         self._streamed_reply += delta
-        if not self._stream_japanese_started:
-            if "===" in self._streamed_reply:
-                self._stream_japanese_started = True
-                # 启动流式 TTS 会话（默认 text_lang="ja"）
+        # 先按 [emotion:xxx] 切分（保留分隔符）
+        import re
+        emotion_parts = re.split(r"(\[emotion:(?:neutral|blush|angry|smile|sad)\])", delta)
+        for part in emotion_parts:
+            if not part:
+                continue
+            if part.startswith("[emotion:"):
+                # emotion 标签：新回复开始，重置 sep_count
+                self._stream_sep_count = 0
+                continue
+            # part 是 emotion 标签之间的内容，按 === 切分
+            sep_parts = part.split("===")
+            if len(sep_parts) == 1:
+                self._append_tts_segment(sep_parts[0])
+            else:
+                self._append_tts_segment(sep_parts[0])
+                for j in range(1, len(sep_parts)):
+                    self._stream_sep_count += 1
+                    seg = sep_parts[j].lstrip("=\r\n")
+                    self._append_tts_segment(seg)
+
+    def _append_tts_segment(self, text: str) -> None:
+        """按当前 === 段奇偶决定是否追加 TTS。
+
+        奇数段（_stream_sep_count 为 1,3,5...）是日语段，追加到 TTS；
+        首次进入日语段时启动 speak_streaming_start + 切 phase 到 speaking（半双工）。
+        偶数段（0,2,4...）是中文段，跳过。
+        text 为空时也启动 TTS（标记进入日语段），但不追加 append。
+        """
+        if self._stream_sep_count % 2 == 1:
+            # 当前在日语段，首次进入时启动流式 TTS 会话
+            if not self._stream_tts_started:
                 self._tts.speak_streaming_start(text_lang="ja")
+                self._stream_tts_started = True
                 # phase 切到 speaking（VAD 保持暂停，半双工）
                 self._set_phase("speaking")
                 self.subtitle.emit(f"{self._character.name} 正在说话…")
-                # 提取 === 之后的日语部分追加
-                jp_part = self._streamed_reply.split("===", 1)[1].lstrip("=\r\n").strip()
-                if jp_part:
-                    self._tts.speak_streaming_append(jp_part)
-        else:
-            # 已在日语段，增量追加（去掉可能残留的 ===）
-            t = delta
-            if "===" in t:
-                t = t.split("===", 1)[-1].lstrip("=\r\n")
-            if t:
-                self._tts.speak_streaming_append(t)
+            if text:
+                self._tts.speak_streaming_append(text)
 
     def _on_tts_speaking_changed(self, speaking: bool) -> None:
         """TTS 播放状态变化：speaking=False 时回 listening（半双工恢复）。"""

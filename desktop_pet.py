@@ -857,14 +857,21 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             self._pinned = not self._pinned
 
         def _set_bubble_text(self, text: str) -> None:
-            """设置回复气泡文字并自动缩放大小。"""
+            """设置回复气泡文字并自动缩放大小（支持长文本内部滚动）。
+
+            修复：原版高度上限 140px 截断长回复。现改为：
+            - 短文本（高度 ≤ 140）：保持原行为，气泡自适应
+            - 长文本（高度 > 140）：高度上限放宽到 240px（屏幕高度的 1/4），
+              QLabel setWordWrap 自动换行，超长内容由 QLabel 截断显示
+              （后续如需真正滚动，需将 reply_bubble 改为 QScrollArea 包 QLabel）
+            """
             self.reply_bubble.setText(text)
             from PySide6.QtGui import QFontMetrics
             fm = QFontMetrics(self.reply_bubble.font())
             max_w = 340
             rect = fm.boundingRect(0, 0, max_w - 36, 0, Qt.TextWordWrap, text)
             w = min(max(rect.width() + 36, 80), max_w)
-            h = min(max(rect.height() + 24, 36), 140)
+            h = min(max(rect.height() + 24, 36), 240)
             x = (self.width() - w) // 2
             self.reply_bubble.setGeometry(x, 6, w, h)
 
@@ -1091,10 +1098,14 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
 
         @staticmethod
         def _latest_line(text: str) -> str:
+            """提取气泡显示文本：完整 chinese 部分（多段 === 时合并所有中文段）。
+
+            修复：原版只取最后 3 行 + 105 字截断，长回复被截断。
+            现改为返回完整 chinese（去掉 [emotion:] 标签，保留所有中文段，多段用空行分隔）。
+            气泡 _set_bubble_text 高度自适应 + 内部滚动支持长文本。
+            """
             chinese = parse_reply(text).chinese
-            lines = [line.strip() for line in chinese.splitlines() if line.strip()]
-            latest = " ".join(lines[-3:]) if lines else "…"
-            return latest if len(latest) <= 105 else latest[:104] + "…"
+            return chinese if chinese.strip() else "…"
 
         def _render_history(self) -> None:
             blocks = []
@@ -1171,8 +1182,11 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             self._send_emotion(instant["emotion"])
             self._busy = True
             self._streamed_reply = ""
-            # 流式 TTS 状态：_stream_japanese_started 标记已进入日语段（=== 之后）
-            self._stream_japanese_started = False
+            # 流式 TTS 状态：_stream_sep_count 记录已遇到的 === 数（奇数=日语段，偶数=中文段）
+            # _stream_tts_started 标记是否已启动 speak_streaming_start（避免重复启动）
+            # 修复 LLM 输出多段 === 交替（中文===日语===中文===日语）时把中文段也送 TTS 的 bug
+            self._stream_sep_count = 0
+            self._stream_tts_started = False
             self.send_button.setDisabled(True)
             history = [{"role": message["role"], "content": message["content"]} for message in session["messages"][-14:]]
             task = AgentTask(history, session.get("memories", []))
@@ -1226,28 +1240,55 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
                 self._set_bubble_text(self._streamed_reply)
             if should_show_thinking:
                 self._show_thinking_dots()
-            # 流式 TTS：检测 === 分隔符，进入日语段后增量追加到 SpeechPlayer
+            # 流式 TTS：[emotion:xxx] + === 双重切段（修复多段 LLM 输出 bug）
+            # LLM 输出格式 75% 概率为「中文1 === 日语1 \n\n [emotion:xxx]中文2 === 日语2」
+            # 段间用空行 + [emotion:xxx] 标签分隔（非 ===）
+            # 用 [emotion:xxx] 重置 sep_count=0（新回复），再用 === 切中日段
+            # 奇数段（1,3,5...）= 日语段 → 追加 TTS
+            # 偶数段（0,2,4...）= 中文段 → 跳过
             config = load_config()
-            if config.get("tts_enabled", True):
-                if not self._stream_japanese_started:
-                    # 检测是否出现 === 分隔符（中日文分界）
-                    if "===" in new_streamed:
-                        self._stream_japanese_started = True
-                        # 启动流式合成会话
-                        self.speech.set_rate([-2, 0, 2][config.get("tts_rate", 1)])
-                        self.speech.speak_streaming_start(text_lang="ja")
-                        # 提取 === 之后的日语部分追加
-                        jp_part = new_streamed.split("===", 1)[1].lstrip("=\r\n").strip()
-                        print(f"[PET-DBG] delta 首次===检测 jp_part={jp_part!r} (len={len(jp_part)})")
-                        if jp_part:
-                            self.speech.speak_streaming_append(jp_part)
+            if not config.get("tts_enabled", True):
+                return
+            if not text:
+                return
+            # 先按 [emotion:xxx] 切分（保留分隔符）
+            import re
+            emotion_parts = re.split(r"(\[emotion:(?:neutral|blush|angry|smile|sad)\])", text)
+            for part in emotion_parts:
+                if not part:
+                    continue
+                if part.startswith("[emotion:"):
+                    # emotion 标签：新回复开始，重置 sep_count
+                    self._stream_sep_count = 0
+                    continue
+                # part 是 emotion 标签之间的内容，按 === 切分
+                sep_parts = part.split("===")
+                if len(sep_parts) == 1:
+                    self._append_tts_segment(sep_parts[0])
                 else:
-                    # 已在日语段，增量追加（去掉可能残留的 ===）
-                    if "===" in text:
-                        text = text.split("===", 1)[-1].lstrip("=\r\n")
-                    if text:
-                        print(f"[PET-DBG] delta 日语段追加 text={text!r} (len={len(text)})")
-                        self.speech.speak_streaming_append(text)
+                    self._append_tts_segment(sep_parts[0])
+                    for j in range(1, len(sep_parts)):
+                        self._stream_sep_count += 1
+                        seg = sep_parts[j].lstrip("=\r\n")
+                        self._append_tts_segment(seg)
+
+        def _append_tts_segment(self, text: str) -> None:
+            """按当前 === 段奇偶决定是否追加 TTS。
+
+            奇数段（_stream_sep_count 为 1,3,5...）是日语段，追加到 TTS；
+            首次进入日语段时启动 speak_streaming_start 会话。
+            偶数段（0,2,4...）是中文段，跳过。
+            text 为空时也启动 TTS（标记进入日语段），但不追加 append。
+            """
+            if self._stream_sep_count % 2 == 1:
+                # 当前在日语段，首次进入时启动流式 TTS 会话
+                if not self._stream_tts_started:
+                    config = load_config()
+                    self.speech.set_rate([-2, 0, 2][config.get("tts_rate", 1)])
+                    self.speech.speak_streaming_start(text_lang="ja")
+                    self._stream_tts_started = True
+                if text:
+                    self.speech.speak_streaming_append(text)
 
         def _agent_finished(self, reply: str) -> None:
             session = active_session(self._state)
@@ -1259,15 +1300,15 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             self.send_button.setDisabled(False)
             parsed = parse_reply(reply)
             send_command(emotion=parsed.emotion)
-            print(f"[PET-DBG] finished reply_len={len(reply)} jp_len={len(parsed.japanese)} started={self._stream_japanese_started}")
+            print(f"[PET-DBG] finished reply_len={len(reply)} jp_len={len(parsed.japanese)} tts_started={self._stream_tts_started} sep_count={self._stream_sep_count}")
             print(f"[PET-DBG] finished reply={reply[:200]!r}")
             print(f"[PET-DBG] finished parsed.jp={parsed.japanese[:200]!r}")
             # 流式 TTS：会话结束，刷新剩余缓冲
             # （流式合成在 _agent_delta 中已开始，这里只刷新剩余文本）
             config = load_config()
-            if config.get("tts_enabled", True) and self._stream_japanese_started:
+            if config.get("tts_enabled", True) and self._stream_tts_started:
                 self.speech.speak_streaming_end()
-            elif config.get("tts_enabled", True) and parsed.japanese and not self._stream_japanese_started:
+            elif config.get("tts_enabled", True) and parsed.japanese and not self._stream_tts_started:
                 # 兜底：如果流式未启动（如无 === 分隔符），整段合成
                 print(f"[PET-DBG] 兜底整段合成 jp={parsed.japanese[:60]!r}")
                 self.speech.set_rate([-2, 0, 2][config.get("tts_rate", 1)])
@@ -1276,7 +1317,8 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
                     text_lang="ja",
                     allow_fallback=False,
                 )
-            self._stream_japanese_started = False
+            self._stream_sep_count = 0
+            self._stream_tts_started = False
             if not self._history_expanded:
                 # 分层气泡需要完整中文做分段展示，_latest_line 的 105 字截断会丢段
                 self._show_layered_bubbles(parse_reply(reply).chinese)

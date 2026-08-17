@@ -796,3 +796,100 @@ PRD_aliyun_tts.md 1.3 非目标写「不做流式合成」「仅 Qwen3-TTS-VC」
 CosyVoice 多引擎架构图、流式时延预算等），混入会让 commit 主题不纯。**教训**：过时 PRD
 不应删除（承载历史决策上下文），但也不应与冲突的实现混在同一 commit；标记「已过时」
 单独留作后续修订任务，是文档与代码解耦的标准做法。
+
+## 2026-08-17 真机无声 bug 修复（engine 与 voice_id 命名空间互斥）
+
+### 1. 【根因】CosyVoice 系列与 Qwen3-TTS-VC 音色命名空间互斥：418 错误是铁证
+用户报告 amadeus（TypeScript/浏览器）能听到语音，amadeus-py（Python）听不到，同一个
+阿里云 API key。控制变量实验（固定 api_key+voice_id，切换 engine）：cosyvoice-v3.5-flash
++ qwen-tts-vc- 前缀音色 → HTTP 400 InvalidParameter "Engine return error code: 418"；
+qwen3-tts-vc + qwen-tts-vc- 前缀音色 → 成功 mp3 103724 bytes。**根因**：用户已克隆的是
+Qwen3-TTS-VC 音色（qwen-tts-vc- 前缀），CosyVoice 系列引擎不识别该命名空间的音色 ID。
+**教训**：阿里云 TTS 的 engine 与 voice_id 是绑定关系，不是自由组合——Qwen3-TTS-VC 引擎
+只能用 Qwen3-TTS-VC 克隆的音色（multimodal-generation/generation endpoint），
+CosyVoice 系列引擎只能用预置音色或 CosyVoice 自有的克隆音色（SpeechSynthesizer
+endpoint）。移植外部项目时不能照搬默认值，要核实用户的音色来源与 engine 是否匹配。
+依据：scripts/diagnose_aliyun_tts.py 三组控制变量实验。
+
+### 2. 【反转发现】CosyVoice 预置音色也 418：账号未授权 CosyVoice 服务
+实验 3 用 CosyVoice 预置音色 longxiaochun（不是 Qwen3 克隆音色）调 cosyvoice-v3.5-flash，
+仍返回 418。这说明 418 不只是 engine 与 voice_id 不匹配，更深层原因是该阿里云账号未开通
+CosyVoice 服务授权。amadeus 原项目默认 cosyvoice-v3.5-flash 是基于"账号已授权 CosyVoice"
+的隐式假设。**教训**：移植外部项目的默认值时，要识别其隐式假设（amadeus 默认 cosyvoice
+隐式假设用户已开通 CosyVoice 服务）；本地化默认值要按"用户最可能的状态"重设——本项目
+用户已克隆 Qwen3-TTS-VC 音色，默认 engine 应为 qwen3-tts-vc。依据：实验 3 仍 418。
+
+### 3. 【环境】测试环境分裂复发：miniaudio 装在 .venv，anaconda 缺失导致 frozen 模式无声
+诊断脚本实验 2 合成成功后报 "No module named 'miniaudio'"——anaconda（桌宠运行环境）
+没装 miniaudio。8-17 教训 4 已记录此环境分裂，本次复现。修复：`D:\anaconda\python.exe
+-m pip install miniaudio`（需 dangerouslyDisableSandbox=true，沙箱拒写 site-packages，
+8-14 教训 3 第三次复现）。**教训**：新依赖装到 anaconda 后必须验证 QtWebEngine 没被破坏
+（8-15 严重事故 2 教训）——`import PySide6.QtWebEngineCore` 三行验证脚本即可。本次验证
+miniaudio 1.71 + sounddevice 0.5.5 + QtWebEngine 三者共存正常，无 DLL 冲突。
+
+### 4. 【frozen】PyInstaller hiddenimports 必须显式列动态 import 的库
+core/mp3_decoder.py 用 `import miniaudio`（函数内/模块顶部均可），PyInstaller 静态分析
+可能漏抓。Amadeus.spec hiddenimports 原列 ['pywebview.platforms.edgechromium', 'ddgs',
+'trafilatura', 'mss']，新增 'miniaudio'。**教训**：frozen exe 不读 D:\anaconda\Lib\
+site-packages，所有运行时依赖必须打包进 _MEIPASS。函数内动态 import 的库（miniaudio、
+win32com.client 等）PyInstaller 静态分析漏抓概率高，必须在 spec hiddenimports 显式列出。
+依据：Amadeus.spec:23-27 hiddenimports 新增 'miniaudio'。
+
+### 5. 【方法论】控制变量法定位 bug：固定自变量 + 切换因变量 + 实测对照
+本次 bug 排查用控制变量法：固定 api_key + voice_id（用户配置），切换 engine 实测 3 组
+（cosyvoice+Qwen3音色 / qwen3-tts-vc+Qwen3音色 / cosyvoice+预置音色）。3 组结果对比立即
+定位根因（engine 与 voice_id 不匹配 + 账号未授权 CosyVoice）。**教训**：用户报告"X 项目
+能听到语音，Y 项目听不到，同一个 API"时，控制变量法是首选诊断手段——固定 API key/voice_id
+等公共配置，切换客户端实现（engine/解码路径/播放层）实测，3 组实验即可定位。不要凭代码
+逻辑猜根因（"我觉得 miniaudio 没问题"），必须用实测证据证伪或证实。参考：
+scripts/diagnose_aliyun_tts.py 是控制变量实验的可执行模板。
+
+## 2026-08-17 多段 === LLM 输出 + 气泡截断 bug 修复
+
+### 1. 【根因】LLM 输出 75% 概率为多段「中文1 === 日语1 \n\n [emotion:xxx]中文2 === 日语2」
+用户报告"一段日文一段中文"。查 dist/data/characters/kurisu/sessions.json 最近 4 条 LLM 回复，
+3 条（75%）是多段交替格式：LLM 把"短句回应+详细展开"拆成两段，每段都带 === 中日双语，
+段间用空行 + [emotion:xxx] 标签分隔（非 ===）。原版 _on_llm_delta 用 `split("===", 1)[1]`
+只切第一个 ===，把第一段日语 + 第二段中文 + 第二段日语整体送 TTS，Qwen3-TTS-VC 用日语
+phoneme 读中文 → 听起来"一段日文一段中文"。**教训**：LLM 输出格式不稳定是常态，不能假设
+LLM 一定按 KURISU_OUTPUT_FORMAT 输出。移植外部项目时，要实测真实 LLM 输出格式，不能只看
+prompt 约定。依据：dist/data/characters/kurisu/sessions.json 3/4 多段样本。
+
+### 2. 【算法】[emotion:xxx] + === 双重切段状态机
+原版只用 === 切段，多段 === 时把"日语1 + 中文2"整体送 TTS。修复方案：双重切段——
+- 先按 [emotion:xxx] 切分：每个 emotion 标签视为新回复开始，重置 _stream_sep_count=0
+- 再按 === 切分：每遇 === 切段，_stream_sep_count += 1
+- 奇数段（1,3,5...）= 日语段 → 追加 TTS
+- 偶数段（0,2,4...）= 中文段 → 跳过
+**数学本质**：[emotion:xxx] 是 LLM 标记的新回复边界（段间分隔符），=== 是回复内部的中日
+分界（段内分隔符）。两层分隔符层次不同，必须双重切段才能正确识别多段输出中的日语段。
+**形象理解**：像漫画分镜，[emotion:xxx] 是新一格的开始，=== 是一格内部的中日字幕分界。
+原版只看 === 把"日语格1 + 中文格2"当一个日语格读。依据：desktop_pet.py:1234-1291
+_agent_delta + _append_tts_segment；core/voice_call.py:338-396 同步实现。
+
+### 3. 【UI】_latest_line 105 字截断 + 高度上限 140px 双重截断长回复
+用户报告"气泡没办法显示所有内容，分段后只显示前面几句，后面的不显示"。查 desktop_pet.py:
+- _latest_line (line 1093-1097)：只取最后 3 行 + 105 字截断（`latest[:104] + "…"`）
+- _set_bubble_text (line 867)：高度上限 140px（`h = min(..., 140)`）
+长回复被双重截断。修复：_latest_line 返回完整 chinese（去掉 [emotion:] 标签，保留所有
+中文段）；_set_bubble_text 高度上限放宽到 240px（屏幕高度的 1/4）。**教训**：UI 显示层
+截断是历史遗留（早期回复短），LLM 输出变长后暴露。真正滚动需 QScrollArea 包 QLabel，
+本次先做最小改动（不截断 + 高度放宽），如用户仍不满意再改 widget 类型。依据：
+desktop_pet.py:1092-1101 _latest_line + 859-876 _set_bubble_text。
+
+### 4. 【测试】多段 === + emotion 标签场景测试覆盖
+新增 test_on_llm_delta_multi_separator_skips_chinese_segments 测试，模拟 LLM 多段输出
+（段1无 emotion 标签，段2有 [emotion:neutral]）。断言：
+- _stream_sep_count == 1（emotion 重置后最后一段日语）
+- mock_append.call_count == 2（两段日语各追加 1 次，中文段不追加）
+- 追加内容不含中文段（"中文长句2" / "中文短句1" 都不在 appended_texts 中）
+**教训**：bug 修复必须配套回归测试，覆盖真实 LLM 输出格式（多段 === + emotion 标签交替）。
+单元测试用 mock 模拟 LLM delta 序列，验证 TTS 只送日语段不送中文段。依据：
+tests/test_voice_call.py:181-208。
+
+### 5. 【frozen】exe 重新打包验证修复
+修复后需重新打包 exe（frozen 模式不读源码，必须重新 PyInstaller）。版本号 0.3.0 → 0.3.1
+（bug fix 按 SemVer 升 patch）。Amadeus.spec hiddenimports 已含 miniaudio（0.3.0 加的），
+无需再改。**教训**：每次代码修复后，frozen exe 用户必须重新下载新版本才能生效。源码模式
+（python desktop_pet.py）用户直接拉代码即可。打包前必须全量 pytest 通过（209 passed），
+避免 frozen 模式运行时才发现 bug（frozen 模式调试成本高，无 stderr 实时输出）。

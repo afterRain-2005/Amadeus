@@ -135,11 +135,11 @@ def test_on_llm_delta_starts_streaming_on_separator():
          patch.object(ctrl._tts, "speak_streaming_append") as mock_append:
         # 中文段：不启动 TTS
         ctrl._on_llm_delta("[emotion:neutral]（歪头）嗯，怎么了？")
-        assert ctrl._stream_japanese_started is False
+        assert ctrl._stream_tts_started is False
         mock_start.assert_not_called()
         # === 与首句日语同 delta（LLM 流式常见场景）：启动 TTS + 提取首句追加
         ctrl._on_llm_delta("\n===\n（首を傾げる）ええ、どうしたの？")
-        assert ctrl._stream_japanese_started is True
+        assert ctrl._stream_tts_started is True
         mock_start.assert_called_once_with(text_lang="ja")
         # phase 切到 speaking（VAD 暂停）
         assert ctrl.phase == "speaking"
@@ -158,7 +158,7 @@ def test_on_llm_delta_separator_only_no_append():
     with patch.object(ctrl._tts, "speak_streaming_start") as mock_start, \
          patch.object(ctrl._tts, "speak_streaming_append") as mock_append:
         ctrl._on_llm_delta("中文\n===\n")
-        assert ctrl._stream_japanese_started is True
+        assert ctrl._stream_tts_started is True
         mock_start.assert_called_once_with(text_lang="ja")
         # === 后内容为空，不调 speak_streaming_append
         mock_append.assert_not_called()
@@ -173,9 +173,39 @@ def test_on_llm_delta_skips_chinese_before_separator():
         ctrl._on_llm_delta("[emotion:smile]（微笑）")
         ctrl._on_llm_delta("你好啊。")
         ctrl._on_llm_delta("今天天气不错。")
-        assert ctrl._stream_japanese_started is False
+        assert ctrl._stream_tts_started is False
         mock_start.assert_not_called()
         mock_append.assert_not_called()
+
+
+def test_on_llm_delta_multi_separator_skips_chinese_segments():
+    """多段 === + [emotion:xxx] 双重切段：LLM 输出「中文1 === 日语1 \n\n [emotion:xxx]中文2 === 日语2」。
+
+    修复 bug：LLM 输出 75% 概率为多段格式，段间用空行 + [emotion:xxx] 标签分隔（非 ===）。
+    原版只按 === 切段会把「日语1 + 中文2」整体当日语段送 TTS，导致中文被日语 TTS 引擎读出。
+    新方案：[emotion:xxx] 重置 sep_count=0（新回复），再用 === 切中日段。
+    """
+    ctrl = _make_controller()
+    with patch.object(ctrl._tts, "speak_streaming_start") as mock_start, \
+         patch.object(ctrl._tts, "speak_streaming_append") as mock_append:
+        # 模拟 LLM 多段输出（段1无 emotion 标签，段2有）
+        ctrl._on_llm_delta("（动作）中文短句1\n===\n（动作）日本語短句1\n\n")
+        ctrl._on_llm_delta("[emotion:neutral]中文长句2\n===\n（动作）日本語長句2")
+        # 第一段日语（sep_count=1）和第二段日语（emotion 重置后 sep_count=1）应被追加
+        # 第二段中文（emotion 重置后 sep_count=0）应被跳过
+        assert ctrl._stream_tts_started is True
+        assert ctrl._stream_sep_count == 1  # emotion 重置后又是 1（最后一段日语）
+        # 启动 TTS 1 次（首次进入日语段）
+        mock_start.assert_called_once_with(text_lang="ja")
+        # 追加次数：第一段日语 + 第二段日语 = 2 次（中文段不追加）
+        assert mock_append.call_count == 2
+        # 验证追加的内容不含中文段
+        appended_texts = [call.args[0] for call in mock_append.call_args_list]
+        all_appended = "".join(appended_texts)
+        assert "日本語短句1" in all_appended
+        assert "日本語長句2" in all_appended
+        assert "中文长句2" not in all_appended  # 中文段不送 TTS
+        assert "中文短句1" not in all_appended  # 中文段不送 TTS
 
 
 def test_handle_utterance_streaming_path():
