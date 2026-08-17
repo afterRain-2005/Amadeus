@@ -2,6 +2,42 @@
 
 > 每轮对话结束时记录 5 条最重要的教训。开始项目时首先查看本文件。
 
+## 2026-08-18 CRT 特效 UI 改进（终端/设置页/Dock+对话栏）
+
+### 1. 【PySide6】QGraphicsDropShadowEffect 属于 QtWidgets，不属于 QtGui
+给设置页加标题辉光时误写 `from PySide6.QtGui import QGraphicsDropShadowEffect`，
+导致 `ImportError`（真实位置是 QtWidgets，与 QGraphicsOpacityEffect 同级）。
+依据：本项目原代码 AgentTerminal 内就是 `from PySide6.QtWidgets import QGraphicsDropShadowEffect`。
+**教训**：Qt 图形特效类（QGraphicsEffect 及其子类 QGraphicsOpacityEffect / QGraphicsDropShadowEffect）
+都在 QtWidgets，不在 QtGui；加特效前先确认归属模块。
+
+### 2. 【工具】同一文件的多个并行 Edit 会互相覆盖丢失改动
+settings_dialog.py 一次批量发出 5 个 Edit（含两个 replace_all），结果
+`"Times New Roman","SimSun" → "Consolas","Microsoft YaHei"` 的 replace_all 被吞，
+磁盘上仍是旧字体。重跑单独 Edit 才生效。
+**教训**：对同一文件的多处编辑要串行（一次只发一个 Edit），或每次编辑后重读/重 grep 验证；
+并行批量编辑同一文件有竞态，工具"成功"不等于落盘。
+
+### 3. 【UI 约束】Qt 一个控件只能挂一个 QGraphicsEffect
+reply_bubble 已有 QGraphicsOpacityEffect（思考点/分段淡入动画），无法再加
+QGraphicsDropShadowEffect 做边框辉光——`setGraphicsEffect` 会互相替换。
+最终只给气泡加扫描线，未加边框辉光。
+**教训**：给已有 opacity 动画的控件加辉光前，先查它的 graphicsEffect 是否已被占用；
+要么接受"只能二选一"，要么重构动画逻辑（本任务限定"只改 UI"故未重构）。
+
+### 4. 【特效实现】CRT 扫描线/暗角/噪点用透明子控件 overlay 而非 QSS 背景图
+新建 ui/widgets/crt_overlay.py：QWidget 子控件覆盖父控件，`paintEvent` 画扫描线
+（3px 周期暗线）、暗角（QRadialGradient）、噪点（随机点+定时刷新），
+`WA_TransparentForMouseEvents` 穿透点击，事件过滤器监听父控件 Resize 自动重设几何。
+**教训**：Qt QSS 不支持 repeating-linear-gradient/多背景叠加，复杂 CRT 特效用透明
+paintEvent 子控件更灵活，且不改变父控件配色（符合"只加特效不换色"）。
+
+### 5. 【范围纪律】"只改 UI 三处"= 字体统一也只改三处，范围外不动
+用户限定 Terminal/设置页/Dock+对话栏，并补充"统一等宽"。实施时 restore 悬浮按钮
+（"红利栖"，不在三处内）的 `Times New Roman` 字体保持不动，避免范围蔓延。
+**教训**：全局性指令（如"统一等宽"）要按"当前范围"解释；范围外控件即使字体不一致，
+也先不动，待用户确认是否纳入。
+
 ## 2026-08-17 桌宠退出遗留 GPT-SoVITS 孤儿进程修复
 
 ### 1. 【根因】subprocess.Popen 拉起子进程不保存句柄 → 退出时无法清理

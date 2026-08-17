@@ -417,8 +417,8 @@ def _render_markdown(text: str) -> str:
     return rendered
 
 
-def _build_terminal_line_html(kind: str, text: str) -> str:
-    """单行终端 HTML。kind: cmd=用户命令 / out=kurisu 输出 / err=错误 / sys=分隔信息。"""
+def _build_terminal_line_html(kind: str, text: str, extra: dict | None = None) -> str:
+    """单行终端 HTML。kind: cmd/out/err/sys/tool=工具调用/diff=差异。"""
     safe = html.escape(text).replace("\n", "<br>")
     if kind == "cmd":
         return (
@@ -439,7 +439,78 @@ def _build_terminal_line_html(kind: str, text: str) -> str:
         )
     if kind == "err":
         return f"<div style='margin:2px 0;color:{_TERMINAL_ROSE}'>! {safe}</div>"
+    if kind == "tool":
+        return (
+            f"<div style='margin:2px 0'><span style='color:{_TERMINAL_ROSE}'>⟳</span> "
+            f"<span style='color:{_TERMINAL_DIM}'>{safe}</span></div>"
+        )
+    if kind == "diff":
+        extra = extra or {}
+        return _render_diff_html(str(extra.get("path", "")), extra.get("old"), extra.get("new"))
     return f"<div style='margin:2px 0;color:{_TERMINAL_DIM}'>{safe}</div>"
+
+
+def _render_diff_html(path: str, old: str | None, new: str | None) -> str:
+    """把 str_replace_editor 的 old/new 渲染成 CRT 风格行内 diff（+ 新增 / - 删除 / 空格 上下文）。"""
+    import difflib
+    header = f"<div style='color:{_TERMINAL_DIM}'>diff — {html.escape(path) if path else '(untitled)'}</div>"
+    if old is None:
+        body = "".join(
+            f"<div style='color:{_TERMINAL_CREAM}'>+ {html.escape(line)}</div>"
+            for line in (new or "").splitlines()
+        )
+        if not body:
+            body = f"<div style='color:{_TERMINAL_DIM}'>(empty file)</div>"
+        return (
+            f"<div style='margin:4px 0;border-left:2px solid {_TERMINAL_ROSE};padding-left:8px'>"
+            f"{header}{body}</div>"
+        )
+    rows = []
+    for line in difflib.ndiff((old or "").splitlines(), (new or "").splitlines()):
+        tag = line[:2]
+        content = line[2:]
+        if tag == "- ":
+            rows.append(f"<div style='color:{_TERMINAL_ROSE}'>- {html.escape(content)}</div>")
+        elif tag == "+ ":
+            rows.append(f"<div style='color:{_TERMINAL_CREAM}'>+ {html.escape(content)}</div>")
+        elif tag == "? ":
+            continue
+        else:
+            rows.append(f"<div style='color:{_TERMINAL_DIM}'>  {html.escape(content)}</div>")
+    return (
+        f"<div style='margin:4px 0;border-left:2px solid {_TERMINAL_ROSE};padding-left:8px'>"
+        f"{header}{''.join(rows)}</div>"
+    )
+
+
+def _editor_diff_extra(args: dict) -> dict:
+    """从 str_replace_editor 的 arguments 提取 diff 的 path/old/new。"""
+    command = str(args.get("command", ""))
+    path = str(args.get("path", ""))
+    if command == "create":
+        return {"path": path, "old": None, "new": args.get("file_text", "")}
+    if command == "str_replace":
+        return {"path": path, "old": args.get("old_str"), "new": args.get("new_str")}
+    return {"path": path, "old": None, "new": None}
+
+
+def _tool_args_summary(args: dict) -> str:
+    if not args:
+        return ""
+    parts = []
+    for key, value in list(args.items())[:3]:
+        s = str(value)
+        if len(s) > 40:
+            s = s[:40] + "…"
+        parts.append(f"{key}={s}")
+    return " ".join(parts)
+
+
+def _line_cache_key(item) -> tuple:
+    """终端行的缓存键。extra(dict) 用 id() 避免不可哈希与重复序列化开销。"""
+    if len(item) == 3:
+        return (item[0], item[1], id(item[2]))
+    return (item[0], item[1])
 
 
 def _build_terminal_html(lines: list) -> str:
@@ -448,18 +519,24 @@ def _build_terminal_html(lines: list) -> str:
         f"<div style='color:{_TERMINAL_DIM};font-size:9px'>║▒░ amadeus shell — wired session</div>",
         f"<div style='border-top:1px solid {_TERMINAL_ROSE};margin:2px 0 6px 0'></div>",
     ]
-    parts.extend(_build_terminal_line_html(kind, text) for kind, text in lines)
+    for item in lines:
+        if len(item) == 3:
+            kind, text, extra = item
+            parts.append(_build_terminal_line_html(kind, text, extra))
+        else:
+            kind, text = item
+            parts.append(_build_terminal_line_html(kind, text))
     return "".join(parts)
 
 
 def run_overlay(connection: Connection, renderer: mp.Process) -> int:
-    from PySide6.QtCore import QByteArray, QEasingCurve, QObject, QPoint, QPropertyAnimation, QRect, QRectF, QRunnable, Qt, QThreadPool, QTimer, Signal
-    from PySide6.QtGui import QColor, QIcon, QImage, QKeyEvent, QLinearGradient, QMouseEvent, QPainter, QPixmap
+    from PySide6.QtCore import QByteArray, QEasingCurve, QEvent, QObject, QPoint, QPropertyAnimation, QRect, QRectF, QRunnable, Qt, QSize, QThreadPool, QTimer, Signal
+    from PySide6.QtGui import QColor, QFont, QFontMetrics, QIcon, QImage, QKeyEvent, QLinearGradient, QMouseEvent, QPainter, QPixmap, QRadialGradient
     from PySide6.QtSvg import QSvgRenderer
     from PySide6.QtWidgets import (
                 QApplication, QDialog, QHBoxLayout, QLabel, QLineEdit, QMenu, QMessageBox,
                 QPushButton, QSystemTrayIcon, QTextBrowser, QVBoxLayout, QWidget,
-                QGraphicsOpacityEffect,
+                QGraphicsDropShadowEffect, QGraphicsOpacityEffect,
             )
 
     from config import get_character_by_id, get_random_greeting
@@ -470,6 +547,7 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
     from core.storage import load_config
     from core.tts_client import SpeechPlayer
     from ui.settings_dialog import SettingsDialog
+    from ui.widgets.crt_overlay import CrtOverlay
 
     character = get_character_by_id("kurisu")
 
@@ -485,6 +563,7 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
         delta = Signal(str)
         finished = Signal(str)
         failed = Signal(str)
+        tool_event = Signal(object)
         confirmation = Signal(object)
 
     class AgentTask(QRunnable):
@@ -508,6 +587,7 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
                     memories=self.memories,
                     on_status=self.signals.status.emit,
                     on_delta=self.signals.delta.emit,
+                    on_tool_event=self.signals.tool_event.emit,
                     on_approval=self._handle_approval,
                 )
                 self.signals.finished.emit(reply)
@@ -562,12 +642,12 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
         def paintEvent(self, event) -> None:
             painter = QPainter(self)
             painter.setRenderHint(QPainter.Antialiasing)
-            # 背景（fauux：玫瑰 #d2738a / 危险深玫瑰 #7a3040，直角）
+            # 背景（fauux：玫瑰 #d2738a / 危险深玫瑰 #d2738a，直角）
             if self._is_danger:
-                bg = QColor(122, 48, 64, 40) if self._scale > 1.0 else QColor(122, 48, 64, 26)
+                bg = QColor(0, 0, 0, 0)
                 border = QColor(210, 115, 138, 110)
             else:
-                bg = QColor(210, 115, 138, 22) if self._scale > 1.0 else QColor(210, 115, 138, 14)
+                bg = QColor(0, 0, 0, 0)
                 border = QColor(210, 115, 138, 100)
             painter.setBrush(bg)
             painter.setPen(border)
@@ -692,6 +772,79 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             anim.start()
             self._slide_anim = anim
 
+    class GlitchLabel(QWidget):
+        """全角标题 + CRT glitch 双色分裂动画（参考 fauux .glitch）。
+
+        主文字 cream，两层偏移副本（rose 浅 / dim 暗）只在偶发 glitch 帧的
+        随机水平条带内显示，制造 RGB 分裂撕裂感；多数时间保持稳定不跳动。
+        配色保持 rose/cream 系，色调不变。
+        """
+
+        def __init__(self, text: str, parent=None):
+            super().__init__(parent)
+            self._text = text
+            self._seed = 0
+            self._glitch_frames = 0
+            self.setAttribute(Qt.WA_TranslucentBackground, True)
+            self.setAttribute(Qt.WA_NoSystemBackground, True)
+            self._timer = QTimer(self)
+            self._timer.setInterval(70)
+            self._timer.timeout.connect(self._advance)
+            self._timer.start()
+
+        def _advance(self) -> None:
+            self._seed = (self._seed + 1) % 10000
+            import random
+            rnd = random.Random(self._seed)
+            if self._glitch_frames > 0:
+                self._glitch_frames -= 1
+            elif rnd.random() < 0.03:
+                # 偶发撕裂：持续 2~4 帧（约 140~280ms），其余时间保持稳定
+                self._glitch_frames = rnd.randint(2, 4)
+            self.update()
+
+        def _font(self) -> QFont:
+            font = QFont("Consolas")
+            font.setPixelSize(15)
+            font.setBold(True)
+            font.setLetterSpacing(QFont.PercentageSpacing, 112)
+            return font
+
+        def sizeHint(self):
+            fm = QFontMetrics(self._font())
+            return QSize(fm.horizontalAdvance(self._text) + 16, fm.height() + 10)
+
+        def paintEvent(self, event) -> None:
+            import random
+            painter = QPainter(self)
+            try:
+                painter.setRenderHint(QPainter.Antialiasing)
+                painter.setFont(self._font())
+                rect = self.rect()
+                # 主文字 cream
+                painter.setPen(QColor(193, 180, 146))
+                painter.drawText(rect, Qt.AlignCenter, self._text)
+
+                if self._glitch_frames <= 0:
+                    return
+                rnd = random.Random(self._seed)
+                # 随机 1~3 个水平条带，仅在条带内显示偏移副本（模拟 clip-path 撕裂）
+                for _ in range(rnd.randint(1, 3)):
+                    y = rnd.randrange(max(1, self.height()))
+                    h = rnd.randint(2, 7)
+                    painter.save()
+                    painter.setClipRect(0, y, self.width(), h)
+                    painter.setPen(QColor(210, 115, 138))
+                    painter.drawText(rect.translated(-2, -1), Qt.AlignCenter, self._text)
+                    painter.restore()
+                    painter.save()
+                    painter.setClipRect(0, y, self.width(), h)
+                    painter.setPen(QColor(138, 127, 99))
+                    painter.drawText(rect.translated(2, 1), Qt.AlignCenter, self._text)
+                    painter.restore()
+            finally:
+                painter.end()
+
     class AgentTerminal(QDialog):
         """独立 CRT 命令行 agent 窗口（fauux 风格，类 Codex CLI）。
 
@@ -704,30 +857,29 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
 
         def __init__(self, parent=None):
             super().__init__(parent)
-            self.setWindowTitle("Amadeus")
+            self.setWindowTitle("Amadeus Terminal")
             self.setWindowFlags(Qt.FramelessWindowHint | Qt.Dialog)
             self.setObjectName("agentTerminal")
             self.setStyleSheet(
-                "QDialog#agentTerminal{background-color:#171114;border:1px solid #d2738a;}"
+                "QDialog#agentTerminal{background-color:#171114;"
+                "background-image:url(" + _dither_texture_url() + ");"
+                "border:1px solid #d2738a;}"
             )
-            self.setMinimumSize(520, 360)
-            self.resize(640, 460)
+            self.setMinimumSize(560, 390)
+            self.resize(720, 520)
             self._lines: list = []
+            self._line_cache: dict = {}  # 行级 HTML 缓存，避免每 delta 全量 markdown 重渲染
+            self._history: list[str] = []
+            self._history_index: int = -1
             layout = QVBoxLayout(self)
-            layout.setContentsMargins(12, 10, 12, 10)
-            layout.setSpacing(6)
+            layout.setContentsMargins(16, 14, 16, 14)
+            layout.setSpacing(8)
 
             # 标题栏：⌈⌉ 角括号 + rose 辉光（wiredB 动画的静态近似）+ 关闭按钮
             title_row = QHBoxLayout()
-            title_row.setSpacing(6)
+            title_row.setSpacing(8)
             title_row.addStretch()
-            self.title = QLabel("⌈ Amadeus ⌋", self)
-            self.title.setStyleSheet(
-                f"color:{_TERMINAL_ROSE};background:transparent;"
-                "font:13px 'Consolas','Microsoft YaHei'"
-            )
-            self.title.setAlignment(Qt.AlignCenter)
-            from PySide6.QtWidgets import QGraphicsDropShadowEffect
+            self.title = GlitchLabel("⌈ Ａｍａｄｅｕｓ ⌋", self)
             glow = QGraphicsDropShadowEffect(self)
             glow.setColor(QColor(210, 115, 138, 200))
             glow.setBlurRadius(12)
@@ -735,25 +887,31 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             self.title.setGraphicsEffect(glow)
             title_row.addWidget(self.title)
             title_row.addStretch()
-            self.close_btn = QPushButton("X", self)
-            self.close_btn.setFixedSize(24, 22)
+            self.close_btn = QPushButton("×", self)
+            self.close_btn.setFixedSize(24, 24)
             self.close_btn.setCursor(Qt.PointingHandCursor)
             self.close_btn.setStyleSheet(
                 f"QPushButton{{background:#171114;color:{_TERMINAL_ROSE};"
                 f"border:1px solid {_TERMINAL_ROSE};padding:0;"
-                "font:700 13px 'Consolas','Microsoft YaHei'}}"
+                "font:18px 'Consolas','Microsoft YaHei'}}"
                 f"QPushButton:hover{{background:{_TERMINAL_ROSE};color:#171114}}"
             )
             self.close_btn.clicked.connect(self.close)
+            # 关键修复：QDialog 内唯一按钮默认为 autoDefault 按钮，输入框回车后
+            # Enter 键事件未被消费，会继续传给对话框并触发该 default 按钮 →
+            # 误触发 self.close()，导致终端发送后立即关闭。显式关掉 autoDefault/default。
+            self.close_btn.setAutoDefault(False)
+            self.close_btn.setDefault(False)
             title_row.addWidget(self.close_btn)
             layout.addLayout(title_row)
 
             # 日志区（主体）
             self.log = QTextBrowser(self)
             self.log.setStyleSheet(
-                "QTextBrowser{background-color:#171114;background-image:url(" + _dither_texture_url() + ");"
+                "QTextBrowser{background-color:transparent;"
                 f"color:{_TERMINAL_CREAM};border:1px solid {_TERMINAL_ROSE};"
-                "border-radius:0px;padding:8px;font:13px 'Consolas','Microsoft YaHei'}"
+                "border-radius:0px;padding:12px;font:14px 'Consolas','Microsoft YaHei'}"
+                "QTextBrowser{selection-background-color:#d2738a;selection-color:#171114}"
                 f"QScrollBar:vertical{{background:rgba(210,115,138,0.15);width:6px;margin:4px}}"
                 f"QScrollBar::handle:vertical{{background:{_TERMINAL_ROSE};border-radius:0px;min-height:30px}}"
                 "QScrollBar::add-line:vertical,QScrollBar::sub-line:vertical{height:0}"
@@ -777,6 +935,7 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             )
             self.input.setPlaceholderText("say something to kurisu…")
             self.input.returnPressed.connect(self._submit)
+            self.input.installEventFilter(self)
             self.cursor = QLabel("█", self)
             self.cursor.setStyleSheet(
                 f"color:{_TERMINAL_CREAM};background:transparent;font:13px 'Consolas','Microsoft YaHei'"
@@ -792,6 +951,12 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             self._blink_timer.timeout.connect(lambda: self.cursor.setVisible(not self.cursor.isVisible()))
             self._blink_timer.start()
 
+            # 渲染节流：流式 delta 高频到达时合并 setHtml，避免主线程被全量重渲染卡死
+            self._render_timer = QTimer(self)
+            self._render_timer.setSingleShot(True)
+            self._render_timer.setInterval(33)
+            self._render_timer.timeout.connect(self._flush_render)
+
             # CRT 屏幕闪烁：整个窗口 opacity 轻微波动（参考 fauux 的 CRT 刷新感）
             self._flicker_effect = QGraphicsOpacityEffect(self)
             self._flicker_effect.setOpacity(1.0)
@@ -800,6 +965,17 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             self._flicker_timer.setInterval(70)
             self._flicker_timer.timeout.connect(self._flicker)
             self._flicker_timer.start()
+
+            # CRT 背景特效：扫描线 + 暗角 + 静电噪点画在背景层，
+            # 文字控件（log / 输入框）绘制其上，保持清晰不被扫描线/噪点覆盖
+            self._noise_seed = 0
+            self._noise_timer = QTimer(self)
+            self._noise_timer.setInterval(80)
+            self._noise_timer.timeout.connect(self._advance_noise)
+            self._noise_timer.start()
+
+            # 背景 logo 水印：加载后暗化，作为 CRT 背景的底层衬底
+            self._logo = self._load_darkened_logo()
 
         def resizeEvent(self, event) -> None:
             super().resizeEvent(event)
@@ -813,6 +989,83 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             # 0.98~1.0 之间微调 opacity，模拟老式 CRT 屏幕的轻微闪烁
             self._flicker_effect.setOpacity(0.98 + 0.02 * random.random())
 
+        def _advance_noise(self) -> None:
+            self._noise_seed = (self._noise_seed + 1) % 10000
+            self.update()
+
+        def paintEvent(self, event) -> None:
+            super().paintEvent(event)
+            painter = QPainter(self)
+            try:
+                self._paint_logo(painter)
+                self._paint_vignette(painter)
+                self._paint_scanlines(painter)
+                self._paint_noise(painter)
+            finally:
+                painter.end()
+
+        def _load_darkened_logo(self):
+            """加载终端背景 logo 并暗化，返回 QPixmap（失败返回 None）。"""
+            path = ROOT / "amadeus-logo-TM.png"
+            if not path.exists():
+                return None
+            src = QPixmap(str(path))
+            if src.isNull():
+                return None
+            # 暗化：在暗色底上以低透明度重绘，得到深色、低对比的水印
+            dark = QPixmap(src.size())
+            dark.fill(QColor(23, 17, 20))
+            p = QPainter(dark)
+            try:
+                p.setOpacity(0.35)
+                p.drawPixmap(0, 0, src)
+            finally:
+                p.end()
+            return dark
+
+        def _paint_logo(self, painter: QPainter) -> None:
+            """把暗化后的 logo 居中绘制为底层水印。"""
+            if self._logo is None:
+                return
+            w, h = self.width(), self.height()
+            if w <= 0 or h <= 0:
+                return
+            pw = int(w * 0.5)
+            ph = int(self._logo.height() * pw / self._logo.width())
+            if ph > int(h * 0.45):
+                ph = int(h * 0.45)
+                pw = int(self._logo.width() * ph / self._logo.height())
+            scaled = self._logo.scaled(pw, ph, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            x = (w - scaled.width()) // 2
+            y = (h - scaled.height()) // 2
+            painter.save()
+            painter.setOpacity(0.6)
+            painter.drawPixmap(x, y, scaled)
+            painter.restore()
+
+        def _paint_vignette(self, painter: QPainter) -> None:
+            w, h = self.width(), self.height()
+            if w <= 0 or h <= 0:
+                return
+            gradient = QRadialGradient(w / 2, h / 2, max(w, h) * 0.75)
+            gradient.setColorAt(0.0, QColor(0, 0, 0, 0))
+            gradient.setColorAt(0.55, QColor(0, 0, 0, 0))
+            gradient.setColorAt(1.0, QColor(0, 0, 0, 175))
+            painter.fillRect(self.rect(), gradient)
+
+        def _paint_scanlines(self, painter: QPainter) -> None:
+            painter.setPen(QColor(0, 0, 0, 70))
+            for y in range(0, self.height(), 3):
+                painter.drawLine(0, y, self.width(), y)
+
+        def _paint_noise(self, painter: QPainter) -> None:
+            import random
+            rnd = random.Random(self._noise_seed)
+            painter.setPen(QColor(193, 180, 146, 45))
+            count = max(0, self.width() * self.height() // 100)
+            for _ in range(count):
+                painter.drawPoint(rnd.randrange(self.width()), rnd.randrange(self.height()))
+
         def keyPressEvent(self, event) -> None:
             if event.modifiers() & Qt.ControlModifier:
                 if event.key() in (Qt.Key_Plus, Qt.Key_Equal):
@@ -823,19 +1076,122 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
                     self.log.zoomOut(1)
                     event.accept()
                     return
+                if event.key() == Qt.Key_C:
+                    self._interrupt()
+                    event.accept()
+                    return
             super().keyPressEvent(event)
+
+        def eventFilter(self, obj, event) -> bool:
+            if obj is self.input and event.type() == QEvent.KeyPress:
+                key = event.key()
+                if event.modifiers() & Qt.ControlModifier and key == Qt.Key_C:
+                    self._interrupt()
+                    return True
+                if key == Qt.Key_Up:
+                    self._history_prev()
+                    return True
+                if key == Qt.Key_Down:
+                    self._history_next()
+                    return True
+                if key == Qt.Key_Tab:
+                    self._tab_complete()
+                    return True
+            return super().eventFilter(obj, event)
+
+        def _history_prev(self) -> None:
+            if not self._history:
+                return
+            if self._history_index < 0:
+                self._history_index = len(self._history) - 1
+            elif self._history_index > 0:
+                self._history_index -= 1
+            self.input.setText(self._history[self._history_index])
+            self.input.setCursorPosition(len(self.input.text()))
+
+        def _history_next(self) -> None:
+            if self._history_index < 0:
+                return
+            if self._history_index < len(self._history) - 1:
+                self._history_index += 1
+                self.input.setText(self._history[self._history_index])
+            else:
+                self._history_index = -1
+                self.input.setText("")
+            self.input.setCursorPosition(len(self.input.text()))
+
+        def _tab_complete(self) -> None:
+            text = self.input.text()
+            if not text:
+                return
+            candidates = [h for h in reversed(self._history) if h.startswith(text) and h != text]
+            if not candidates:
+                candidates = self._file_complete(text)
+            if not candidates:
+                return
+            common = os.path.commonprefix(candidates)
+            if len(common) > len(text):
+                self.input.setText(common)
+                self.input.setCursorPosition(len(common))
+
+        def _file_complete(self, text: str) -> list[str]:
+            import glob
+            try:
+                return glob.glob(text + "*")
+            except Exception:
+                return []
+
+        def _interrupt(self) -> None:
+            """Ctrl+C：中断当前正在运行的 harness 回合（仅 harness 模式生效）。"""
+            try:
+                from core.harness_bridge import cancel_active_run
+                cancel_active_run()
+            except Exception:
+                pass
 
         def _submit(self) -> None:
             text = self.input.text().strip()
             if text:
+                if text not in self._history:
+                    self._history.append(text)
+                    if len(self._history) > 200:
+                        self._history.pop(0)
+                self._history_index = -1
                 self.submitted.emit(text)
                 self.input.clear()
 
         def render_lines(self, lines: list) -> None:
+            """标记待渲染并启动节流定时器；实际 setHtml 在 _flush_render 中合并执行。"""
             self._lines = lines
+            if not self._render_timer.isActive():
+                self._render_timer.start()
+
+        def _flush_render(self) -> None:
+            """真正构建 HTML（行级缓存，只重渲染变化的行）并 setHtml。"""
+            parts = [
+                f"<div style='color:{_TERMINAL_DIM};font-size:9px'>║▒░ amadeus shell — wired session</div>",
+                f"<div style='border-top:1px solid {_TERMINAL_ROSE};margin:2px 0 6px 0'></div>",
+            ]
+            last_index = len(self._lines) - 1
+            for i, item in enumerate(self._lines):
+                if len(item) == 3:
+                    kind, text, extra = item
+                else:
+                    kind, text, extra = item[0], item[1], None
+                # 最后一行在流式期间会被反复替换，直接渲染不缓存（避免堆积中间态）；
+                # 历史行 append-only，按 key 缓存避免每次全量 markdown 重渲染。
+                if i == last_index:
+                    line_html = _build_terminal_line_html(kind, text, extra)
+                else:
+                    key = _line_cache_key(item)
+                    line_html = self._line_cache.get(key)
+                    if line_html is None:
+                        line_html = _build_terminal_line_html(kind, text, extra)
+                        self._line_cache[key] = line_html
+                parts.append(line_html)
             self.log.setHtml(
                 "<html><body style='margin:0;background:transparent'>"
-                + _build_terminal_html(lines)
+                + "".join(parts)
                 + "</body></html>"
             )
             # setHtml 后滚动条最大值尚未更新，需在事件循环空闲后再滚到底部
@@ -895,12 +1251,16 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             self.reply_bubble.setStyleSheet(
                 "QLabel{background-color:#171114;background-image:url(" + _dither_texture_url() + ");"
                 "color:#c1b492;"
-                "border:1px solid #d2738a;border-radius:0px;"
-                "padding:10px 16px;font:14px 'Times New Roman','SimSun';"
+                "border-left:1px solid #d2738a;border-right:1px solid #d2738a;"
+                "border-top:1.5px solid #d2738a;border-bottom:1.5px solid #d2738a;"
+                "border-radius:0px;"
+                "padding:10px 16px;font:14px 'Consolas','Microsoft YaHei';"
                 "font-weight:400}"
             )
             self._set_bubble_text(self._latest_line(active_session(self._state)["messages"][-1]["content"]))
             self.reply_bubble.hide()
+            self._bubble_crt = CrtOverlay(self.reply_bubble, scanlines=True, vignette=False, noise=False)
+            self._bubble_crt.raise_()
 
             # 输入面板（默认隐藏，点击💬展开）
             panel_w = 365
@@ -909,7 +1269,9 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             self.input_panel.setGeometry(panel_x, self.height() - 70, panel_w, 52)
             self.input_panel.setStyleSheet(
                 "background-color:#171114;background-image:url(" + _dither_texture_url() + ");"
-                "border:1px solid #d2738a;border-radius:0px"
+                "border-left:1px solid #d2738a;border-right:1px solid #d2738a;"
+                "border-top:1.5px solid #d2738a;border-bottom:1.5px solid #d2738a;"
+                "border-radius:0px"
             )
             input_layout = QHBoxLayout(self.input_panel)
             input_layout.setContentsMargins(14, 6, 6, 6)
@@ -918,7 +1280,7 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             self.input.setPlaceholderText("和红莉栖对话…")
             self.input.setStyleSheet(
                 "QLineEdit{background:transparent;color:#c1b492;border:0;padding:8px 10px;"
-                "font-size:14px;font-family:'Times New Roman','SimSun'}"
+                "font-size:14px;font-family:'Consolas','Microsoft YaHei'}"
                 "QLineEdit::placeholder{color:#8a7f63}"
             )
             self.input.returnPressed.connect(self._send)
@@ -945,6 +1307,8 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             input_layout.addWidget(send_button)
             self.send_button = send_button
             self.input_panel.hide()
+            self._panel_crt = CrtOverlay(self.input_panel, scanlines=True, vignette=False, noise=False)
+            self._panel_crt.raise_()
 
             # Dock 底部悬浮工具栏
             self.dock_bar = DockBar(self)
@@ -1477,6 +1841,7 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             task.signals.delta.connect(self._agent_delta)
             task.signals.finished.connect(self._agent_finished)
             task.signals.failed.connect(self._agent_failed)
+            task.signals.tool_event.connect(self._agent_tool_event)
             task.signals.confirmation.connect(self._confirm_operation)
             QThreadPool.globalInstance().start(task)
 
@@ -1508,6 +1873,33 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             else:
                 request["choice"] = "deny"
             request["event"].set()
+
+        def _agent_tool_event(self, event: dict) -> None:
+            if not self._terminal_active():
+                return
+            kind = event.get("kind")
+            name = event.get("name", "tool")
+            if kind == "tool_call":
+                args = event.get("arguments") or {}
+                if name == "str_replace_editor":
+                    command = str(args.get("command", ""))
+                    if command in ("create", "str_replace"):
+                        self._term_lines.append(("diff", "", _editor_diff_extra(args)))
+                    else:
+                        self._term_lines.append(("tool", f"{name} {command} {args.get('path', '')}".rstrip()))
+                elif name in ("bash", "run_bash", "run_command"):
+                    cmd = args.get("command") or args.get("cmd") or ""
+                    self._term_lines.append(("tool", f"{name} $ {cmd}" if cmd else name))
+                else:
+                    self._term_lines.append(("tool", f"{name} {_tool_args_summary(args)}".rstrip()))
+            elif kind == "tool_result":
+                content = event.get("content", "")
+                is_error = event.get("isError", False)
+                if name in ("bash", "run_bash", "run_command") and content:
+                    self._term_lines.append(("out", content))
+                elif is_error and content:
+                    self._term_lines.append(("err", content))
+            self.terminal.render_lines(self._term_lines)
 
         def _show_status(self, text: str) -> None:
             if not self._history_expanded and not self._terminal_active():

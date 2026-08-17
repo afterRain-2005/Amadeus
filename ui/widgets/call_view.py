@@ -65,15 +65,15 @@ class _SvgButton(QPushButton):
     def paintEvent(self, event) -> None:
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
-        # fauux：rose #d2738a / 深 danger #7a3040 / cream #c1b492，直角
+        # 左右按钮透明背景；中间挂断粉色底 + 红色图标（图标色在 SVG 内）
         if self._color == "red":
-            bg = QColor(122, 48, 64, 220)
+            bg = QColor(210, 115, 138, 220)
             border = QColor(210, 115, 138, 255)
         elif self._color == "amber":
             bg = QColor(193, 180, 146, 190)
             border = QColor(210, 115, 138, 255)
         else:
-            bg = QColor(210, 115, 138, 40)
+            bg = QColor(0, 0, 0, 0)
             border = QColor(210, 115, 138, 120)
         p.setBrush(bg)
         p.setPen(border)

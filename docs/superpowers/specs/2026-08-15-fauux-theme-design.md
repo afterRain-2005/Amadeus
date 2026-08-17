@@ -68,7 +68,7 @@ class Theme:
 | accent_soft | `rgba(0,212,255,0.16)` | `rgba(210,115,138,0.22)` |
 | text | `#a0eaff` | `#c1b492` |
 | text_dim | `#8e8e93` | `#8a7f63` |
-| danger | `#ff3b30` | `#7a3040` |
+| danger | `#ff3b30` | `#d2738a` |
 | panel_bg | `rgba(8,14,22,0.92)` | `#171114` + 纹理 |
 | label(Kurisu) | `#7be8ff` | `#d2738a` |
 | label(You) | `#8e8e93` | `#8a7f63` |

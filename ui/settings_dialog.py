@@ -1,12 +1,13 @@
-"""Application settings with model, voice, input and about tabs."""
+﻿"""Application settings with model, voice, input and about tabs."""
 from __future__ import annotations
 
 import threading
 
 from PySide6.QtCore import Q_ARG, QMetaObject, QPoint, Qt, Slot
+from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QDialog, QDialogButtonBox,
-    QFormLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, QScrollArea, QTabWidget,
+    QFormLayout, QGraphicsDropShadowEffect, QHBoxLayout, QLabel, QLineEdit, QPushButton, QScrollArea, QTabWidget,
     QVBoxLayout, QWidget,
 )
 
@@ -15,27 +16,27 @@ from core.storage import load_config, save_config
 CRT_QSS = """
 QDialog#settingsDialog { background-color: #171114; color: #c1b492; border: 1px solid #d2738a; }
 QWidget#settingsTitleBar { background-color: #21171b; border: 1px solid #d2738a; border-left: 8px solid #d2738a; }
-QLabel#settingsTitle { color: #c1b492; font: 700 12px "Consolas", "SimSun"; letter-spacing: 0px; }
-QLabel#settingsSignature { color: #8a7f63; font: 10px "Consolas", "SimSun"; }
-QPushButton#settingsClose { background: #171114; color: #d2738a; border: 1px solid #d2738a; min-width: 24px; max-width: 24px; min-height: 22px; max-height: 22px; padding: 0; font: 700 14px "Consolas"; }
+QLabel#settingsTitle { color: #c1b492; font: 700 12px "Consolas", "Microsoft YaHei"; letter-spacing: 2px; }
+QLabel#settingsSignature { color: #8a7f63; font: 10px "Consolas", "Microsoft YaHei"; }
+QPushButton#settingsClose { background: #171114; color: #d2738a; border: 1px solid #d2738a; min-width: 24px; max-width: 24px; min-height: 22px; max-height: 22px; padding: 0; font: 700 14px "Consolas", "Microsoft YaHei"; }
 QPushButton#settingsClose:hover { background: #d2738a; color: #171114; }
 QTabWidget::pane { border: 1px solid #d2738a; background: #171114; top: -1px; }
-QTabBar::tab { background: #21171b; color: #8a7f63; border: 1px solid #8a7f63; border-bottom: 0; padding: 7px 12px; min-width: 72px; font: 12px "Times New Roman", "SimSun"; }
+QTabBar::tab { background: #21171b; color: #8a7f63; border: 1px solid #8a7f63; border-bottom: 0; padding: 7px 12px; min-width: 72px; font: 12px "Consolas", "Microsoft YaHei"; }
 QTabBar::tab:selected { background: #d2738a; color: #171114; border-color: #d2738a; }
 QTabBar::tab:hover:!selected { color: #c1b492; border-color: #d2738a; }
 QWidget#settingsPage { background-color: #171114; }
 QScrollArea { background: transparent; border: 0; }
 QScrollArea > QWidget > QWidget { background-color: #171114; }
-QLabel { color: #c1b492; font: 13px "Times New Roman", "SimSun"; }
-QLabel#sectionHeader { color: #d2738a; border-left: 3px solid #d2738a; padding: 3px 0 3px 8px; font: 700 12px "Times New Roman", "SimSun"; }
-QLineEdit, QComboBox { background-color: #21171b; color: #c1b492; border: 1px solid #8a7f63; border-radius: 0; padding: 7px 9px; min-height: 22px; selection-background-color: #d2738a; selection-color: #171114; font: 13px "Consolas", "SimSun"; }
+QLabel { color: #c1b492; font: 13px "Consolas", "Microsoft YaHei"; }
+QLabel#sectionHeader { color: #d2738a; border-left: 3px solid #d2738a; padding: 3px 0 3px 8px; font: 700 12px "Consolas", "Microsoft YaHei"; }
+QLineEdit, QComboBox { background-color: #21171b; color: #c1b492; border: 1px solid #8a7f63; border-radius: 0; padding: 7px 9px; min-height: 22px; selection-background-color: #d2738a; selection-color: #171114; font: 13px "Consolas", "Microsoft YaHei"; }
 QLineEdit:focus, QComboBox:focus { border-color: #d2738a; background-color: #171114; }
 QComboBox::drop-down { border-left: 1px solid #8a7f63; width: 24px; }
 QComboBox QAbstractItemView { background-color: #171114; color: #c1b492; border: 1px solid #d2738a; selection-background-color: #d2738a; selection-color: #171114; }
-QCheckBox { color: #c1b492; spacing: 8px; font: 13px "Times New Roman", "SimSun"; }
+QCheckBox { color: #c1b492; spacing: 8px; font: 13px "Consolas", "Microsoft YaHei"; }
 QCheckBox::indicator { width: 14px; height: 14px; border: 1px solid #8a7f63; background: #21171b; }
 QCheckBox::indicator:checked { background: #d2738a; border-color: #d2738a; }
-QPushButton { background-color: #21171b; color: #c1b492; border: 1px solid #c1b492; border-radius: 0; padding: 7px 13px; min-height: 24px; font: 700 12px "Times New Roman", "SimSun"; }
+QPushButton { background-color: #21171b; color: #c1b492; border: 1px solid #c1b492; border-radius: 0; padding: 7px 13px; min-height: 24px; font: 700 12px "Consolas", "Microsoft YaHei"; }
 QPushButton:hover { background-color: #d2738a; color: #171114; border-color: #d2738a; }
 QPushButton:pressed { background-color: #c1b492; color: #171114; }
 QDialogButtonBox QPushButton { min-width: 88px; }
@@ -49,6 +50,11 @@ QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: trans
 def _section(title: str) -> QLabel:
     label = QLabel(title)
     label.setObjectName("sectionHeader")
+    glow = QGraphicsDropShadowEffect(label)
+    glow.setColor(QColor(210, 115, 138, 140))
+    glow.setBlurRadius(8)
+    glow.setOffset(0, 0)
+    label.setGraphicsEffect(glow)
     return label
 
 
@@ -97,7 +103,10 @@ class SettingsDialog(QDialog):
         tabs.addTab(_scroll_page(model_page), "直连模型（默认）")
 
         voice_page = QWidget()
-        voice_form = QFormLayout(voice_page)
+        voice_layout = QVBoxLayout(voice_page)
+        voice_layout.setContentsMargins(0, 0, 0, 0)
+        voice_layout.setSpacing(0)
+        voice_form = QFormLayout()
         _tune_form(voice_form)
         voice_form.addRow(_section("VOICE OUTPUT"))
         from config import TTS_PROVIDER_DEFAULT
@@ -114,7 +123,7 @@ class SettingsDialog(QDialog):
         voice_form.addRow("TTS Provider", self.tts_provider)
         voice_form.addRow(self.tts_enabled)
         voice_form.addRow("语速", self.tts_rate)
-        tabs.addTab(_scroll_page(voice_page), "语音合成")
+        voice_layout.addLayout(voice_form)
 
         asr_page = QWidget()
         asr_form = QFormLayout(asr_page)
@@ -127,13 +136,14 @@ class SettingsDialog(QDialog):
         asr_form.addRow("ASR Endpoint", self.asr_endpoint)
         asr_form.addRow("ASR API Key", self.asr_key)
         asr_form.addRow("ASR 模型", self.asr_model)
-        tabs.addTab(_scroll_page(asr_page), "语音输入")
 
-        # === GPT-SoVITS 运行模式（合并到「语音合成」tab 内）===
+        # === GPT-SoVITS 运行模式（独立容器，选择 gpt_sovits 时显示）===
         from config import GPT_SOVITS_DEFAULTS
         from core.ssh_config_parser import parse_ssh_config
         from core.ssh_tunnel import SSHTunnel
-        gpt_form = voice_form  # 合并到语音合成 tab：复用 voice_form
+        self._gpt_block = QWidget()
+        gpt_form = QFormLayout(self._gpt_block)
+        _tune_form(gpt_form)
         gpt_form.addRow(_section("GPT-SOVITS BACKEND"))
         gpt_cfg = {**GPT_SOVITS_DEFAULTS, **(config.get("gpt_sovits") or {})}
         self.gpt_mode = QComboBox()
@@ -178,10 +188,13 @@ class SettingsDialog(QDialog):
         tunnel_btn.clicked.connect(self._test_tunnel)
         self._tunnel: SSHTunnel | None = None
         gpt_form.addRow(tunnel_btn)
+        voice_layout.addWidget(self._gpt_block)
 
-        # === 阿里云百炼 TTS（合并到「语音合成」tab 内）===
+        # === 阿里云百炼 TTS（独立容器，选择 aliyun 时显示）===
         from config import ALIYUN_TTS_DEFAULTS, ALIYUN_TTS_ENGINES
-        aliyun_form = voice_form  # 合并到语音合成 tab：复用 voice_form
+        self._aliyun_block = QWidget()
+        aliyun_form = QFormLayout(self._aliyun_block)
+        _tune_form(aliyun_form)
         aliyun_form.addRow(_section("ALIYUN BAILIAN TTS"))
         aliyun_cfg = {**ALIYUN_TTS_DEFAULTS, **(config.get("aliyun_tts") or {})}
         self.aliyun_api_key = QLineEdit(str(aliyun_cfg.get("api_key", "")))
@@ -211,42 +224,152 @@ class SettingsDialog(QDialog):
         self.aliyun_clone_btn = QPushButton("一键克隆红莉栖音色")
         self.aliyun_clone_btn.clicked.connect(self._on_clone_voice)
         aliyun_form.addRow(self.aliyun_status, self.aliyun_clone_btn)
+        voice_layout.addWidget(self._aliyun_block)
+        voice_layout.addStretch()
+        tabs.addTab(_scroll_page(voice_page), "语音合成")
+        tabs.addTab(_scroll_page(asr_page), "语音输入")
+        self.tts_provider.currentIndexChanged.connect(self._on_tts_provider_changed)
 
         # === Agent 模式（2026-08-15 agent-mode spec §4.4）===
-        from config import AGENT_ROUTER_DEFAULTS, HERMES_DEFAULTS
+        from config import AGENT_ROUTER_DEFAULTS, HARNESS_DEFAULTS, HERMES_DEFAULTS
         agent_page = QWidget()
-        agent_form = QFormLayout(agent_page)
+        agent_layout = QVBoxLayout(agent_page)
+        agent_layout.setContentsMargins(0, 0, 0, 0)
+        agent_layout.setSpacing(0)
+        agent_form = QFormLayout()
         _tune_form(agent_form)
         agent_form.addRow(_section("AGENT ROUTER"))
         router_cfg = {**AGENT_ROUTER_DEFAULTS, **(config.get("agent_router") or {})}
         self.agent_mode = QComboBox()
         self.agent_mode.addItem("本地直连（默认）", "chat")
+        self.agent_mode.addItem("DeepSeek Harness SDK", "harness")
         self.agent_mode.addItem("Hermes 网关（deepseek 模式）", "hermes")
+        self.agent_mode.addItem("DeepSeek 直连", "deepseek")
         self.agent_mode.addItem("codex 子进程", "codex")
         self.agent_mode.addItem("自动分流（gate）", "auto")
         idx = self.agent_mode.findData(str(router_cfg.get("mode", "chat")))
         self.agent_mode.setCurrentIndex(max(idx, 0))
         agent_form.addRow("Agent 模式", self.agent_mode)
+        self._agent_hint = QLabel("本地直连：使用「直连模型」tab 的配置。")
+        self._agent_hint.setStyleSheet("color:#8a7f63")
+        agent_form.addRow(self._agent_hint)
+        agent_layout.addLayout(agent_form)
 
+        # Hermes 块
+        self._hermes_block = QWidget()
+        hermes_form = QFormLayout(self._hermes_block)
+        _tune_form(hermes_form)
+        hermes_form.addRow(_section("HERMES GATEWAY"))
         hermes_cfg = {**HERMES_DEFAULTS, **(config.get("hermes") or {})}
         self.hermes_key = QLineEdit(str(hermes_cfg.get("api_key", "")))
         self.hermes_key.setEchoMode(QLineEdit.Password)
-        agent_form.addRow("Hermes API Key", self.hermes_key)
-
+        hermes_form.addRow("Hermes API Key", self.hermes_key)
         self.hermes_status = QLabel("未检测")
         self.hermes_status.setStyleSheet("color:#8a7f63")
         hermes_btn = QPushButton("检测 Hermes 网关")
         hermes_btn.clicked.connect(self._probe_hermes)
-        agent_form.addRow(self.hermes_status, hermes_btn)
+        hermes_form.addRow(self.hermes_status, hermes_btn)
+        agent_layout.addWidget(self._hermes_block)
 
+        # DeepSeek 块
+        self._deepseek_block = QWidget()
+        deepseek_form = QFormLayout(self._deepseek_block)
+        _tune_form(deepseek_form)
+        deepseek_form.addRow(_section("DEEPSEEK DIRECT"))
+        deepseek_cfg = {**AGENT_ROUTER_DEFAULTS["deepseek"], **(config.get("deepseek") or {})}
+        self.deepseek_base_url = QLineEdit(str(deepseek_cfg.get("base_url", "http://127.0.0.1:8642")))
+        self.deepseek_api_key = QLineEdit(str(deepseek_cfg.get("api_key", "")))
+        self.deepseek_api_key.setEchoMode(QLineEdit.Password)
+        self.deepseek_model = QLineEdit(str(deepseek_cfg.get("model", "deepseek-v3.1")))
+        deepseek_form.addRow("DeepSeek Base URL", self.deepseek_base_url)
+        deepseek_form.addRow("DeepSeek API Key", self.deepseek_api_key)
+        deepseek_form.addRow("DeepSeek Model", self.deepseek_model)
+        agent_layout.addWidget(self._deepseek_block)
+
+        # Harness 块
+        self._harness_block = QWidget()
+        harness_form = QFormLayout(self._harness_block)
+        _tune_form(harness_form)
+        harness_form.addRow(_section("HARNESS SDK"))
+        harness_cfg = {**AGENT_ROUTER_DEFAULTS.get("harness", {}), **(config.get("harness") or {})}
+        self.harness_provider = QComboBox()
+        self.harness_provider.addItem("DeepSeek 官方", "deepseek-official")
+        self.harness_provider.addItem("Custom OpenAI", "custom-openai")
+        idx = self.harness_provider.findData(str(harness_cfg.get("provider", "deepseek-official")))
+        self.harness_provider.setCurrentIndex(max(idx, 0))
+        self.harness_runtime_bin = QLineEdit(str(harness_cfg.get("runtime_bin", "")))
+        harness_form.addRow("Harness Provider", self.harness_provider)
+        harness_form.addRow("Harness Runtime Bin", self.harness_runtime_bin)
+        self.harness_model = QLineEdit(str(harness_cfg.get("model", HARNESS_DEFAULTS["model"])))
+        self.harness_base_url = QLineEdit(str(harness_cfg.get("base_url", "")))
+        self.harness_api_key = QLineEdit(str(harness_cfg.get("api_key", "")))
+        self.harness_api_key.setEchoMode(QLineEdit.Password)
+        self.harness_cwd = QLineEdit(str(harness_cfg.get("cwd", "")))
+        self.harness_session_root = QLineEdit(str(harness_cfg.get("session_root", "")))
+        self.harness_cordis = QLineEdit(str(harness_cfg.get("cordis", "")))
+        self.harness_timeout = QLineEdit(str(harness_cfg.get("request_timeout_seconds", HARNESS_DEFAULTS["request_timeout_seconds"])))
+        self.harness_sandbox_mode = QComboBox()
+        self.harness_sandbox_mode.addItem("只读（read-only）", "read-only")
+        self.harness_sandbox_mode.addItem("工作区可写（workspace-write）", "workspace-write")
+        self.harness_sandbox_mode.addItem("完全访问（danger-full-access）", "danger-full-access")
+        idx = self.harness_sandbox_mode.findData(str(harness_cfg.get("sandbox_mode", HARNESS_DEFAULTS["sandbox_mode"])))
+        self.harness_sandbox_mode.setCurrentIndex(max(idx, 0))
+        self.harness_approval_policy = QComboBox()
+        self.harness_approval_policy.addItem("每次询问（ask）", "ask")
+        self.harness_approval_policy.addItem("从不询问（never，自动拒绝）", "never")
+        idx = self.harness_approval_policy.findData(str(harness_cfg.get("approval_policy", HARNESS_DEFAULTS["approval_policy"])))
+        self.harness_approval_policy.setCurrentIndex(max(idx, 0))
+        self.harness_enable_web = QCheckBox("启用 Web")
+        self.harness_enable_web.setChecked(bool(harness_cfg.get("enable_web", True)))
+        self.harness_enable_plan_mode = QCheckBox("启用 Plan Mode")
+        self.harness_enable_plan_mode.setChecked(bool(harness_cfg.get("enable_plan_mode", True)))
+        self.harness_enable_workflow = QCheckBox("启用 Workflow")
+        self.harness_enable_workflow.setChecked(bool(harness_cfg.get("enable_workflow", True)))
+        self.harness_enable_editor = QCheckBox("启用 Editor")
+        self.harness_enable_editor.setChecked(bool(harness_cfg.get("enable_editor", True)))
+        self.harness_enable_subagent_fork = QCheckBox("启用 Subagent Fork")
+        self.harness_enable_subagent_fork.setChecked(bool(harness_cfg.get("enable_subagent_fork", True)))
+        self.harness_enable_sandbox = QCheckBox("启用 Sandbox")
+        self.harness_enable_sandbox.setChecked(bool(harness_cfg.get("enable_sandbox", True)))
+        self.harness_enable_commands = QCheckBox("启用 Commands")
+        self.harness_enable_commands.setChecked(bool(harness_cfg.get("enable_commands", True)))
+        self.harness_enable_terminal = QCheckBox("启用 Terminal")
+        self.harness_enable_terminal.setChecked(bool(harness_cfg.get("enable_terminal", False)))
+        harness_form.addRow("Harness Model", self.harness_model)
+        harness_form.addRow("Harness Base URL", self.harness_base_url)
+        harness_form.addRow("Harness API Key", self.harness_api_key)
+        harness_form.addRow("Harness CWD", self.harness_cwd)
+        harness_form.addRow("Harness Session Root", self.harness_session_root)
+        harness_form.addRow("Harness Cordis", self.harness_cordis)
+        harness_form.addRow("Harness Timeout", self.harness_timeout)
+        harness_form.addRow("Sandbox Mode", self.harness_sandbox_mode)
+        harness_form.addRow("Approval Policy", self.harness_approval_policy)
+        harness_form.addRow(self.harness_enable_web)
+        harness_form.addRow(self.harness_enable_plan_mode)
+        harness_form.addRow(self.harness_enable_workflow)
+        harness_form.addRow(self.harness_enable_editor)
+        harness_form.addRow(self.harness_enable_subagent_fork)
+        harness_form.addRow(self.harness_enable_sandbox)
+        harness_form.addRow(self.harness_enable_commands)
+        harness_form.addRow(self.harness_enable_terminal)
+        agent_layout.addWidget(self._harness_block)
+
+        # Codex 块
+        self._codex_block = QWidget()
+        codex_form = QFormLayout(self._codex_block)
+        _tune_form(codex_form)
+        codex_form.addRow(_section("CODEX SUBPROCESS"))
         codex_cfg = {**AGENT_ROUTER_DEFAULTS["codex"], **(router_cfg.get("codex") or {})}
         self.codex_sandbox = QComboBox()
         self.codex_sandbox.addItem("只读（默认）", "read-only")
         self.codex_sandbox.addItem("可写工作区", "workspace-write")
         idx = self.codex_sandbox.findData(str(codex_cfg.get("sandbox", "read-only")))
         self.codex_sandbox.setCurrentIndex(max(idx, 0))
-        agent_form.addRow("codex 沙箱", self.codex_sandbox)
+        codex_form.addRow("codex 沙箱", self.codex_sandbox)
+        agent_layout.addWidget(self._codex_block)
+        agent_layout.addStretch()
         tabs.addTab(_scroll_page(agent_page), "Agent 模式")
+        self.agent_mode.currentIndexChanged.connect(self._on_agent_mode_changed)
 
         # === Companion 主动问候（2026-08-16 spec §8）===
         from config import COMPANION_DEFAULTS
@@ -344,6 +467,11 @@ class SettingsDialog(QDialog):
         title_layout.setSpacing(8)
         title = QLabel("AMADEUS CONFIG", title_bar)
         title.setObjectName("settingsTitle")
+        title_glow = QGraphicsDropShadowEffect(title)
+        title_glow.setColor(QColor(210, 115, 138, 180))
+        title_glow.setBlurRadius(14)
+        title_glow.setOffset(1, 3)
+        title.setGraphicsEffect(title_glow)
         signature = QLabel("tait-crt-interface-skill", title_bar)
         signature.setObjectName("settingsSignature")
         close_btn = QPushButton("X", title_bar)
@@ -362,6 +490,15 @@ class SettingsDialog(QDialog):
         layout.addWidget(tabs)
         layout.addWidget(buttons)
 
+        # CRT 特效叠加层：扫描线 + 暗角（透明，不拦截鼠标）
+        from ui.widgets.crt_overlay import CrtOverlay
+        self._crt = CrtOverlay(self, scanlines=True, vignette=True, noise=False)
+        self._crt.raise_()
+
+        # 按当前选择初始化各服务配置块的可见性
+        self._on_tts_provider_changed()
+        self._on_agent_mode_changed()
+
     def mousePressEvent(self, event) -> None:
         if event.button() == Qt.LeftButton and event.position().y() <= 42:
             self._drag_pos = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
@@ -379,6 +516,22 @@ class SettingsDialog(QDialog):
     def mouseReleaseEvent(self, event) -> None:
         self._drag_pos = QPoint()
         super().mouseReleaseEvent(event)
+
+    def _on_tts_provider_changed(self) -> None:
+        """切换 TTS provider 时只显示对应后端的配置项。"""
+        provider = self.tts_provider.currentData()
+        self._gpt_block.setVisible(provider == "gpt_sovits")
+        self._aliyun_block.setVisible(provider == "aliyun")
+
+    def _on_agent_mode_changed(self) -> None:
+        """切换 Agent 模式时只显示对应后端的配置项；auto 显示全部。"""
+        mode = self.agent_mode.currentData()
+        show_all = mode == "auto"
+        self._agent_hint.setVisible(mode == "chat")
+        self._hermes_block.setVisible(mode == "hermes" or show_all)
+        self._deepseek_block.setVisible(mode == "deepseek" or show_all)
+        self._harness_block.setVisible(mode == "harness" or show_all)
+        self._codex_block.setVisible(mode == "codex" or show_all)
 
     def _check_update(self) -> None:
         from core.version import __version__, check_latest_version, parse_version
@@ -594,7 +747,7 @@ class SettingsDialog(QDialog):
             "asr_api_key": self.asr_key.text().strip(), "asr_model": self.asr_model.text().strip(),
             "version_check_url": self.version_check_url.text().strip(),
         })
-        from config import AGENT_ROUTER_DEFAULTS, HERMES_DEFAULTS
+        from config import AGENT_ROUTER_DEFAULTS, HARNESS_DEFAULTS, HERMES_DEFAULTS
         router_cfg = {**AGENT_ROUTER_DEFAULTS, **(config.get("agent_router") or {})}
         codex_cfg = {**AGENT_ROUTER_DEFAULTS["codex"], **(router_cfg.get("codex") or {})}
         codex_cfg["sandbox"] = self.codex_sandbox.currentData()
@@ -602,6 +755,42 @@ class SettingsDialog(QDialog):
         hermes_cfg = {**HERMES_DEFAULTS, **(config.get("hermes") or {})}
         hermes_cfg["api_key"] = self.hermes_key.text().strip()
         config["hermes"] = hermes_cfg
+        deepseek_cfg = {**AGENT_ROUTER_DEFAULTS["deepseek"], **(config.get("deepseek") or {})}
+        deepseek_cfg["base_url"] = self.deepseek_base_url.text().strip()
+        deepseek_cfg["api_key"] = self.deepseek_api_key.text().strip()
+        config["deepseek"] = deepseek_cfg
+        deepseek_cfg["model"] = self.deepseek_model.text().strip()
+        config["deepseek"] = deepseek_cfg
+        harness_cfg = {**AGENT_ROUTER_DEFAULTS.get("harness", {}), **(config.get("harness") or {})}
+        harness_cfg["provider"] = self.harness_provider.currentData()
+        harness_cfg["runtime_bin"] = self.harness_runtime_bin.text().strip()
+        harness_cfg["model"] = self.harness_model.text().strip()
+        harness_cfg["base_url"] = self.harness_base_url.text().strip()
+        harness_cfg["api_key"] = self.harness_api_key.text().strip()
+        harness_cfg["cwd"] = self.harness_cwd.text().strip()
+        harness_cfg["session_root"] = self.harness_session_root.text().strip()
+        harness_cfg["cordis"] = self.harness_cordis.text().strip()
+        try:
+            harness_cfg["request_timeout_seconds"] = float(self.harness_timeout.text().strip())
+        except ValueError:
+            harness_cfg["request_timeout_seconds"] = float(HARNESS_DEFAULTS["request_timeout_seconds"])
+        harness_cfg["sandbox_mode"] = self.harness_sandbox_mode.currentData()
+        harness_cfg["approval_policy"] = self.harness_approval_policy.currentData()
+        harness_cfg["enable_web"] = self.harness_enable_web.isChecked()
+        harness_cfg["enable_plan_mode"] = self.harness_enable_plan_mode.isChecked()
+        harness_cfg["enable_workflow"] = self.harness_enable_workflow.isChecked()
+        harness_cfg["enable_editor"] = self.harness_enable_editor.isChecked()
+        harness_cfg["enable_subagent_fork"] = self.harness_enable_subagent_fork.isChecked()
+        harness_cfg["enable_sandbox"] = self.harness_enable_sandbox.isChecked()
+        harness_cfg["enable_commands"] = self.harness_enable_commands.isChecked()
+        harness_cfg["enable_terminal"] = self.harness_enable_terminal.isChecked()
+        config["harness"] = harness_cfg
+        # 根据 enable_* 开关 + 沙箱/审批语义动态生成 cordis，写入 data/harness/cordis.full.yml
+        try:
+            from core.cordis_builder import write_generated_cordis
+            write_generated_cordis(harness_cfg)
+        except Exception:
+            pass  # 生成失败不阻塞保存；harness 运行时回退到内置全量模板
         # companion 配置
         from config import COMPANION_DEFAULTS
         companion_cfg = {**COMPANION_DEFAULTS, **(config.get("companion") or {})}
@@ -654,3 +843,5 @@ class SettingsDialog(QDialog):
             self._tunnel = None
         save_config(config)
         self.accept()
+
+

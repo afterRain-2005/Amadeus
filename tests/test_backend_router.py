@@ -61,6 +61,49 @@ def test_route_hermes_ok(monkeypatch):
     assert (reply, backend) == ("hermes 回复", "hermes")
 
 
+def test_route_deepseek_ok(monkeypatch):
+    import core.deepseek_client as dc
+    seen = {}
+
+    def fake_turn(**kw):
+        seen.update(kw)
+        return "harness 回复"
+
+    monkeypatch.setattr(dc, "run_deepseek_turn", fake_turn)
+    cfg = _cfg("deepseek")
+    cfg["deepseek"] = {"base_url": "http://harness", "api_key": "dk", "model": "v3"}
+    reply, backend = backend_router.route_and_send(
+        config=cfg, input_text="hi", soul_md="soul")
+    assert (reply, backend) == ("harness 回复", "deepseek")
+    assert seen["endpoint"] == "http://harness"
+    assert seen["api_key"] == "dk"
+
+
+def test_route_harness_passes_runtime_bin(monkeypatch):
+    import core.harness_bridge as hb
+    seen = {}
+
+    def fake_turn(**kw):
+        seen.update(kw)
+        return "harness 回复"
+
+    monkeypatch.setattr(hb, "run_harness_turn", fake_turn)
+    cfg = _cfg("harness")
+    cfg["harness"] = {
+        "base_url": "http://harness",
+        "api_key": "hk",
+        "model": "v3",
+        "provider": "custom-openai",
+        "runtime_bin": "C:/harness/bin.js",
+    }
+    reply, backend = backend_router.route_and_send(
+        config=cfg, input_text="hi", soul_md="soul")
+    assert (reply, backend) == ("harness 回复", "harness")
+    assert seen["endpoint"] == "http://harness"
+    assert seen["api_key"] == "hk"
+    assert seen["runtime_bin"] == "C:/harness/bin.js"
+
+
 def test_route_hermes_gateway_down_fallback(monkeypatch):
     import core.agent_client as ac
     import core.hermes_launcher as hl

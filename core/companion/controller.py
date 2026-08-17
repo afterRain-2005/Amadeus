@@ -22,6 +22,13 @@ from core.storage import APP_DIR
 
 class CompanionController:
     def __init__(self, *, config: dict, llm_config: dict) -> None:
+        # 启动即建表：lightweight_memory 表此前只在设置页「清空记忆」里建，
+        # 实际使用时 _companion_tick 首次查询就抛 OperationalError 被吞掉，
+        # 导致 handle_signal 永不执行（无主动气泡）。此处兜底建表，失败静默降级。
+        try:
+            storage.init_schema()
+        except Exception:
+            pass  # companion 永不影响主流程
         self.scheduler = Scheduler(config)
         self.evaluator = Evaluator()
         self.llm_endpoint = llm_config.get("endpoint", "")

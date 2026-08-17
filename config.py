@@ -56,7 +56,7 @@ OPENCLAW_DEFAULTS: dict[str, object] = {
 }
 
 # === Agent 模式路由默认配置（2026-08-15 agent-mode spec §4.4）===
-# mode: "chat"=本地直连(现状) | "hermes"=Hermes 网关(deepseek模式) | "codex"=codex 子进程 | "auto"=gate 分流
+# mode: "chat"=本地直连(现状) | "harness"=DeepSeek Harness SDK | "hermes"=旧 Hermes 网关 | "deepseek"=DeepSeek 直连 | "codex"=codex 子进程 | "auto"=gate 分流
 # 运行时被 data/config.json 的 agent_router 键覆盖（{**DEFAULTS, **config["agent_router"]}）。
 AGENT_ROUTER_DEFAULTS: dict[str, object] = {
     "mode": "chat",
@@ -65,6 +65,46 @@ AGENT_ROUTER_DEFAULTS: dict[str, object] = {
         "sandbox": "read-only",                # codex 沙箱：read-only | workspace-write
         "timeout": 120,                        # codex exec 单轮超时（秒）
     },
+    "deepseek": {
+        "base_url": "http://127.0.0.1:8642",
+        "api_key": "",
+        "model": "deepseek-v3.1",
+    },
+    "harness": {
+        "base_url": "",
+        "api_key": "",
+        "model": "deepseek-v4-flash",
+        "provider": "deepseek-official",
+        "runtime_bin": "",
+    },
+}
+
+# === DeepSeek Harness 完整配置默认值 ===
+# 这组配置只在 agent_router.mode = "harness" 时使用；平常聊天和 Companion 仍走本地 agent。
+HARNESS_DEFAULTS: dict[str, object] = {
+    "provider": "deepseek-official",
+    "model": "deepseek-v4-flash",
+    "base_url": "",
+    "api_key": "",
+    "runtime_bin": "",
+    "cordis": "",
+    "cwd": "",
+    "session_root": "",
+    "request_timeout_seconds": 300.0,
+    # sandbox_mode 对应 harness dsh-sandbox-policy 的 mode：
+    #   read-only | workspace-write | danger-full-access
+    "sandbox_mode": "workspace-write",
+    # approval_policy 对应 harness dsh-user-approval 的 policy：
+    #   ask（有 answerer 时询问，无则 fail-closed） | never（一律自动拒绝）
+    "approval_policy": "ask",
+    "enable_web": True,
+    "enable_plan_mode": True,
+    "enable_workflow": True,
+    "enable_editor": True,
+    "enable_subagent_fork": True,
+    "enable_sandbox": True,
+    "enable_commands": True,
+    "enable_terminal": False,
 }
 
 # === Companion 主动问候默认配置（2026-08-16 companion-proactive-greeting spec §8）===

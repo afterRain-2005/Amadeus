@@ -29,8 +29,8 @@ import time
 import numpy as np
 from PySide6.QtCore import QObject, QTimer, Signal
 
-from config import PHONE_DEFAULTS, VAD_PARAMS, get_character_by_id, KURISU_OUTPUT_FORMAT
-from core.agent_client import _load_soul_md, _stream_turn_direct
+from config import PHONE_DEFAULTS, VAD_PARAMS, get_character_by_id
+from core.agent_client import _load_soul_md
 from core.asr_client import encode_wav, transcribe
 from core.emotion_parser import parse_reply
 from core.screen_capture import ScreenCapturer
@@ -316,24 +316,25 @@ class VoiceCallController(QObject):
         )
 
     def _stream_llm(self, user_text: str) -> str:
-        """流式 LLM（复用 _stream_turn_direct，不带工具）。
+        """通过统一路由调用 harness / agent 后端。
 
-        on_delta 回调到 _on_llm_delta，照搬 desktop_pet._agent_delta 的 === 检测逻辑：
-        检测到中日分隔符 === 后启动流式 TTS，只把日语段追加到 TTS 合成队列，
-        中文段不送 TTS（与 desktop_pet 普通对话完全对齐）。
+        这条路径会沿用桌面端同一套路由、审批、工具和流式 delta 处理，
+        让电话模式不再绕开 harness 内核。
         """
-        url = self._config["endpoint"].rstrip("/") + "/chat/completions"
-        headers = {"Authorization": f"Bearer {self._config['api_key']}"}
-        system = self._soul_md + "\n\n" + KURISU_OUTPUT_FORMAT
-        messages = [
-            {"role": "system", "content": system},
-            {"role": "user", "content": user_text},
-        ]
-        content, _ = _stream_turn_direct(
-            url, headers, self._config["model"], messages,
+        from core.backend_router import route_and_send
+        reply, _backend = route_and_send(
+            config=self._config,
+            input_text=user_text,
+            soul_md=self._soul_md,
+            conversation_history=None,
+            memories=None,
             on_delta=self._on_llm_delta,
+            on_status=self.subtitle.emit,
+            on_approval=lambda _: "deny",
+            system_role="user",
+            skip_history=True,
         )
-        return content.strip()
+        return reply.strip()
 
     def _on_llm_delta(self, delta: str) -> None:
         """LLM 流式 delta 回调：纯 === 切段 + 日语字符过滤（与 desktop_pet._agent_delta 对齐）。

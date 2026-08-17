@@ -31,14 +31,18 @@ def test_agent_tab_defaults(qapp):
     dlg = _make_dialog(qapp, {})
     assert dlg.agent_mode.currentData() == "chat"
     assert dlg.codex_sandbox.currentData() == "read-only"
+    assert dlg.deepseek_base_url.text() == "http://127.0.0.1:8642"
 
 
 def test_agent_tab_save(qapp):
     store = {}
     dlg = _make_dialog(qapp, store)
-    dlg.agent_mode.setCurrentIndex(3)       # auto
+    dlg.agent_mode.setCurrentIndex(dlg.agent_mode.findData("auto"))  # auto
     dlg.codex_sandbox.setCurrentIndex(1)    # workspace-write
     dlg.hermes_key.setText("hk")
+    dlg.deepseek_base_url.setText("http://harness")
+    dlg.deepseek_api_key.setText("dk")
+    dlg.deepseek_model.setText("v3")
     with patch("ui.settings_dialog.load_config", return_value=store), \
          patch("ui.settings_dialog.save_config") as save_mock:
         dlg._save()
@@ -46,3 +50,6 @@ def test_agent_tab_save(qapp):
     assert saved["agent_router"]["mode"] == "auto"
     assert saved["agent_router"]["codex"]["sandbox"] == "workspace-write"
     assert saved["hermes"]["api_key"] == "hk"
+    assert saved["deepseek"] == {
+        "base_url": "http://harness", "api_key": "dk", "model": "v3"
+    }
