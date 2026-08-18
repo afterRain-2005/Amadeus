@@ -96,8 +96,23 @@ def route_and_send(
         openclaw_cfg.update(config["openclaw"])
     openclaw_enabled = bool(openclaw_cfg.get("enabled", False))
 
+    auto_route = bool(router.get("auto_route", False))
     if system_role == "companion":
         route = "chat"
+    elif auto_route:
+        from core.ollama_router import route_with_ollama
+        ollama_cfg = dict(router.get("ollama") or {})
+        try:
+            ollama_timeout = float(ollama_cfg.get("timeout", 30))
+        except (TypeError, ValueError):
+            ollama_timeout = 30.0
+        route = route_with_ollama(
+            input_text,
+            targets=list(router.get("auto_targets") or ["local", "harness"]),
+            base_url=str(ollama_cfg.get("base_url", "http://127.0.0.1:11434")),
+            model=str(ollama_cfg.get("model", "qwen2.5:0.5b")),
+            timeout=ollama_timeout,
+        )
     elif mode in ("chat", "harness", "hermes", "deepseek", "codex"):
         route = mode
     else:

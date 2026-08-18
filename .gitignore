@@ -19,6 +19,12 @@ GPT-SoVITS/
 gpt_sovits_venv/
 gpt_sovits_venv_py311/
 
+# 缓存 / 虚拟环境（体积大，可重建，不入库）
+node_modules/
+.venv/
+.pytest_cache/
+.pnpm-store/
+
 # 测试产物音频
 data/*.wav
 
@@ -26,6 +32,13 @@ data/*.wav
 data/config.json
 data/saved_logins.json
 data/characters/
+data/memory.db
+data/harness/sessions/
+data/harness/workspace/
+.sessions/
+
+# 日志
+*.log
 
 # 运行时通信文件
 data/pet_command.json

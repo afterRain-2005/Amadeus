@@ -2,6 +2,47 @@
 
 > 每轮对话结束时记录 5 条最重要的教训。开始项目时首先查看本文件。
 
+## 2026-08-18 Ollama 自动路由层（本地小模型分流 local/harness）
+
+### 1. 【能力边界】分流判据必须用代码/文档实证，不能凭模型名假设
+harness 能不能"打开浏览器"，不能靠"它是 agent 应该能"来猜。读
+data/harness/cordis.full.yml（启用的插件）+ deepseek-harness-master/docs/tool-catalog.md
+（模型可见工具）确认：harness 有 bash/edit/grep/subagent/workflow/web_search，但**无任何
+GUI 工具**（无 open_target/click/operate_gui/list_windows），terminal_* 在 Windows 禁用，
+web_fetch 被禁。本地直连 desktop_tools.py 则有全套 GUI 能力。这正是"打开浏览器只有本地
+能做"的根因，也是 Ollama 二分类 prompt 的依据。
+**教训**：给多后端设计分流规则前，先把每个后端的「工具清单」列成对照表，用配置+文档实证，
+不靠直觉。
+
+### 2. 【需求收敛】"本地小模型分流"需先澄清四个点再写 PRD
+"本地小模型"本身有歧义（Ollama？LM Studio？复用现有接口？）。用 AskUserQuestion 逐项澄清：
+①小模型形态=Ollama；②分流目标=只分 local/harness（chat 兜底）；③模型=qwen2.5:0.5b；
+④交互=独立开关（不复用现有 auto 下拉）。每个答案都收窄了设计，避免按"多模式通用分流"
+过度设计。
+**教训**：涉及"模型/后端/路由"的功能需求，先问清「用什么跑、分流到哪几个、兜底是什么、
+怎么触发」，再动笔。
+
+### 3. 【容错】分流层必须"单目标短路 + 失败回退 local"双兜底
+route_with_ollama 设计：targets 过滤后为空→local；只有一个目标→直接返回不调 Ollama；
+多目标调 Ollama，任何异常（连接失败/超时/非法返回）→local。这样即使 Ollama 没装/没起，
+自动分流也只是退化成"本地直连"，不阻断对话。
+**教训**：路由/分类层是对话主链路上的组件，必须 fail-open 到最安全路径（本地直连），
+不能 fail-closed 让用户发不出消息。
+
+### 4. 【边界验证】config.json 是外部输入，读配置要做类型安全转换
+auto_route 分支读 `router["ollama"]["timeout"]` 时用 try/except float() 包裹——config.json
+是用户可手改的外部边界，timeout 可能被写成字符串。这与"只在系统边界验证"原则一致，
+不信任内部默认值。
+**教训**：来自持久化文件（config.json）的数值字段，读取时做一次类型安全转换，成本极低。
+
+### 5. 【接入点】自动分流用独立开关优先于 mode，避免改动现有 auto 语义
+现有 `auto` 模式走 classify_input（远程 DeepSeek 三分 chat/agent/gui）。新功能不替换它，
+而是新增 `auto_route` 布尔开关，在 route_and_send 的 `system_role=="companion"` 判断之后、
+`mode in (...)` 之前插入分支，`route_with_ollama` 返回 local/harness 直接落入既有 harness
+分支或末尾本地直连分支。改动集中在路由入口，不动 classify_input/_llm_classify。
+**教训**：给已有路由加新分流时，优先"新增独立开关 + 在入口插一层"，而不是改写旧分类逻辑，
+这样新旧路径互不干扰、可独立回滚。
+
 ## 2026-08-18 CRT 特效 UI 改进（终端/设置页/Dock+对话栏）
 
 ### 1. 【PySide6】QGraphicsDropShadowEffect 属于 QtWidgets，不属于 QtGui

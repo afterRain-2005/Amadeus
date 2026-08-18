@@ -253,7 +253,32 @@ class SettingsDialog(QDialog):
         self._agent_hint = QLabel("本地直连：使用「直连模型」tab 的配置。")
         self._agent_hint.setStyleSheet("color:#8a7f63")
         agent_form.addRow(self._agent_hint)
+
+        # 自动分流（Ollama 小模型，独立开关，优先于 Agent 模式）
+        self.auto_route = QCheckBox("自动分流（Ollama 小模型）")
+        self.auto_route.setChecked(bool(router_cfg.get("auto_route", False)))
+        agent_form.addRow(self.auto_route)
         agent_layout.addLayout(agent_form)
+
+        self._auto_block = QWidget()
+        auto_form = QFormLayout(self._auto_block)
+        _tune_form(auto_form)
+        auto_form.addRow(_section("AUTO ROUTE (OLLAMA)"))
+        auto_targets = list(router_cfg.get("auto_targets") or ["local", "harness"])
+        self.auto_target_local = QCheckBox("本地直连")
+        self.auto_target_local.setChecked("local" in auto_targets)
+        self.auto_target_harness = QCheckBox("DeepSeek Harness")
+        self.auto_target_harness.setChecked("harness" in auto_targets)
+        auto_form.addRow(self.auto_target_local)
+        auto_form.addRow(self.auto_target_harness)
+        ollama_cfg = dict(router_cfg.get("ollama") or {})
+        self.ollama_base_url = QLineEdit(str(ollama_cfg.get("base_url", "http://127.0.0.1:11434")))
+        self.ollama_model = QLineEdit(str(ollama_cfg.get("model", "qwen2.5:0.5b")))
+        auto_form.addRow("Ollama Base URL", self.ollama_base_url)
+        auto_form.addRow("Ollama Model", self.ollama_model)
+        agent_layout.addWidget(self._auto_block)
+        self.auto_route.toggled.connect(self._on_auto_route_toggled)
+        self._on_auto_route_toggled()
 
         # Hermes 块
         self._hermes_block = QWidget()
@@ -533,6 +558,10 @@ class SettingsDialog(QDialog):
         self._harness_block.setVisible(mode == "harness" or show_all)
         self._codex_block.setVisible(mode == "codex" or show_all)
 
+    def _on_auto_route_toggled(self) -> None:
+        """自动分流开关：显示/隐藏 Ollama 配置与模式勾选。"""
+        self._auto_block.setVisible(self.auto_route.isChecked())
+
     def _check_update(self) -> None:
         from core.version import __version__, check_latest_version, parse_version
         url = self.version_check_url.text().strip()
@@ -751,7 +780,27 @@ class SettingsDialog(QDialog):
         router_cfg = {**AGENT_ROUTER_DEFAULTS, **(config.get("agent_router") or {})}
         codex_cfg = {**AGENT_ROUTER_DEFAULTS["codex"], **(router_cfg.get("codex") or {})}
         codex_cfg["sandbox"] = self.codex_sandbox.currentData()
-        config["agent_router"] = {"mode": self.agent_mode.currentData(), "codex": codex_cfg}
+        _ollama_cfg = dict(router_cfg.get("ollama") or {})
+        try:
+            _ollama_timeout = float(_ollama_cfg.get("timeout", 30))
+        except (TypeError, ValueError):
+            _ollama_timeout = 30.0
+        auto_targets = []
+        if self.auto_target_local.isChecked():
+            auto_targets.append("local")
+        if self.auto_target_harness.isChecked():
+            auto_targets.append("harness")
+        config["agent_router"] = {
+            "mode": self.agent_mode.currentData(),
+            "codex": codex_cfg,
+            "auto_route": self.auto_route.isChecked(),
+            "auto_targets": auto_targets,
+            "ollama": {
+                "base_url": self.ollama_base_url.text().strip(),
+                "model": self.ollama_model.text().strip(),
+                "timeout": _ollama_timeout,
+            },
+        }
         hermes_cfg = {**HERMES_DEFAULTS, **(config.get("hermes") or {})}
         hermes_cfg["api_key"] = self.hermes_key.text().strip()
         config["hermes"] = hermes_cfg
