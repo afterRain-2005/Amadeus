@@ -603,9 +603,9 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
 
     class DockButton(QPushButton):
         """Dock 单个按钮：SVG 图标 + hover 放大。"""
-        BASE_SIZE = 32
-        HOVER_SIZE = 44
-        NEAR_SIZE = 38
+        BASE_SIZE = 40
+        HOVER_SIZE = 48
+        NEAR_SIZE = 44
 
         def __init__(self, icon_name: str, tooltip: str, is_danger: bool = False, parent=None):
             super().__init__(parent)
@@ -858,7 +858,7 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
         def __init__(self, parent=None):
             super().__init__(parent)
             self.setWindowTitle("Amadeus Terminal")
-            self.setWindowFlags(Qt.FramelessWindowHint | Qt.Dialog)
+            self.setWindowFlags(Qt.FramelessWindowHint | Qt.Dialog | Qt.WindowStaysOnTopHint)
             self.setObjectName("agentTerminal")
             self.setStyleSheet(
                 "QDialog#agentTerminal{background-color:#171114;"
@@ -918,6 +918,9 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
                 "QScrollBar::add-page:vertical,QScrollBar::sub-page:vertical{background:transparent}"
             )
             self.log.setOpenExternalLinks(False)
+            # 超链接：默认不自动导航，Ctrl+点击用系统浏览器打开
+            self.log.setOpenLinks(False)
+            self.log.anchorClicked.connect(self._open_external_link)
             layout.addWidget(self.log, 1)
 
             # 输入行：rose 提示符 + 输入框 + 闪烁块光标（下边框式）
@@ -1200,6 +1203,13 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
         def _scroll_to_bottom(self) -> None:
             sb = self.log.verticalScrollBar()
             sb.setValue(sb.maximum())
+
+        def _open_external_link(self, url) -> None:
+            """Ctrl+点击超链接：用系统默认浏览器打开（普通点击不响应）。"""
+            if not (QApplication.keyboardModifiers() & Qt.ControlModifier):
+                return
+            from PySide6.QtGui import QDesktopServices
+            QDesktopServices.openUrl(url)
 
         def set_busy(self, busy: bool) -> None:
             self.input.setDisabled(busy)
@@ -1628,10 +1638,10 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             self._fade_anim = fade_in  # 保持引用防 GC
             if not self._history_expanded:
                 self.reply_bubble.show()
-            char_count = len(text)
-            duration = int(min(1500 + char_count * 80, 6000))
             self._bubble_index += 1
-            self._bubble_timer = QTimer.singleShot(duration, self._show_next_bubble)
+            # 全部段展示完后，9 秒无操作再隐藏气泡
+            if self._bubble_index >= len(self._bubble_segments):
+                self._bubble_timer = QTimer.singleShot(9000, self._hide_idle_bubble)
 
         def _cancel_bubbles(self) -> None:
             """取消正在进行的气泡序列。"""
@@ -1724,7 +1734,7 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             """终端固定在主窗口左侧，随主窗口移动，不能主动拖动。"""
             if self.terminal is None or not self.terminal.isVisible():
                 return
-            gap = 8
+            gap = -24  # 负值：终端右移约一个 dock 图标宽度（32px），贴近角色
             x = self.x() - self.terminal.width() - gap
             y = self.y() + (self.height() - self.terminal.height()) // 2
             screen = QApplication.primaryScreen().availableGeometry()
@@ -1747,8 +1757,9 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             if self.terminal is None:
                 self.terminal = AgentTerminal(self)
                 self.terminal.submitted.connect(self._terminal_send)
-            if not self._term_lines:
-                self._term_lines = self._terminal_session_lines()
+            # 每次打开都从当前会话重建终端行，避免只加载一次导致
+            # 之后主页面新增的聊天记录不显示在终端（历史抽屉是每次重读的）。
+            self._term_lines = self._terminal_session_lines()
             self.terminal.render_lines(self._term_lines)
             self.terminal.show()
             self._position_terminal()
@@ -2092,7 +2103,7 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             w, h = self.width(), self.height()
             # Dock：底部居中悬浮
             dock_w = self.dock_bar.sizeHint().width()
-            self.dock_bar.setGeometry((w - dock_w) // 2, h - 56, dock_w, 48)
+            self.dock_bar.setGeometry((w - dock_w) // 2, h - 64, dock_w, 56)
             # 输入面板：底部居中（与 Dock 同位，互斥显示）
             panel_w = 320
             self.input_panel.setGeometry((w - panel_w) // 2, h - 56, panel_w, 48)
@@ -2114,6 +2125,10 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
                 # input 可见时点 PetWindow 空白区收起 input，不触发拖拽/聚焦
                 if self.input_panel.isVisible() and self._input_opacity.opacity() > 0.5:
                     self._toggle_input_panel()
+                    return
+                # 气泡还有剩余分段时，左键点击推进下一句
+                if self._bubble_segments and self._bubble_index < len(self._bubble_segments):
+                    self._show_next_bubble()
                     return
                 if event.position().x() > 50:
                     self._focus_input()
