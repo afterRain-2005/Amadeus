@@ -1,4 +1,4 @@
-﻿"""Application settings with model, voice, input and about tabs."""
+"""Application settings with model, voice, input and about tabs."""
 from __future__ import annotations
 
 import threading
