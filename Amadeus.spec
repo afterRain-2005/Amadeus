@@ -6,6 +6,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path('.').resolve()))
 from core.version import __version__  # noqa: E402
+from PyInstaller.utils.hooks import collect_submodules  # noqa: E402
 
 # .libs 是 pip install --target 的本地依赖（ddgs/trafilatura/mss），加入搜索路径以便 PyInstaller 收集
 _libs = Path('.').resolve() / '.libs'
@@ -15,6 +16,22 @@ if _libs.is_dir():
 # deepseek-harness Python SDK 路径 + 运行时路径
 _harness_sdk = Path('.').resolve() / 'deepseek-harness-master' / 'python' / 'sdk' / 'src'
 _harness_runtime = Path('.').resolve() / 'deepseek-harness-master' / 'python' / 'sdk-runtime' / 'src'
+
+hiddenimports = [
+    'pywebview.platforms.edgechromium',
+    'ddgs', 'trafilatura', 'mss',
+    'miniaudio',  # 阿里云 TTS 流式 MP3 解码（core/mp3_decoder.py 函数内动态 import，PyInstaller 静态分析漏抓）
+    'markdown', 'markdown.extensions.fenced_code', 'markdown.extensions.tables', 'markdown.extensions.nl2br',  # 终端 markdown 渲染（extensions 动态 import）
+    'deepseek_harness', 'deepseek_harness.client', 'deepseek_harness.api', 'deepseek_harness.models', 'deepseek_harness.errors',  # DeepSeek Harness SDK
+    'deepseek_harness_runtime',  # DeepSeek Harness 运行时（node 模式）
+    'core.cordis_builder',  # 设置页保存时动态生成 cordis（ui/settings_dialog.py 函数内 import，PyInstaller 静态分析可能漏抓）
+]
+# 项目本地 ui/core 子模块大量以「函数内 import」形式存在，PyInstaller 静态分析会漏抓
+# （运行时 ModuleNotFoundError: No module named 'ui.settings_dialog'）。
+# 全量收集本地包，避免逐个补 hiddenimports。
+hiddenimports += ['ui']
+hiddenimports += collect_submodules('ui')
+hiddenimports += collect_submodules('core')
 
 a = Analysis(
     ['main.py'],
@@ -26,15 +43,7 @@ a = Analysis(
         # DeepSeek Harness node 闭包 + 默认 cordis.yml + 元数据（frozen 下由 core/harness_bridge.py 的 _runtime_data_dir 定位）
         (str(_harness_runtime / 'deepseek_harness_runtime'), 'deepseek_harness_runtime'),
     ],
-    hiddenimports=[
-        'pywebview.platforms.edgechromium',
-        'ddgs', 'trafilatura', 'mss',
-        'miniaudio',  # 阿里云 TTS 流式 MP3 解码（core/mp3_decoder.py 函数内动态 import，PyInstaller 静态分析漏抓）
-        'markdown', 'markdown.extensions.fenced_code', 'markdown.extensions.tables', 'markdown.extensions.nl2br',  # 终端 markdown 渲染（extensions 动态 import）
-        'deepseek_harness', 'deepseek_harness.client', 'deepseek_harness.api', 'deepseek_harness.models', 'deepseek_harness.errors',  # DeepSeek Harness SDK
-        'deepseek_harness_runtime',  # DeepSeek Harness 运行时（node 模式）
-        'core.cordis_builder',  # 设置页保存时动态生成 cordis（ui/settings_dialog.py 函数内 import，PyInstaller 静态分析可能漏抓）
-    ],
+    hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
