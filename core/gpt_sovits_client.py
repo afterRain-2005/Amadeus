@@ -3,11 +3,13 @@
 Run the local GPT-SoVITS server first:
     powershell -ExecutionPolicy Bypass -File scripts/start_gpt_sovits_api.ps1
 
-红莉栖声线配置要点：
-  - REF_AUDIO: voice_sample_clip_v2.wav（从 voice_sample.mp3 截取 7-13s，6 秒片段，
-    F0 260-280Hz 稳定，红莉栖声线特征最明显；原 mp3 15.3s 超出 GPT-SoVITS 3-10s 限制）
-  - prompt_text: ASR(SenseVoiceSmall) 识别 clip_v2.wav 得到的对应日语文本，
-    用于 GPT-SoVITS 声线克隆对齐
+红莉栖声线配置要点（v2ProPlus 角色模型，2026-08-19 换装）：
+  - 模型：GPT_weights_v2ProPlus/kurisu_crs_gpt-e80.ckpt + SoVITS_weights_v2ProPlus/kurisu_crs_s2-e12_v2ProPlus.pth
+    （对应 tts_infer.yaml custom 段，旧 v3 配置备份 tts_infer_v3.bak.yaml）
+  - REF_AUDIO: crs_1393_clip.wav（crs_1393.wav 裁 0~9.8s 至 10s 限制内；
+    v2ProPlus 要求参考音频 3~10s，原包音频 10.94s 超限会被拒绝）
+  - prompt_text: SenseVoiceSmall ASR 识别 clip 段得到的日语文本
+    （与裁剪段精确对齐，勿用整句原文），用于 GPT-SoVITS 声线克隆对齐
   - prompt_lang/text_lang=ja：红莉栖讲日语（需 py311 venv + pyopenjtalk）
 """
 from __future__ import annotations
@@ -23,17 +25,18 @@ from config import PHONE_DEFAULTS
 
 
 ROOT = Path(__file__).resolve().parent.parent
-# 截取后的 6 秒片段（7-13s），红莉栖声线特征最明显
-REF_AUDIO = ROOT / "resources" / "voice_sample_clip_v2.wav"
+# 资源包推荐参考音频 crs_1393.wav 的 9.8s 裁剪段（v2ProPlus 限制 3~10s，
+# 原包 10.94s 超限；勿与 voice_sample_clip_v2.wav 混用）
+REF_AUDIO = ROOT / "resources" / "crs_1393_clip.wav"
 DEFAULT_BASE_URL = str(PHONE_DEFAULTS.get("gpt_sovits_url", "http://127.0.0.1:9880"))
 
 
 DEFAULT_PARAMS: dict[str, object] = {
     "ref_audio_path": str(REF_AUDIO),
     "aux_ref_audio_paths": [],
-    # prompt_text 由 ASR(SenseVoiceSmall) 识别 voice_sample_clip_v2.wav 得到，
-    # 对应片段 7-13s 的日语文本，用于 GPT-SoVITS 声线克隆对齐
-    "prompt_text": "技術的及びデータセットの制限により現在成熟していません",
+    # prompt_text 为 SenseVoiceSmall 对 crs_1393_clip.wav 的 ASR 结果，
+    # 与裁剪段精确对齐（原句尾「が起きるかもしれない……」在 9.8s 裁剪点之外）
+    "prompt_text": "それに、例えば、小学生の頃の自分に今の記憶を転送した場合、記憶と肉体のギャップのせいで、精神的な障害",
     # prompt_lang=ja：红莉栖讲日语（gpt_sovits_venv py3.13 + pyopenjtalk-plus）
     "prompt_lang": "ja",
     "text_lang": "ja",

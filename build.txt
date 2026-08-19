@@ -1,0 +1,1 @@
+D:\anaconda\python.exe -m PyInstaller Amadeus.spec --noconfirm

@@ -307,6 +307,18 @@ def renderer_process(connection: Connection) -> None:
         server.shutdown()
 
 
+def _sync_bubble_accessories(header, footer, x, w, h) -> None:
+    """气泡头部名牌/底部注脚跟随气泡几何（fauux 稿⑤⑩）。
+
+    初始化早期（bubble_header/footer 创建于 reply_bubble 之后）可能先行调用
+    _set_bubble_text，此时二者尚未存在，保护式访问避免 AttributeError
+    （历史会话存在时 exe/start.bat 启动即静默崩溃）。
+    """
+    if header is not None and footer is not None:
+        header.setGeometry(x, 8, w, 12)
+        footer.setGeometry(x, 6 + h - 14, w, 12)
+
+
 def _decide_delta_action(
     streamed_reply: str, text: str, history_expanded: bool
 ) -> tuple[str, bool, bool]:
@@ -621,6 +633,25 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             self._hover_anim = QPropertyAnimation(self, b"scale", self)
             self._hover_anim.setDuration(200)
             self._hover_anim.setEasingCurve(QEasingCurve.OutCubic)
+            # 按压反馈：快速下压 + 释放回弹（fauux 刻蚀按钮物理感）
+            self._press_anim = QPropertyAnimation(self, b"scale", self)
+            self._press_anim.setDuration(110)
+            self._press_anim.setEasingCurve(QEasingCurve.OutQuad)
+
+        def mousePressEvent(self, event) -> None:
+            if event.button() == Qt.LeftButton:
+                self._hover_anim.stop()
+                self._press_anim.stop()
+                self._press_anim.setStartValue(self._scale)
+                self._press_anim.setEndValue(max(self._scale * 0.88, 0.68))
+                self._press_anim.start()
+            super().mousePressEvent(event)
+
+        def mouseReleaseEvent(self, event) -> None:
+            super().mouseReleaseEvent(event)
+            self._press_anim.stop()
+            target = DockButton.HOVER_SIZE / DockButton.BASE_SIZE if self.underMouse() else 1.0
+            self.set_target_scale(target)
 
         def get_scale(self) -> float:
             return self._scale
@@ -642,19 +673,35 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
         def paintEvent(self, event) -> None:
             painter = QPainter(self)
             painter.setRenderHint(QPainter.Antialiasing)
-            # 背景（fauux：玫瑰 #d2738a / 危险深玫瑰 #d2738a，直角）
-            if self._is_danger:
+            # 状态视觉（fauux：玫瑰 #d2738a，直角；按下=填充+粗框，hover=微亮）
+            pressed = self.isDown()
+            hovered = self.underMouse()
+            if pressed:
+                bg = QColor(210, 115, 138, 46)
+                border = QColor(210, 115, 138, 255)
+            elif hovered:
+                bg = QColor(210, 115, 138, 10)
+                border = QColor(210, 115, 138, 200)
+            elif self._is_danger:
                 bg = QColor(0, 0, 0, 0)
                 border = QColor(210, 115, 138, 110)
             else:
                 bg = QColor(0, 0, 0, 0)
                 border = QColor(210, 115, 138, 100)
             painter.setBrush(bg)
-            painter.setPen(border)
+            if pressed:
+                from PySide6.QtGui import QPen
+                painter.setPen(QPen(border, 2))
+            else:
+                painter.setPen(border)
             painter.drawRect(self.rect())
-            # SVG 图标（文件已带颜色，直接渲染）
-            pad = 4
-            self._renderer.render(painter, QRectF(pad, pad, self.width() - pad * 2, self.height() - pad * 2))
+            # SVG 图标（文件已带颜色，直接渲染；按下时下沉 1px 制造按压感）
+            pad = 5 if pressed else 4
+            self._renderer.render(
+                painter,
+                QRectF(pad, pad + (1 if pressed else 0),
+                       self.width() - pad * 2, self.height() - pad * 2),
+            )
 
     class DockBar(QWidget):
         """底部悬浮 Dock 工具栏：5 按钮 + hover 邻近放大。"""
@@ -869,6 +916,8 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             self.resize(720, 520)
             self._lines: list = []
             self._line_cache: dict = {}  # 行级 HTML 缓存，避免每 delta 全量 markdown 重渲染
+            self._rendered_count: int = 0  # 已渲染进 QTextBrowser 的行数（增量刷新基准）
+            self._needs_rebuild: bool = True  # 行列表被整体更换（任务切换）时强制全量重建
             self._history: list[str] = []
             self._history_index: int = -1
             layout = QVBoxLayout(self)
@@ -879,7 +928,7 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             title_row = QHBoxLayout()
             title_row.setSpacing(8)
             title_row.addStretch()
-            self.title = GlitchLabel("⌈ Ａｍａｄｅｕｓ ⌋", self)
+            self.title = GlitchLabel("⌈ Ａｍａｄｅｕｓ　Ｔｅｒｍｉｎａｌ ⌋", self)
             glow = QGraphicsDropShadowEffect(self)
             glow.setColor(QColor(210, 115, 138, 200))
             glow.setBlurRadius(12)
@@ -980,6 +1029,40 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             # 背景 logo 水印：加载后暗化，作为 CRT 背景的底层衬底
             self._logo = self._load_darkened_logo()
 
+            # 启动序列（fauux 稿⑨）：构造后逐行打印 boot 日志（blink 光标独立运行）
+            self._boot_lines = [
+                ("amadeus.exe — initializing memory", "ok"),
+                ("loading fork.db — 100%", "ok"),
+                ("mounting sessions — 12 files", "ok"),
+                ("sensor: audio / vision / context — SUBSYSTEM", "ESTABLISHED"),
+                ("spawning companion greeter — PID 211", "ok"),
+                ("waiting for signal", "standby"),
+            ]
+            self._boot_index = 0
+            self._boot_timer = QTimer(self)
+            self._boot_timer.setInterval(480)
+            self._boot_timer.timeout.connect(self._tick_boot)
+            self._boot_timer.start()
+
+        def _tick_boot(self) -> None:
+            """打印下一行启动序列；打印完毕停止定时器。"""
+            if self._boot_index >= len(self._boot_lines):
+                self._boot_timer.stop()
+                return
+            cmd, st = self._boot_lines[self._boot_index]
+            self._boot_index += 1
+            if st == "standby":
+                color = _TERMINAL_DIM
+            else:
+                color = "#34c759"
+            self.log.append(
+                f'<span style="color:{_TERMINAL_ROSE}">&gt;</span> '
+                f'<span style="color:{_TERMINAL_CREAM}">{cmd}</span> '
+                f'<span style="color:{color}">— {st}</span>'
+            )
+            sb = self.log.verticalScrollBar()
+            sb.setValue(sb.maximum())
+
         def resizeEvent(self, event) -> None:
             super().resizeEvent(event)
             # 终端固定在主窗口左侧：尺寸变化时通知主窗口重新定位
@@ -1015,34 +1098,35 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             src = QPixmap(str(path))
             if src.isNull():
                 return None
-            # 暗化：在暗色底上以低透明度重绘，得到深色、低对比的水印
+            # 暗化：在暗色底上以较低透明度重绘，得到深色、低对比的水印
             dark = QPixmap(src.size())
             dark.fill(QColor(23, 17, 20))
             p = QPainter(dark)
             try:
-                p.setOpacity(0.35)
+                p.setOpacity(0.55)
                 p.drawPixmap(0, 0, src)
             finally:
                 p.end()
             return dark
 
         def _paint_logo(self, painter: QPainter) -> None:
-            """把暗化后的 logo 居中绘制为底层水印。"""
+            """把暗化后的 logo 绘制为终端底部背景中央的水印（输入行之上）。"""
             if self._logo is None:
                 return
             w, h = self.width(), self.height()
             if w <= 0 or h <= 0:
                 return
-            pw = int(w * 0.5)
+            pw = int(w * 0.42)
             ph = int(self._logo.height() * pw / self._logo.width())
-            if ph > int(h * 0.45):
-                ph = int(h * 0.45)
+            if ph > int(h * 0.30):
+                ph = int(h * 0.30)
                 pw = int(self._logo.width() * ph / self._logo.height())
             scaled = self._logo.scaled(pw, ph, Qt.KeepAspectRatio, Qt.SmoothTransformation)
             x = (w - scaled.width()) // 2
-            y = (h - scaled.height()) // 2
+            # 底部背景中央：垂直中线位于窗口 84% 高度处（输入行上方留白）
+            y = int(h * 0.84) - scaled.height() // 2
             painter.save()
-            painter.setOpacity(0.6)
+            painter.setOpacity(0.8)
             painter.drawPixmap(x, y, scaled)
             painter.restore()
 
@@ -1163,35 +1247,41 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
                 self.submitted.emit(text)
                 self.input.clear()
 
-        def render_lines(self, lines: list) -> None:
-            """标记待渲染并启动节流定时器；实际 setHtml 在 _flush_render 中合并执行。"""
+        def render_lines(self, lines: list, full: bool = False) -> None:
+            """标记待渲染并启动节流定时器；实际刷新在 _flush_render 中合并执行。
+
+            full=True 表示行列表被整体更换（新任务/重开终端），需全量重建；
+            默认增量：只追加新行并替换流式末行。
+            """
             self._lines = lines
+            if full:
+                self._needs_rebuild = True
             if not self._render_timer.isActive():
                 self._render_timer.start()
 
         def _flush_render(self) -> None:
-            """真正构建 HTML（行级缓存，只重渲染变化的行）并 setHtml。"""
+            """增量刷新日志区：追加新行 / 替换流式末行，避免每次全量 setHtml 清空重建。"""
+            lines = self._lines
+            if self._needs_rebuild or len(lines) < self._rendered_count:
+                self._rebuild_all(lines)
+                return
+            for i in range(self._rendered_count, len(lines) - 1):
+                self._append_line(self._line_html(i))
+            if lines:
+                self._replace_last_line(self._line_html(len(lines) - 1))
+            self._rendered_count = len(lines)
+            QTimer.singleShot(0, self._scroll_to_bottom)
+
+        def _rebuild_all(self, lines: list) -> None:
+            """全量重建（首次渲染 / 任务切换 / 行数回退）：整体 setHtml 并重置增量基准。"""
+            self._needs_rebuild = False
+            self._rendered_count = len(lines)
             parts = [
                 f"<div style='color:{_TERMINAL_DIM};font-size:9px'>║▒░ amadeus shell — wired session</div>",
                 f"<div style='border-top:1px solid {_TERMINAL_ROSE};margin:2px 0 6px 0'></div>",
             ]
-            last_index = len(self._lines) - 1
-            for i, item in enumerate(self._lines):
-                if len(item) == 3:
-                    kind, text, extra = item
-                else:
-                    kind, text, extra = item[0], item[1], None
-                # 最后一行在流式期间会被反复替换，直接渲染不缓存（避免堆积中间态）；
-                # 历史行 append-only，按 key 缓存避免每次全量 markdown 重渲染。
-                if i == last_index:
-                    line_html = _build_terminal_line_html(kind, text, extra)
-                else:
-                    key = _line_cache_key(item)
-                    line_html = self._line_cache.get(key)
-                    if line_html is None:
-                        line_html = _build_terminal_line_html(kind, text, extra)
-                        self._line_cache[key] = line_html
-                parts.append(line_html)
+            for i, item in enumerate(lines):
+                parts.append(self._line_html(i))
             self.log.setHtml(
                 "<html><body style='margin:0;background:transparent'>"
                 + "".join(parts)
@@ -1199,6 +1289,41 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             )
             # setHtml 后滚动条最大值尚未更新，需在事件循环空闲后再滚到底部
             QTimer.singleShot(0, self._scroll_to_bottom)
+
+        def _line_html(self, index: int) -> str:
+            """构建第 index 行 HTML：末行不缓存（流式中间态），历史行按 key 缓存。"""
+            item = self._lines[index]
+            if len(item) == 3:
+                kind, text, extra = item
+            else:
+                kind, text, extra = item[0], item[1], None
+            if index == len(self._lines) - 1:
+                return _build_terminal_line_html(kind, text, extra)
+            key = _line_cache_key(item)
+            line_html = self._line_cache.get(key)
+            if line_html is None:
+                line_html = _build_terminal_line_html(kind, text, extra)
+                self._line_cache[key] = line_html
+            return line_html
+
+        def _append_line(self, html: str) -> None:
+            """在日志区末尾追加一个新块（不触碰已有内容）。"""
+            from PySide6.QtGui import QTextCursor
+            cursor = self.log.textCursor()
+            cursor.movePosition(QTextCursor.MoveOperation.End)
+            self.log.setTextCursor(cursor)
+            self.log.append(html)
+
+        def _replace_last_line(self, html: str) -> None:
+            """就地替换文档最后一块（流式末行更新），其余内容不动。"""
+            from PySide6.QtGui import QTextCursor
+            cursor = self.log.textCursor()
+            cursor.movePosition(QTextCursor.MoveOperation.End)
+            cursor.movePosition(
+                QTextCursor.MoveOperation.StartOfBlock, QTextCursor.MoveMode.KeepAnchor
+            )
+            cursor.removeSelectedText()
+            cursor.insertHtml(html)
 
         def _scroll_to_bottom(self) -> None:
             sb = self.log.verticalScrollBar()
@@ -1241,6 +1366,8 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             self._state = load_state(character.id, get_random_greeting(character.id))
             self.speech = SpeechPlayer(self)
             self.speech.speaking_changed.connect(lambda value: send_command(speaking=value))
+            # 音量强度 → Live2D 口型开合（mouth_intensity 在播放线程发射，queued 回主线程）
+            self.speech.mouth_intensity.connect(lambda value: send_command(mouth=value))
             # 语音服务离线：气泡序列末尾追加提示（信号在 TTS 工作线程发射，
             # queued connection 回到主线程，追加列表安全）
             self.speech.tts_offline.connect(self._notify_tts_offline)
@@ -1267,10 +1394,29 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
                 "padding:10px 16px;font:14px 'Consolas','Microsoft YaHei';"
                 "font-weight:400}"
             )
-            self._set_bubble_text(self._latest_line(active_session(self._state)["messages"][-1]["content"]))
+            _init_msgs = active_session(self._state)["messages"]
+            if _init_msgs:
+                self._set_bubble_text(self._latest_line(_init_msgs[-1]["content"]))
             self.reply_bubble.hide()
             self._bubble_crt = CrtOverlay(self.reply_bubble, scanlines=True, vignette=False, noise=False)
             self._bubble_crt.raise_()
+
+            # fauux 稿⑤⑩④：气泡头部名牌 + 底部状态注脚（随气泡 Show/Hide 联动）
+            self.bubble_header = QLabel("K U R I S U", self)
+            self.bubble_header.setStyleSheet(
+                "color:#d2738a;background:transparent;"
+                "font-family:'Times New Roman','Times',serif;font-size:11px;font-weight:bold;"
+            )
+            self.bubble_header.setAlignment(Qt.AlignHCenter)
+            self.bubble_header.hide()
+            self.bubble_footer = QLabel("wire ESTABLISHED · Δ 0.41s · ch 1", self)
+            self.bubble_footer.setStyleSheet(
+                "color:#8a7f63;background:transparent;"
+                "font-family:'Consolas','Microsoft YaHei';font-size:9px;"
+            )
+            self.bubble_footer.setAlignment(Qt.AlignHCenter)
+            self.bubble_footer.hide()
+            self.reply_bubble.installEventFilter(self)
 
             # 输入面板（默认隐藏，点击💬展开）
             panel_w = 365
@@ -1346,11 +1492,15 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             self._input_opacity = QGraphicsOpacityEffect(self.input_panel)
             self.input_panel.setGraphicsEffect(self._input_opacity)
             self._input_opacity.setOpacity(0.0)
+            # 收起动画挂起的 hide 定时器（防止淡出中途再次展开后被误隐藏）
+            self._pending_panel_hide: QTimer | None = None
 
             # 历史抽屉（右侧滑入，默认隐藏）
             self.history_drawer = HistoryDrawer(self)
             self.history_drawer.setGeometry(self.width() - 172, 8, 168, self.height() - 80)
             self.history_drawer.hide()
+            # 滑出动画挂起的 hide 定时器（防止滑出中途再次展开后被误隐藏）
+            self._pending_drawer_hide: QTimer | None = None
 
             self._relayout()
 
@@ -1410,10 +1560,14 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
 
         def _toggle_input_panel(self) -> None:
             """切换输入面板：Dock 淡出 + 输入框淡入，或反向。"""
+            # 任意方向切换先取消挂起的 hide，避免淡出动画中途再次展开后被强制隐藏
+            if self._pending_panel_hide is not None:
+                self._pending_panel_hide.stop()
+                self._pending_panel_hide = None
             if self.input_panel.isVisible() and self._input_opacity.opacity() > 0.5:
                 # 收起 input，恢复 dock 可点击
                 self._cross_fade(self._input_opacity, self._dock_opacity)
-                QTimer.singleShot(200, self.input_panel.hide)
+                self._pending_panel_hide = QTimer.singleShot(200, self.input_panel.hide)
                 self.dock_bar.setAttribute(Qt.WA_TransparentForMouseEvents, False)
             else:
                 # 展开 input，dock 透明时不拦截鼠标（避免误点 dock 按钮）
@@ -1462,10 +1616,21 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             h = min(max(rect.height() + 24, 36), 240)
             x = (self.width() - w) // 2
             self.reply_bubble.setGeometry(x, 6, w, h)
+            # 头部名牌/底部注脚跟随气泡几何（fauux 稿⑤⑩）。
+            # 初始化早期调用本方法时二者尚未创建，传 None 由 _sync_bubble_accessories
+            # 跳过同步；构建完成后正常跟随。
+            _sync_bubble_accessories(
+                getattr(self, 'bubble_header', None),
+                getattr(self, 'bubble_footer', None),
+                x, w, h,
+            )
 
         def _show_thinking_dots(self) -> None:
-            """delta 期间显示思考动画（3 个青色点呼吸）。与 _show_next_bubble 共用 _bubble_opacity。"""
-            self._set_bubble_text("● ● ●")
+            """delta 期间显示等待叙事（fauux 启动序列行 + 多语言短语轮换），气泡呼吸。"""
+            self._set_bubble_text("> linking fork.db\n… ok")
+            # 底部注脚切为相位行（④ ║▒░♫ 与等待叙事同源）
+            if getattr(self, 'bubble_footer', None):
+                self.bubble_footer.setText("║▒░ ♫ ░▒║ · synchronizing")
             if not hasattr(self, '_bubble_opacity'):
                 self._bubble_opacity = QGraphicsOpacityEffect(self.reply_bubble)
                 self.reply_bubble.setGraphicsEffect(self._bubble_opacity)
@@ -1478,6 +1643,23 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
                 self._thinking_anim.setLoopCount(-1)
             if self._thinking_anim.state() != QPropertyAnimation.Running:
                 self._thinking_anim.start()
+            # 多语言短语轮换（fauux [make me sad] 交互）：1.2s 一轮
+            if not hasattr(self, '_think_phrase_timer'):
+                self._think_phrase_timer = QTimer(self)
+                self._think_phrase_timer.setInterval(1200)
+                self._think_phrase_timer.timeout.connect(self._cycle_think_phrase)
+            self._think_phrase_timer.start()
+
+        def _cycle_think_phrase(self) -> None:
+            """轮换 thinking 气泡第二行的状态短语。"""
+            phrases = ("[synchronizing mind]", "[思维同步中]", "[心を同期中]", "[make me sad]")
+            self._think_phrase_index = getattr(self, '_think_phrase_index', 0)
+            self._think_phrase_index = (self._think_phrase_index + 1) % len(phrases)
+            if not self.reply_bubble.isVisible():
+                return
+            self.reply_bubble.setText(
+                f"> linking fork.db\n… ok　{phrases[self._think_phrase_index]}"
+            )
 
         def _send_emotion(self, emotion: str) -> None:
             """经 duplex 管道发送 emotion 到 renderer（即时，不等 LLM）。"""
@@ -1589,15 +1771,23 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
         def _on_call_error(self, text: str) -> None:
             self.call_view.set_subtitle(f"⚠ {text}")
 
+        def _stop_thinking_anim(self) -> None:
+            """停止思考呼吸动画与短语轮换，并恢复气泡不透明度（finished/failed 共用）。"""
+            if hasattr(self, '_think_phrase_timer') and self._think_phrase_timer.isActive():
+                self._think_phrase_timer.stop()
+            if hasattr(self, 'bubble_footer'):
+                self.bubble_footer.setText("wire ESTABLISHED · Δ 0.41s · ch 1")
+            if hasattr(self, '_thinking_anim') and self._thinking_anim.state() == QPropertyAnimation.Running:
+                self._thinking_anim.stop()
+                if hasattr(self, '_bubble_opacity'):
+                    self._bubble_opacity.setOpacity(1.0)
+
         def _show_layered_bubbles(self, text: str) -> None:
             """将回复分层后分多个气泡前后展示，每段用 opacity 动画淡入。"""
             import re
             self._cancel_bubbles()
             # 停止思考呼吸动画，恢复 opacity
-            if hasattr(self, '_thinking_anim') and self._thinking_anim.state() == QPropertyAnimation.Running:
-                self._thinking_anim.stop()
-                if hasattr(self, '_bubble_opacity'):
-                    self._bubble_opacity.setOpacity(1.0)
+            self._stop_thinking_anim()
             self._thinking_dots_shown = False
             segments = re.split(r'(?<=[。！？!?\n])\s*', text.strip())
             merged: list[str] = []
@@ -1655,8 +1845,13 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             """语音服务离线提示：在当前气泡序列末尾追加一条，不打断展示。"""
             notice = "（语音服务离线）"
             segments = getattr(self, "_bubble_segments", [])
-            if notice not in segments:
-                self._bubble_segments = segments + [notice]
+            if notice in segments:
+                return
+            self._bubble_segments = segments + [notice]
+            # 原序列已展示完毕但气泡仍可见时，继续展示追加段（否则提示永不出现）
+            if self._bubble_index >= len(self._bubble_segments) - 1 and self.reply_bubble.isVisible():
+                self._bubble_index = len(self._bubble_segments) - 1
+                self._show_next_bubble()
 
         def _animate_to(self, target: QPoint) -> None:
             """平滑滑动到目标位置（300ms OutCubic 缓动）。"""
@@ -1708,6 +1903,10 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
 
         def _toggle_history(self) -> None:
             self._history_expanded = not self._history_expanded
+            # 任意方向切换先取消挂起的 hide，避免滑出动画中途再次展开后被误隐藏
+            if self._pending_drawer_hide is not None:
+                self._pending_drawer_hide.stop()
+                self._pending_drawer_hide = None
             if self._history_expanded:
                 self._render_history()
                 self.history_drawer.show()
@@ -1716,7 +1915,7 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
                 self.reply_bubble.hide()
             else:
                 self.history_drawer.slide_out()
-                QTimer.singleShot(300, self.history_drawer.hide)
+                self._pending_drawer_hide = QTimer.singleShot(300, self.history_drawer.hide)
 
         def _terminal_session_lines(self) -> list:
             """当前会话消息 → 终端行（cmd=用户 / out=kurisu 中文）。"""
@@ -1760,7 +1959,7 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             # 每次打开都从当前会话重建终端行，避免只加载一次导致
             # 之后主页面新增的聊天记录不显示在终端（历史抽屉是每次重读的）。
             self._term_lines = self._terminal_session_lines()
-            self.terminal.render_lines(self._term_lines)
+            self.terminal.render_lines(self._term_lines, full=True)
             self.terminal.show()
             self._position_terminal()
             self.terminal.raise_()
@@ -1989,8 +2188,9 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
                 # 首次进入日语段时启动流式 TTS 会话
                 if not self._stream_tts_started:
                     config = load_config()
+                    emotion = parse_reply(self._streamed_reply).emotion
                     self.speech.set_rate([-2, 0, 2][config.get("tts_rate", 1)])
-                    self.speech.speak_streaming_start(text_lang="ja")
+                    self.speech.speak_streaming_start(text_lang="ja", emotion=emotion)
                     self._stream_tts_started = True
                 self.speech.speak_streaming_append(segment)
 
@@ -2003,7 +2203,18 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             self._streamed_reply = ""
             self.send_button.setDisabled(False)
             parsed = parse_reply(reply)
-            send_command(emotion=parsed.emotion)
+            # 表情/动作综合判定：本地 Ollama 小模型分类（emotion+motion），
+            # 失败回退规则解析；任何异常回退 parse_reply 的 emotion（表现层不影响主流程）
+            try:
+                from core.companion.expression import decide_expression
+                _cfg = load_config()
+                _expr = decide_expression(
+                    reply, ollama=(_cfg.get("agent_router") or {}).get("ollama")
+                )
+                emotion, motion = _expr.emotion, _expr.motion
+            except Exception:
+                emotion, motion = parsed.emotion, "neutral"
+            send_command(emotion=emotion, motion=motion)
             print(f"[PET-DBG] finished reply_len={len(reply)} jp_len={len(parsed.japanese)} tts_started={self._stream_tts_started} sep_count={self._stream_sep_count}")
             print(f"[PET-DBG] finished reply={reply[:200]!r}")
             print(f"[PET-DBG] finished parsed.jp={parsed.japanese[:200]!r}")
@@ -2019,6 +2230,7 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
                 self.speech.speak_with_options(
                     parsed.japanese,
                     text_lang="ja",
+                    emotion=parsed.emotion,
                     allow_fallback=False,
                 )
             self._stream_sep_count = 0
@@ -2039,13 +2251,19 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
         def _agent_failed(self, error: str) -> None:
             self._busy = False
             self._streamed_reply = ""
+            # 停止思考呼吸动画，避免失败后气泡永远显示 "● ● ●" 呼吸
+            self._stop_thinking_anim()
             if self.terminal is not None:
                 self.terminal.set_busy(False)
             if self._terminal_active() and self._term_lines:
                 self._term_lines[-1] = ("err", f"任务失败：{error}")
                 self.terminal.render_lines(self._term_lines)
             else:
+                if not self._history_expanded:
+                    self.reply_bubble.show()
                 self._set_bubble_text(self._latest_line(f"任务失败：{error}"))
+                # 失败提示也会闲置后隐藏，避免永久悬挂
+                self._bubble_timer = QTimer.singleShot(9000, self._hide_idle_bubble)
             self.send_button.setDisabled(False)
             send_command(emotion="angry")
 
@@ -2063,9 +2281,13 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
                     self._frame = image
                     if not self._first_frame_received:
                         self._first_frame_received = True
-                        image.save(str(ROOT / "data" / "received-frame.png"), "PNG")
-                        READY_FILE.parent.mkdir(parents=True, exist_ok=True)
-                        READY_FILE.write_text("KURISU_READY", encoding="ascii")
+                        try:
+                            (ROOT / "data").mkdir(parents=True, exist_ok=True)
+                            image.save(str(ROOT / "data" / "received-frame.png"), "PNG")
+                            READY_FILE.parent.mkdir(parents=True, exist_ok=True)
+                            READY_FILE.write_text("KURISU_READY", encoding="ascii")
+                        except OSError:
+                            pass  # 快照/就绪标记仅调试用途，frozen 只读环境失败不影响主流程
                     self.update()
 
         def paintEvent(self, event) -> None:
@@ -2096,6 +2318,12 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             self.update()
 
         def eventFilter(self, obj, event) -> bool:
+            # 气泡的头部名牌/底部注脚跟随气泡显示状态（fauux 稿⑤⑩④）
+            if obj is self.reply_bubble and event.type() in (QEvent.Show, QEvent.Hide):
+                vis = event.type() == QEvent.Show
+                if hasattr(self, 'bubble_header'):
+                    self.bubble_header.setVisible(vis)
+                    self.bubble_footer.setVisible(vis)
             return super().eventFilter(obj, event)
 
         def _relayout(self) -> None:
@@ -2212,17 +2440,53 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
         except Exception:
             pass
 
-    def _companion_on_finished(reply: str) -> None:
-        """companion 完整回复落到桌宠气泡，不写入聊天历史。"""
+    # companion 回复的 Live2D 表现指令缓存：controller 在 on_finished 前回调
+    last_expression = None
+
+    def _companion_on_expression(expr) -> None:
+        """companion 回复 → Live2D 表情/动作（本地小模型 + 规则综合判定）。"""
+        nonlocal last_expression
+        last_expression = expr
         try:
+            if expr.motion:
+                send_command(emotion=expr.emotion, motion=expr.motion)
+        except Exception:
+            pass
+
+    def _companion_on_finished(reply: str) -> None:
+        """companion 完整回复落到桌宠气泡，不写入聊天历史。
+
+        C-01 修复：companion 内部情绪（idle/sleepy/concern/tease）通过
+        COMPANION_TO_LIVE2D_EMOTION 映射为 Live2D 可识别的情绪标签。
+        C-02 修复：同时发送 motion 命令驱动 Live2D 动作（歪头/点头/前倾等），
+        让角色不只变表情，还有身体动作，更像真人。
+        """
+        try:
+            from core.companion.prompts import COMPANION_TO_LIVE2D_EMOTION, COMPANION_EMOTION_MOTION
             parsed = parse_reply(reply)
-            send_command(emotion=parsed.emotion)
+            # 优先用 controller 的 on_expression 结果（本地小模型+规则综合判定），
+            # 未注入时回退到 companion 内部情绪映射（C-01/C-02 逻辑不变）
+            if last_expression is not None:
+                live2d_emotion = last_expression.emotion
+                motion = last_expression.motion or COMPANION_EMOTION_MOTION.get(parsed.emotion, "neutral")
+            else:
+                live2d_emotion = COMPANION_TO_LIVE2D_EMOTION.get(parsed.emotion, "neutral")
+                motion = COMPANION_EMOTION_MOTION.get(parsed.emotion, "neutral")
+            send_command(emotion=live2d_emotion, motion=motion)
             pet._streamed_reply = ""
-            pet._stream_japanese_started = False
+            pet._stream_tts_started = False
             if not pet._history_expanded:
                 pet._show_layered_bubbles(parsed.chinese)
         except Exception:
             pass
+
+    def _companion_last_topic() -> str | None:
+        """取最近 2 小时内最新的话题，避免重复问候同一话题（C-08）。"""
+        try:
+            topics = companion_storage.recent_topics(hours=2)
+            return next(iter(topics)) if topics else None
+        except Exception:
+            return None
 
     def _companion_tick() -> None:
         """周期性检查 companion 触发（每 30s 一次）。"""
@@ -2239,7 +2503,7 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
                 active_window=aw_sensor, activity=at_sensor, idle=it_tracker,
                 clipboard=clip_sensor, screen=screen_sensor,
                 last_greeting_ts=companion_storage.last_greeting_ts(),
-                last_topic=None,  # 简化，下个版本从 storage 取
+                last_topic=_companion_last_topic(),  # C-08 修复：从 storage 取最近话题
                 greeting_count=companion_storage.greeting_count_today(),
                 local_time=local_time, is_deep_night=is_deep_night,
             )
@@ -2247,6 +2511,7 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
                 snap, local_hour=now.hour + now.minute / 60,
                 on_delta=_companion_on_delta, on_status=_companion_on_status,
                 on_finished=_companion_on_finished,
+                on_expression=_companion_on_expression,
             )
         except Exception:
             pass  # companion 永不影响主流程

@@ -23,12 +23,22 @@
     font: 18px sans-serif; cursor: pointer;
   }
   #pet-menu:hover { color: white; background: rgba(209,139,36,.75); }
+
+  #enter-flash {
+    position: fixed; inset: 0; z-index: 50; background: #fff; opacity: 0;
+    pointer-events: none; animation: dissolve 3.6s steps(12) 1;
+  }
+  @keyframes dissolve {
+    0% { opacity: 1; } 4% { opacity: .1; } 8% { opacity: .8; }
+    12% { opacity: .05; } 16% { opacity: .6; } 22% { opacity: 0; } 100% { opacity: 0; }
+  }
 </style>
 </head>
 <body>
 <canvas id="canvas"></canvas>
 <div id="status">Loading...</div>
 <button id="pet-menu" title="关闭桌宠">×</button>
+<div id="enter-flash"></div>
 
 <script src="../resources/live2dcubismcore.min.js"></script>
 <script src="../resources/pixi.min.js"></script>
@@ -37,6 +47,15 @@
 <script>
 (async () => {
   const statusEl = document.getElementById('status');
+
+  // fauux ⑧：加载期间多语言短语轮换
+  const PHRASES = ['[synchronizing mind]', '[思维同步中]', '[心を同期中]', '[make me sad]'];
+  let phraseIdx = 0;
+  const phraseTimer = setInterval(() => {
+    phraseIdx = (phraseIdx + 1) % PHRASES.length;
+    statusEl.textContent = PHRASES[phraseIdx];
+  }, 1200);
+
   document.getElementById('pet-menu').addEventListener('click', () => {
     if (window.pywebview?.api?.close) window.pywebview.api.close();
     else window.close();
@@ -91,27 +110,169 @@
     const state = { angry: 0, blush: 0, smile: 0, sad: 0 };
     const target = { angry: 0, blush: 0, smile: 0, sad: 0 };
     let speaking = false;
+    // 口型系统：mouthTarget 由音量驱动（setMouth），mouthState 平滑跟随。
+    // 无音量数据时（mouthTarget 长时间为 0 但 speaking=true）回退随机噪声口型，
+    // 避免"只有 TTS 开关没有音量"时嘴完全不动。
+    let mouthTarget = 0;
+    let mouthState = 0;
+    let lastMouthAt = 0;
     let blinkAt = performance.now() + 1800;
     let pointerX = 0;
     let pointerY = 0;
+
+    // —— 动作（motion）系统 ——
+    // 每个情绪对应一个短补间：在 duration 毫秒内对头部/身体参数做偏移，
+    // 让 Kurisu 不只眨眼，还会歪头、点头、低头、前倾等，更像真人。
+    // 肢体动作（叉腰/抱胸/扶额/摊手/托腮）驱动手臂参数：
+    //   Param6  = Arms Thinking Movement（手臂思考动作）
+    //   Param7  = Arms Movement Physics（手臂动作物理）
+    //   Param4  = Arm Physics（手臂物理）
+    // 数值幅度未经模型规范确认，取保守值 ±20-30，可目测微调。
+    const activeMotions = [];
+    const MOTION_DURATIONS = {
+      neutral: 1500, smile: 1200, blush: 1700, angry: 1100, sad: 1900, thinking: 1600,
+      hands_on_hips: 1800, arms_crossed: 1800, facepalm: 1600, shrug: 1400, chin_rest: 2000,
+    };
+    const MOTIONS = {
+      // 歪头疑问
+      neutral: (core, t) => {
+        const w = Math.sin(t * Math.PI);
+        core.setParameterValueById('ParamAngleZ', 6 * w);
+        core.setParameterValueById('ParamAngleX', -2 * w);
+      },
+      // 开心点头
+      smile: (core, t) => {
+        const w = Math.sin(t * Math.PI);
+        core.setParameterValueById('ParamAngleX', 4 * w);
+        core.setParameterValueById('ParamBodyAngleX', 2 * w);
+      },
+      // 害羞别过脸
+      blush: (core, t) => {
+        const w = Math.sin(t * Math.PI);
+        core.setParameterValueById('ParamAngleY', -13 * w);
+        core.setParameterValueById('ParamAngleX', -4 * w);
+        core.setParameterValueById('ParamAngleZ', -4 * w);
+      },
+      // 生气前倾 + 微抖
+      angry: (core, t) => {
+        const w = Math.sin(t * Math.PI);
+        core.setParameterValueById('ParamAngleX', 8 * w);
+        core.setParameterValueById('ParamBodyAngleX', 4 * w);
+        core.setParameterValueById('ParamAngleZ', 2.5 * Math.sin(t * Math.PI * 7) * (1 - t));
+      },
+      // 难过低头
+      sad: (core, t) => {
+        const w = Math.sin(t * Math.PI);
+        core.setParameterValueById('ParamAngleX', -9 * w);
+        core.setParameterValueById('ParamBodyAngleX', -3 * w);
+      },
+      // 思考：左右歪头 + 眼睛扫视
+      thinking: (core, t) => {
+        core.setParameterValueById('ParamAngleZ', 10 * Math.sin(t * Math.PI * 2));
+        core.setParameterValueById('ParamEyeBallX', 0.6 * Math.sin(t * Math.PI * 2));
+      },
+      // 叉腰：手臂张开撑腰（Param6/7 正方向 + 上身微侧）
+      hands_on_hips: (core, t) => {
+        const w = Math.sin(t * Math.PI);
+        core.setParameterValueById('Param6', 24 * w);
+        core.setParameterValueById('Param7', 22 * w);
+        core.setParameterValueById('ParamBodyAngleZ', 4 * w);
+        core.setParameterValueById('ParamAngleX', 2 * w);
+      },
+      // 抱胸：双臂交叉收拢（Param6/7 负方向 + 下巴微抬）
+      arms_crossed: (core, t) => {
+        const w = Math.sin(t * Math.PI);
+        core.setParameterValueById('Param6', -20 * w);
+        core.setParameterValueById('Param7', -26 * w);
+        core.setParameterValueById('ParamAngleX', -3 * w);
+        core.setParameterValueById('ParamBodyAngleX', -2 * w);
+      },
+      // 扶额：单臂抬至额前 + 低头（Param4 抬臂）
+      facepalm: (core, t) => {
+        const w = Math.sin(t * Math.PI);
+        core.setParameterValueById('Param4', -24 * w);
+        core.setParameterValueById('Param6', 14 * w);
+        core.setParameterValueById('ParamAngleX', -7 * w);
+        core.setParameterValueById('ParamAngleZ', 3 * w);
+      },
+      // 摊手耸肩：双臂外摊 + 肩部上耸（Param7 双向抖动）
+      shrug: (core, t) => {
+        const w = Math.sin(t * Math.PI);
+        const j = Math.sin(t * Math.PI * 6) * 0.5;
+        core.setParameterValueById('Param7', 18 * w + 4 * j);
+        core.setParameterValueById('Param6', 12 * w);
+        core.setParameterValueById('ParamAngleZ', -5 * w);
+      },
+      // 托腮：单手托下巴 + 歪头（思考姿态，Param6 抬臂）
+      chin_rest: (core, t) => {
+        const w = Math.sin(t * Math.PI);
+        core.setParameterValueById('Param6', -16 * w);
+        core.setParameterValueById('Param4', 20 * w);
+        core.setParameterValueById('ParamAngleZ', 8 * w);
+        core.setParameterValueById('ParamAngleX', -4 * w);
+        core.setParameterValueById('ParamEyeBallY', -0.5 * w);
+      },
+    };
+
+    function playMotion(name) {
+      const apply = MOTIONS[name];
+      if (!apply) return;
+      const duration = MOTION_DURATIONS[name] || 1500;
+      for (let i = activeMotions.length - 1; i >= 0; i--) {
+        if (activeMotions[i].name === name) activeMotions.splice(i, 1);
+      }
+      activeMotions.push({ name, start: performance.now(), duration, apply });
+    }
 
     app.ticker.add(() => {
       Object.keys(state).forEach(key => state[key] += (target[key] - state[key]) * 0.12);
       const core = model.internalModel.coreModel;
       const now = performance.now();
+
+      // 眨眼
       const blinkDistance = Math.abs(now - blinkAt);
       const eyeOpen = blinkDistance < 90 ? Math.max(0, blinkDistance / 90) : 1;
       if (now > blinkAt + 90) blinkAt = now + 2200 + Math.random() * 2600;
+
+      // 表情参数
       core.setParameterValueById('Param8', state.angry);
       core.setParameterValueById('Param9', state.blush);
       core.setParameterValueById('ParamEyeRSmile', state.smile);
       core.setParameterValueById('ParamEyeROpen', Math.min(eyeOpen, 1 - state.smile * 0.55 - state.sad * 0.35));
       core.setParameterValueById('ParamEyeLOpen', Math.min(eyeOpen, 1 - state.smile * 0.55 - state.sad * 0.35));
+
+      // 头部/眼球跟随鼠标
       core.setParameterValueById('ParamAngleX', pointerX * 18);
       core.setParameterValueById('ParamAngleY', pointerY * 12);
       core.setParameterValueById('ParamEyeBallX', pointerX);
       core.setParameterValueById('ParamEyeBallY', pointerY);
-      if (speaking) core.setParameterValueById('ParamMouthOpenY', 0.15 + Math.random() * 0.55);
+
+      // 待机呼吸：身体轻微起伏，不再僵立
+      const breath = Math.sin(now / 2200 * Math.PI * 2);
+      core.setParameterValueById('ParamBodyAngleX', breath * 1.5);
+      core.setParameterValueById('ParamBodyAngleZ', Math.cos(now / 2600 * Math.PI * 2) * 1.0);
+
+      // 播放中的动作（在基础值之后叠加，动作期间覆盖对应参数）
+      for (let i = activeMotions.length - 1; i >= 0; i--) {
+        const m = activeMotions[i];
+        const t = (now - m.start) / m.duration;
+        if (t >= 1) { activeMotions.splice(i, 1); continue; }
+        m.apply(core, t);
+      }
+
+      // 说话口型：音量驱动优先（setMouth 每 ~50ms 更新 mouthTarget），
+      // 音量信号超 400ms 未更新且仍 speaking 时回退低频音节节奏噪声；
+      // mouthState 平滑跟随 mouthTarget，防口型抽搐。
+      if (speaking) {
+        if (now - lastMouthAt > 400) {
+          const rhythm = 0.5 + 0.5 * Math.sin(now / 240 * Math.PI * 2);
+          mouthTarget = Math.max(0.25, 0.2 + 0.5 * rhythm + Math.random() * 0.15);
+        }
+      } else {
+        mouthTarget = 0;
+      }
+      mouthState += (mouthTarget - mouthState) * 0.28;
+      core.setParameterValueById('ParamMouthOpenY', 0.06 + mouthState * 0.65);
     });
     window.addEventListener('mousemove', event => {
       pointerX = Math.max(-1, Math.min(1, event.clientX / innerWidth * 2 - 1));
@@ -122,14 +283,26 @@
       setEmotion(emotion) {
         Object.keys(target).forEach(key => target[key] = 0);
         if (emotion in target) target[emotion] = emotion === 'smile' ? 0.75 : 0.85;
+        playMotion(emotion);
       },
-      setSpeaking(value) { speaking = Boolean(value); },
+      setSpeaking(value) {
+        speaking = Boolean(value);
+        if (!speaking) mouthTarget = 0;
+      },
+      setMouth(intensity) {
+        // 音量强度 → 口型目标：clamp 0-1，并刷新"最近音量"时间戳
+        mouthTarget = Math.max(0, Math.min(1, Number(intensity) || 0));
+        lastMouthAt = performance.now();
+      },
+      playMotion,
     };
 
     statusEl.textContent = 'OK';
+    clearInterval(phraseTimer);
     document.title = 'KURISU_READY';
     setTimeout(() => statusEl.style.display = 'none', 1500);
   } catch (e) {
+    clearInterval(phraseTimer);
     statusEl.textContent = 'ERROR: 模型加载失败 ' + e.message;
     console.error(e);
   }

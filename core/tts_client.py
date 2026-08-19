@@ -11,8 +11,28 @@ import wave
 from PySide6.QtCore import QObject, Signal
 
 
+# 情绪 → 语速系数：angry 快、sad 慢，差异足够让听感区分情绪。
+# 线性重采样同时改变速度与音高（angry 更高更急、sad 更低更缓），更贴近真人语气。
+_EMOTION_SPEED: dict[str, float] = {
+    "neutral": 1.0,
+    "smile": 1.08,
+    "angry": 1.18,
+    "sad": 0.85,
+    "blush": 0.94,
+    "thinking": 1.0,
+}
+
+
+def emotion_speed(emotion: str | None) -> float:
+    """把情绪标签映射为语速系数（未知情绪回退 1.0）。"""
+    return _EMOTION_SPEED.get((emotion or "neutral").strip().lower(), 1.0)
+
+
 class SpeechPlayer(QObject):
     speaking_changed = Signal(bool)
+    # 播放音量强度（0.0-1.0），播放线程按 50ms chunk 算 RMS 发射，
+    # Live2D 端据此驱动口型开合（setMouth），实现"嘴型跟音频音量走"。
+    mouth_intensity = Signal(float)
     playback_started = Signal(float)
     # GPT-SoVITS 不可用且无 SAPI 兜底时发射（UI 层据此提示「语音服务离线」）
     tts_offline = Signal()
@@ -35,6 +55,8 @@ class SpeechPlayer(QObject):
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self.rate = 0
+        self._emotion = "neutral"
+        self._speed = 1.0
         self._stop_event = threading.Event()
         self._kurisu_available: bool | None = None
         self._available_checked_at: float = 0.0
@@ -65,18 +87,21 @@ class SpeechPlayer(QObject):
         prompt_text: str | None = None,
         prompt_lang: str | None = None,
         allow_fallback: bool = False,
+        emotion: str | None = None,
     ) -> None:
         if not text:
             return
         self.stop()
         self._stop_event.clear()
+        self._emotion = emotion or "neutral"
+        self._speed = emotion_speed(self._emotion)
         threading.Thread(
             target=self._speak_worker,
             args=(text, text_lang, prompt_text, prompt_lang, allow_fallback),
             daemon=True,
         ).start()
 
-    def speak_streaming_start(self, text_lang: str | None = "ja") -> None:
+    def speak_streaming_start(self, text_lang: str | None = "ja", emotion: str | None = None) -> None:
         """开始流式合成会话：清空缓冲，启动后台消费线程。
 
         GPT-4o 流式输出期间，调用 speak_streaming_append(delta) 增量追加文本，
@@ -88,6 +113,8 @@ class SpeechPlayer(QObject):
         self._stream_buffer = ""
         self._merge_buffer = ""
         self._merge_first = True
+        self._emotion = emotion or "neutral"
+        self._speed = emotion_speed(self._emotion)
         # 清空队列
         while not self._stream_queue.empty():
             try:
@@ -472,6 +499,10 @@ class SpeechPlayer(QObject):
         if not text:
             return ""
         t = text
+        # 0. 去掉括号内的动作/语气词（如「（歪头微笑）」「(thinking)」），
+        #    这些是 LLM 给 Live2D 的舞台指示，不应被 TTS 读出来。
+        t = re.sub(r"（[^（）]*）", "", t)
+        t = re.sub(r"\([^()]*\)", "", t)
         # 1. 去掉省略号（中英文、连续句点）
         t = re.sub(r"\.{3,}", "。", t)
         t = t.replace("…", "。")
@@ -581,7 +612,7 @@ class SpeechPlayer(QObject):
             if not clean_text:
                 return
             tts = AliyunTTS(api_key, timeout=timeout)
-            url = tts.synthesize_cosyvoice(clean_text, voice_id, engine=engine)
+            url = tts.synthesize_cosyvoice(clean_text, voice_id, engine=engine, speech_rate=self._speed)
             if not url:
                 return
             # 流式解码 OSS URL → PCM int16 chunks（标记 "pcm"）
@@ -610,6 +641,18 @@ class SpeechPlayer(QObject):
         if channels > 1:
             audio = audio.reshape(-1, channels).mean(axis=1)
 
+        # 情绪化语速：angry 快、sad 慢。线性重采样同时改变速度与音高，
+        # 与情绪标签对应（angry 更急更高、sad 更缓更低）。
+        speed = self._speed or 1.0
+        if speed != 1.0 and audio.size > 1:
+            n = audio.size
+            new_n = max(1, int(round(n / speed)))
+            audio = np.interp(
+                np.linspace(0.0, 1.0, new_n, endpoint=False),
+                np.linspace(0.0, 1.0, n, endpoint=False),
+                audio,
+            ).astype(np.float32)
+
         chunk_size = max(1, int(sr * 0.05))
         with sd.OutputStream(samplerate=sr, channels=1, dtype="float32") as stream:
             for idx in range(0, len(audio), chunk_size):
@@ -617,6 +660,10 @@ class SpeechPlayer(QObject):
                     break
                 chunk = audio[idx : idx + chunk_size]
                 stream.write(chunk.reshape(-1, 1))
+                # 音量 → 口型强度：RMS 经验缩放 ×4 映射到 0-1（静音≈0，正常说话≈0.3-0.8）
+                rms = float(np.sqrt(np.mean(chunk.astype(np.float64) ** 2))) if chunk.size else 0.0
+                self.mouth_intensity.emit(min(1.0, rms * 4.0))
+        self.mouth_intensity.emit(0.0)
 
     def _play_wav_stream(self, stream_iter) -> None:
         """流式播放生成器，按 ("pcm", chunk) / ("wav", bytes) 元组分发。
@@ -654,9 +701,15 @@ class SpeechPlayer(QObject):
                 if audio.size == 0:
                     continue
                 stream.write(audio.reshape(-1, 1))
+                # 音量 → 口型强度：int16 转 float32 后算 RMS，经验缩放 ×4 映射 0-1
+                rms = float(np.sqrt(np.mean(audio.astype(np.float64) ** 2))) / 32767.0
+                self.mouth_intensity.emit(min(1.0, rms * 4.0))
         except Exception as exc:
             print(f"[SpeechPlayer] stream playback failed: {exc}")
         finally:
+            # 会话/流结束：口型归零（renderer 收到 0 闭嘴）
+            if stream is not None:
+                self.mouth_intensity.emit(0.0)
             if stream is not None:
                 try:
                     stream.stop()

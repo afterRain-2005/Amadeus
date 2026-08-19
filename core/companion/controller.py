@@ -24,7 +24,7 @@ class CompanionController:
     def __init__(self, *, config: dict, llm_config: dict) -> None:
         # 启动即建表：lightweight_memory 表此前只在设置页「清空记忆」里建，
         # 实际使用时 _companion_tick 首次查询就抛 OperationalError 被吞掉，
-        # 导致 handle_signal 永不执行（无主动气泡）。此处兜底建表，失败静默降级。
+        # 导致 handle_signal 永不执行（无主动气泡）。此处兗底建表，失败静默降级。
         try:
             storage.init_schema()
         except Exception:
@@ -35,6 +35,9 @@ class CompanionController:
         self.llm_api_key = llm_config.get("api_key", "")
         self.llm_model = llm_config.get("model", "")
         self._last_user_msg_ts: Optional[float] = None
+        # C-04 缓存：config 和 soul_md 在运行期几乎不变，避免每次 _speak 都读磁盘
+        self._cached_config: Optional[dict] = None
+        self._cached_soul_md: Optional[str] = None
 
     def on_user_message(self) -> None:
         """用户发消息时调用，更新冷却时间戳。"""
@@ -42,7 +45,7 @@ class CompanionController:
 
     def handle_signal(
         self, snapshot: ContextSnapshot, *, local_hour: float,
-        on_delta=None, on_status=None, on_finished=None,
+        on_delta=None, on_status=None, on_finished=None, on_expression=None,
     ) -> None:
         """传感器信号变化时调用。命中则触发问候。
 
@@ -96,23 +99,26 @@ class CompanionController:
             on_delta=on_delta,
             on_status=on_status,
             on_finished=on_finished,
+            on_expression=on_expression,
         )
 
-    def _speak(self, decision, *, on_delta=None, on_status=None, on_finished=None) -> None:
+    def _speak(self, decision, *, on_delta=None, on_status=None, on_finished=None, on_expression=None) -> None:
         """写入 storage + 调 route_and_send。
 
         on_delta/on_status 回调透传给 route_and_send，由 desktop_pet 注入实际
         表达层回调（_agent_delta/_show_status）；未注入时走 no-op，不影响主流程。
+
+        C-03 修复：先调 route_and_send，成功后才 record_greeting，
+        避免 LLM 失败时 storage 记录“从未说出口的问候”导致每日上限虚高。
         """
-        storage.record_greeting(decision.text, decision.topic, decision.emotion)
         # 延迟导入避免循环依赖
         from core.backend_router import route_and_send
         inject = KURISU_PROACTIVE_PASS_THROUGH.format(text=decision.text)
         try:
             reply, _backend = route_and_send(
-                config=self._load_config(),
+                config=self._get_config(),
                 input_text=decision.text,
-                soul_md=self._load_soul_md(),
+                soul_md=self._get_soul_md(),
                 conversation_history=None,
                 memories=None,
                 on_delta=on_delta or (lambda t: None),
@@ -121,6 +127,21 @@ class CompanionController:
                 skip_history=True,
                 inject_system_prompt=inject,
             )
+            # 成功后才记录问候（C-03）
+            try:
+                storage.record_greeting(decision.text, decision.topic, decision.emotion)
+            except Exception:
+                pass  # storage 失败不影响回复
+            if on_expression is not None:
+                try:
+                    from core.companion.expression import decide_expression
+                    from core.storage import load_config
+                    cfg = load_config()
+                    ollama = (cfg.get("agent_router") or {}).get("ollama")
+                    expr = decide_expression(reply, ollama=ollama)
+                    on_expression(expr)
+                except Exception:
+                    pass  # 表现层永不影响主流程
             if on_finished is not None:
                 on_finished(reply)
         except Exception:
@@ -131,24 +152,33 @@ class CompanionController:
         try:
             dt = datetime.fromisoformat(iso_str.replace("Z", "+00:00"))
             return dt.timestamp()
-        except (ValueError, TypeError):
+        except (ValueError, TypeError, AttributeError):
             return 0.0
 
-    @staticmethod
-    def _load_config() -> dict:
-        from core.storage import load_config
-        return load_config()
+    def _get_config(self) -> dict:
+        """获取配置（缓存，避免每次 _speak 都读磁盘）。"""
+        if self._cached_config is None:
+            from core.storage import load_config
+            self._cached_config = load_config()
+        return self._cached_config
 
-    @staticmethod
-    def _load_soul_md() -> str:
-        """读取 SOUL.md，失败回退 KURISU_PERSONALITY。"""
-        from core.storage import APP_DIR
-        soul_path = APP_DIR / "SOUL.md"
-        if soul_path.exists():
-            return soul_path.read_text(encoding="utf-8")
-        from config import get_character_by_id
-        c = get_character_by_id("kurisu")
-        return c.personality if c else ""
+    def _get_soul_md(self) -> str:
+        """读取 SOUL.md（缓存，失败回退 KURISU_PERSONALITY）。"""
+        if self._cached_soul_md is None:
+            from core.storage import APP_DIR
+            soul_path = APP_DIR / "SOUL.md"
+            if soul_path.exists():
+                self._cached_soul_md = soul_path.read_text(encoding="utf-8")
+            else:
+                from config import get_character_by_id
+                c = get_character_by_id("kurisu")
+                self._cached_soul_md = c.personality if c else ""
+        return self._cached_soul_md
+
+    def invalidate_cache(self) -> None:
+        """清除缓存（设置页保存后调用）。"""
+        self._cached_config = None
+        self._cached_soul_md = None
 
     def start(self, parent=None) -> None:
         """启动所有传感器 QTimer。

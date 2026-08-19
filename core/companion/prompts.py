@@ -1,6 +1,22 @@
-"""Companion 主动问候 prompt 模板。"""
+"""Companion 主动问候 prompt 模板 + Live2D 表情/动作映射。
+
+COMPANION_TO_LIVE2D_EMOTION: companion 内部情绪 → Live2D 可识别情绪标签。
+  companion 评估器输出 idle/sleepy/concern/tease 等，但 Live2D 只认
+  neutral/blush/angry/smile/sad（emotion_parser._EMOTION_RE 也仅匹配这 5 种）。
+  此映射确保 companion 问候时 Live2D 表情正确变化。
+
+COMPANION_EMOTION_MOTION: companion 内部情绪 → Live2D 动作名。
+  live2d_page.html 定义了 6 种动作（neutral/smile/blush/angry/sad/thinking），
+  每种对头部/身体参数做短补间偏移，让角色不只眨眼还会歪头/点头/前倾等。
+"""
 
 KURISU_PROACTIVE_TEMPLATES = [
+    {
+        "topic": "away_long",
+        "condition": lambda s: s.idle_state == "away" and s.idle_seconds > 3600,
+        "text": "很久没碰电脑了，还在吗？",
+        "emotion": "neutral",
+    },
     {
         "topic": "idle",
         "condition": lambda s: s.idle_seconds > 900,
@@ -24,12 +40,6 @@ KURISU_PROACTIVE_TEMPLATES = [
         "condition": lambda s: s.window_changed_recently and s.greeting_count_today == 0,
         "text": "切换窗口切得这么勤，是在摸鱼吧？",
         "emotion": "tease",
-    },
-    {
-        "topic": "away_long",
-        "condition": lambda s: s.idle_state == "away" and s.idle_seconds > 3600,
-        "text": "很久没碰电脑了，还在吗？",
-        "emotion": "neutral",
     },
 ]
 
@@ -55,3 +65,35 @@ topic 可选：idle/work/deep_night/tease/window_change/general
 KURISU_PROACTIVE_PASS_THROUGH = """你接下来要说的话已经准备好了，把以下内容用你的语气自然说出，可以微调措辞但不要改变意思：
 
 {text}"""
+
+# === Companion 情绪 → Live2D 表情/动作映射 ===
+
+COMPANION_TO_LIVE2D_EMOTION: dict[str, str] = {
+    # companion 评估器输出 → Live2D 可识别 emotion
+    "idle":     "neutral",
+    "sleepy":   "sad",
+    "concern":  "sad",
+    "tease":    "angry",
+    "happy":    "smile",
+    "neutral":  "neutral",
+    "angry":    "angry",
+    "blush":    "blush",
+    "sad":      "sad",
+    "smile":    "smile",
+    "thinking": "neutral",
+}
+
+COMPANION_EMOTION_MOTION: dict[str, str] = {
+    # companion 情绪 → Live2D 动作名（对应 live2d_page.html MOTIONS 字典）
+    "idle":     "thinking",   # 发呆 → 左右歪头 + 眼球扫视
+    "sleepy":   "sad",        # 困倦 → 低头
+    "concern":  "sad",        # 关心 → 低头前倾
+    "tease":    "angry",      # 吐槽 → 生气前倾 + 微抖
+    "happy":    "smile",      # 开心 → 点头
+    "neutral":  "neutral",    # 平静 → 歪头疑问
+    "angry":    "angry",      # 生气 → 前倾微抖
+    "blush":    "blush",      # 害羞 → 别过脸
+    "sad":      "sad",        # 难过 → 低头
+    "smile":    "smile",      # 微笑 → 点头
+    "thinking": "thinking",   # 思考 → 歪头扫视
+}

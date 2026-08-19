@@ -128,11 +128,9 @@ class Evaluator:
         try:
             data = _call_llm(snapshot, endpoint=endpoint, api_key=api_key, model=model)
         except (OSError, ValueError, KeyError):
-            # LLM 失败降级走 idle 模板兜底
-            return GreetingDecision(
-                text="盯着屏幕发呆也修不好 bug，不如起来走走？",
-                emotion="idle", topic="idle", source="fallback_template",
-            )
+            # C-05 修复：LLM 失败降级根据 snapshot 上下文选择合理情绪和文本，
+            # 而不是永远返回 idle/“盯着屏幕发呆也修不好 bug”。
+            return self._context_aware_fallback(snapshot)
         if not data.get("should_speak"):
             return None
         return GreetingDecision(
@@ -140,4 +138,33 @@ class Evaluator:
             emotion=data.get("emotion", "neutral"),
             topic=data.get("topic", "general"),
             source="llm",
+        )
+    
+    @staticmethod
+    def _context_aware_fallback(snapshot: ContextSnapshot) -> GreetingDecision:
+        """LLM 失败时根据当前上下文选择合理的降级问候。"""
+        if snapshot.is_deep_night and snapshot.work_session_minutes > 30:
+            return GreetingDecision(
+                text=f"都 {snapshot.local_time} 了，早点休息吧",
+                emotion="sleepy", topic="deep_night", source="fallback_template",
+            )
+        if snapshot.work_session_minutes > 120:
+            return GreetingDecision(
+                text="休息一下吧，别太拼了",
+                emotion="concern", topic="concern", source="fallback_template",
+            )
+        if snapshot.idle_state == "away" and snapshot.idle_seconds > 3600:
+            return GreetingDecision(
+                text="很久没碰电脑了，还在吗？",
+                emotion="neutral", topic="away_long", source="fallback_template",
+            )
+        if snapshot.idle_seconds > 900:
+            return GreetingDecision(
+                text="盯着屏幕发呆也修不好 bug，不如起来走走？",
+                emotion="idle", topic="idle", source="fallback_template",
+            )
+        # 默认降级：通用问候
+        return GreetingDecision(
+            text="在忙什么呢？",
+            emotion="neutral", topic="general", source="fallback_template",
         )

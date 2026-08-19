@@ -49,7 +49,7 @@ def _start_pet_process() -> None:
 
 def main() -> int:
     global _tray_icon
-    print("[main] 启动 QApplication...", flush=True)
+    print("[main] Starting QApplication...", flush=True)
     app = QApplication(sys.argv)
     app.setApplicationName("Amadeus")
     app.setQuitOnLastWindowClosed(False)
@@ -68,13 +68,13 @@ def main() -> int:
         if reason == QSystemTrayIcon.ActivationReason.Trigger else None
     )
     _tray_icon.show()
-    print("[main] 桌宠进程已启动，进入事件循环...", flush=True)
+    print("[main] Pet process started, entering event loop...", flush=True)
     return app.exec()
 
 
 def _on_quit() -> None:
     global _pet_process
-    print("[main] 退出程序", flush=True)
+    print("[main] Quitting...", flush=True)
     if _pet_process is not None and _pet_process.poll() is None:
         _pet_process.terminate()
     QApplication.quit()

@@ -70,12 +70,18 @@ def last_greeting_ts() -> Optional[str]:
 
 
 def greeting_count_today() -> int:
-    """今天（UTC）已问候次数。"""
-    today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+    """今天（本地时间）已问候次数。
+
+    C-06 修复：使用本地时间而非 UTC，避免 UTC+8 用户在下午 4 点就翻天的问题。
+    """
+    from datetime import datetime as _dt
+    today_start = _dt.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    # 转为 UTC ISO 格式与数据库中的 UTC 时间戳比较
+    today_start_utc = today_start.astimezone(timezone.utc).isoformat()
     with _connect() as conn:
         row = conn.execute(
             "SELECT COUNT(*) AS c FROM lightweight_memory WHERE source='companion' AND ts >= ?",
-            (today_start,),
+            (today_start_utc,),
         ).fetchone()
     return row["c"]
 

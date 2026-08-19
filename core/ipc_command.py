@@ -19,6 +19,10 @@ def apply_command_js(payload: dict) -> str:
     lines: list[str] = []
     if "emotion" in payload:
         lines.append(f"window.__amadeus.setEmotion({payload['emotion']!r})")
+    if "motion" in payload:
+        lines.append(f"window.__amadeus.playMotion({payload['motion']!r})")
+    if "mouth" in payload:
+        lines.append(f"window.__amadeus.setMouth({float(payload['mouth'])})")
     if "speaking" in payload:
         value = "true" if payload["speaking"] else "false"
         lines.append(f"window.__amadeus.setSpeaking({value})")

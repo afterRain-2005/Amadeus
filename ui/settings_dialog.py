@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import threading
 
-from PySide6.QtCore import Q_ARG, QMetaObject, QPoint, Qt, Slot
+from PySide6.QtCore import Q_ARG, QMetaObject, QPoint, Qt, QTimer, Slot
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QDialog, QDialogButtonBox,
@@ -13,26 +13,34 @@ from PySide6.QtWidgets import (
 
 from core.storage import load_config, save_config
 
-CRT_QSS = """
-QDialog#settingsDialog { background-color: #171114; color: #c1b492; border: 1px solid #d2738a; }
+from pathlib import Path
+_DITHER_URL = str(
+    Path(__file__).resolve().parent.parent / "resources" / "textures" / "dither_rose.png"
+).replace("\\", "/")
+_ABOUT_BG_URL = str(
+    Path(__file__).resolve().parent.parent / "resources" / "ui" / "helivitica-bg.png"
+).replace("\\", "/")
+
+_QSS_TMPL = """
+QDialog#settingsDialog { background-color: #171114; color: #c1b492; border: 1px solid #d2738a; background-image: url(__DITHER__); }
 QWidget#settingsTitleBar { background-color: #21171b; border: 1px solid #d2738a; border-left: 8px solid #d2738a; }
-QLabel#settingsTitle { color: #c1b492; font: 700 12px "Consolas", "Microsoft YaHei"; letter-spacing: 2px; }
+QLabel#settingsTitle { color: #d2738a; font: 700 13px "Times New Roman", "Microsoft YaHei"; }
 QLabel#settingsSignature { color: #8a7f63; font: 10px "Consolas", "Microsoft YaHei"; }
 QPushButton#settingsClose { background: #171114; color: #d2738a; border: 1px solid #d2738a; min-width: 24px; max-width: 24px; min-height: 22px; max-height: 22px; padding: 0; font: 700 14px "Consolas", "Microsoft YaHei"; }
 QPushButton#settingsClose:hover { background: #d2738a; color: #171114; }
-QTabWidget::pane { border: 1px solid #d2738a; background: #171114; top: -1px; }
+QTabWidget::pane { border: 1px solid #d2738a; background-color: #08031a; background-image: url(ABOUT_BG); background-repeat: no-repeat; background-position: left top; top: -1px; }
 QTabBar::tab { background: #21171b; color: #8a7f63; border: 1px solid #8a7f63; border-bottom: 0; padding: 7px 12px; min-width: 72px; font: 12px "Consolas", "Microsoft YaHei"; }
 QTabBar::tab:selected { background: #d2738a; color: #171114; border-color: #d2738a; }
 QTabBar::tab:hover:!selected { color: #c1b492; border-color: #d2738a; }
-QWidget#settingsPage { background-color: #171114; }
+QWidget#settingsPage { background-color: transparent; }
 QScrollArea { background: transparent; border: 0; }
-QScrollArea > QWidget > QWidget { background-color: #171114; }
+QScrollArea > QWidget > QWidget { background-color: transparent; }
 QLabel { color: #c1b492; font: 13px "Consolas", "Microsoft YaHei"; }
 QLabel#sectionHeader { color: #d2738a; border-left: 3px solid #d2738a; padding: 3px 0 3px 8px; font: 700 12px "Consolas", "Microsoft YaHei"; }
-QLineEdit, QComboBox { background-color: #21171b; color: #c1b492; border: 1px solid #8a7f63; border-radius: 0; padding: 7px 9px; min-height: 22px; selection-background-color: #d2738a; selection-color: #171114; font: 13px "Consolas", "Microsoft YaHei"; }
-QLineEdit:focus, QComboBox:focus { border-color: #d2738a; background-color: #171114; }
+QLineEdit, QComboBox { background-color: rgba(23, 17, 20, 178); color: #c1b492; border: 1px solid #8a7f63; border-radius: 0; padding: 7px 9px; min-height: 22px; selection-background-color: #d2738a; selection-color: #171114; font: 13px "Consolas", "Microsoft YaHei"; }
+QLineEdit:focus, QComboBox:focus { border-color: #d2738a; background-color: rgba(23, 17, 20, 204); }
 QComboBox::drop-down { border-left: 1px solid #8a7f63; width: 24px; }
-QComboBox QAbstractItemView { background-color: #171114; color: #c1b492; border: 1px solid #d2738a; selection-background-color: #d2738a; selection-color: #171114; }
+QComboBox QAbstractItemView { background-color: rgba(23, 17, 20, 222); color: #c1b492; border: 1px solid #d2738a; selection-background-color: #d2738a; selection-color: #171114; }
 QCheckBox { color: #c1b492; spacing: 8px; font: 13px "Consolas", "Microsoft YaHei"; }
 QCheckBox::indicator { width: 14px; height: 14px; border: 1px solid #8a7f63; background: #21171b; }
 QCheckBox::indicator:checked { background: #d2738a; border-color: #d2738a; }
@@ -40,11 +48,24 @@ QPushButton { background-color: #21171b; color: #c1b492; border: 1px solid #c1b4
 QPushButton:hover { background-color: #d2738a; color: #171114; border-color: #d2738a; }
 QPushButton:pressed { background-color: #c1b492; color: #171114; }
 QDialogButtonBox QPushButton { min-width: 88px; }
-QScrollBar:vertical { background: #21171b; width: 8px; margin: 0; }
+QScrollBar:vertical { background: transparent; width: 8px; margin: 0; }
 QScrollBar::handle:vertical { background: #d2738a; min-height: 30px; }
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
 QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: transparent; }
 """
+
+CRT_QSS = _QSS_TMPL.replace("__DITHER__", _DITHER_URL).replace("ABOUT_BG", _ABOUT_BG_URL)
+
+# 设置页底部左侧滚动台词（fauux 长句 marquee；El Psy Kongroo）
+_TICKER_TEXT = (
+    "There is no end though there is a start in space. — Infinity. "
+    "It has own power, it ruins, and it goes though there is a start also in the star. — Finite. "
+    "Only the person who was wisdom can read the most foolish one from the history. "
+    "The fish that lives in the sea doesn't know the world in the land. "
+    "It also ruins and goes if they have wisdom. "
+    "It is funnier that man exceeds the speed of light than fish start living in the land. "
+    "It can be said that this is an final ultimatum from the god to the people who can fight."
+)
 
 
 def _section(title: str) -> QLabel:
@@ -490,7 +511,7 @@ class SettingsDialog(QDialog):
         title_layout = QHBoxLayout(title_bar)
         title_layout.setContentsMargins(10, 4, 6, 4)
         title_layout.setSpacing(8)
-        title = QLabel("AMADEUS CONFIG", title_bar)
+        title = QLabel("⌈ Ａｍａｄｅｕｓ Ｓｅｔｔｉｎｇｓ ⌋", title_bar)
         title.setObjectName("settingsTitle")
         title_glow = QGraphicsDropShadowEffect(title)
         title_glow.setColor(QColor(210, 115, 138, 180))
@@ -499,9 +520,19 @@ class SettingsDialog(QDialog):
         title.setGraphicsEffect(title_glow)
         signature = QLabel("tait-crt-interface-skill", title_bar)
         signature.setObjectName("settingsSignature")
+        # 相位签名短语轮换（fauux ⑧⑬：多语言短语交替）
+        self._sig_phrases = (
+            "tait-crt-interface-skill", "私の声、聞こえる？",
+            "[make me sad]", "wire ESTABLISHED · ch 1",
+        )
+        self._sig_index = 0
+        self._sig_timer = QTimer(self)
+        self._sig_timer.setInterval(1200)
+        self._sig_timer.timeout.connect(self._cycle_signature)
+        self._sig_timer.start()
         close_btn = QPushButton("X", title_bar)
         close_btn.setObjectName("settingsClose")
-        close_btn.setToolTip("??")
+        close_btn.setToolTip("关闭")
         close_btn.clicked.connect(self.reject)
         title_layout.addWidget(title)
         title_layout.addWidget(signature)
@@ -513,7 +544,34 @@ class SettingsDialog(QDialog):
         layout.setSpacing(10)
         layout.addWidget(title_bar)
         layout.addWidget(tabs)
-        layout.addWidget(buttons)
+
+        # 底部左侧滚动台词（fauux 长句 marquee）：与 Save/Cancel 同一行，
+        # 占据按钮左侧的全部剩余空间，文本右→左缓慢滚动循环
+        self._ticker_bar = QWidget(self)
+        self._ticker_bar.setStyleSheet("background:transparent")
+        self._ticker_bar.setFixedHeight(24)
+        self._ticker_label = QLabel(_TICKER_TEXT, self._ticker_bar)
+        self._ticker_label.setStyleSheet(
+            "color:#8a7f63;background:transparent;"
+            "font:700 13px 'Consolas','Microsoft YaHei';white-space:nowrap"
+        )
+        self._ticker_label.adjustSize()
+        self._ticker_w = self._ticker_label.width()
+        self._ticker_label.setAttribute(Qt.WA_TransparentForMouseEvents)
+        self._ticker_bar.setAttribute(Qt.WA_TransparentForMouseEvents)
+        self._ticker_x = 0
+        self._ticker_timer = QTimer(self)
+        self._ticker_timer.setInterval(30)
+        self._ticker_timer.timeout.connect(self._tick_ticker)
+        self._ticker_timer.start()
+
+        bottom_row = QHBoxLayout()
+        bottom_row.setContentsMargins(0, 0, 0, 0)
+        bottom_row.setSpacing(10)
+        bottom_row.addWidget(self._ticker_bar, 1)
+        bottom_row.addWidget(buttons, 0)
+        layout.addLayout(bottom_row)
+        self._tick_ticker()
 
         # CRT 特效叠加层：扫描线 + 暗角（透明，不拦截鼠标）
         from ui.widgets.crt_overlay import CrtOverlay
@@ -523,6 +581,21 @@ class SettingsDialog(QDialog):
         # 按当前选择初始化各服务配置块的可见性
         self._on_tts_provider_changed()
         self._on_agent_mode_changed()
+
+    def _cycle_signature(self) -> None:
+        """轮换标题栏右侧的相位签名短语（fauux [make me sad] 交互）。"""
+        self._sig_index = (self._sig_index + 1) % len(self._sig_phrases)
+        sig = self.findChild(QLabel, "settingsSignature")
+        if sig is not None:
+            sig.setText(self._sig_phrases[self._sig_index])
+
+    def _tick_ticker(self) -> None:
+        """底部左侧滚动台词推进：文本自右向左缓慢滚动，出屏后从头进入。"""
+        bar_w = max(self._ticker_bar.width(), 200)
+        self._ticker_x -= 1
+        if self._ticker_x + self._ticker_w < 0:
+            self._ticker_x = bar_w
+        self._ticker_label.move(self._ticker_x, (self._ticker_bar.height() - self._ticker_label.height()) // 2)
 
     def mousePressEvent(self, event) -> None:
         if event.button() == Qt.LeftButton and event.position().y() <= 42:

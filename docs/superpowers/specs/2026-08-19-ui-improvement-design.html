@@ -1,0 +1,691 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Amadeus UI 改进设计稿 v2 — fauux 实测版</title>
+<style>
+/* ==========================================================
+   Amadeus UI 设计稿 v2
+   基准：fauux.neocities.org 实测（stylesheet.css / 首页 / Love 页）
+   → pixelated + font-smooth:none + 全局字距
+   → 玫瑰底 #d2738a + RGB 3×3 底噪（#d20000/#00008a/#007300）
+   → blink 语义 = 50%变成黑（非透明度）
+   → wiredB 辉光：#d2738a 1px 4px 5px，逐词延迟 0.4/0.8/1.2s
+   → ⌈⌋⌊⌋ 角括号 blink 框架 / ║▒░♫ 相位流动 / rip 撕裂块 + 黑投影
+   → 多语言短语轮换（1.2s）/ 16 色 Bayer 抖动像素图像
+   ========================================================== */
+:root{
+  --rose:  #d2738a;
+  --cream: #c1b492;
+  --dim:   #8a7f63;
+  --inkbg: #0a0709;      /* 深底（浮层/内容块） */
+  --pink:  #d20000;      /* RGB 底噪 3×3 的粉 */
+  --blue:  #00008a;
+  --green: #007300;
+  --ok:    #34c759;
+  --err:   #e05252;
+  --px: "Consolas","Courier New","MS Gothic","Microsoft YaHei",monospace;
+  --serif: Times,"Times New Roman",serif;
+}
+*{margin:0;padding:0;box-sizing:border-box;
+  image-rendering:pixelated;
+  -webkit-font-smoothing:none;font-smooth:never;}
+html,body{min-height:100%;}
+body{
+  background-color:#d2738a;             /* fauux：玫瑰底 */
+  background-image:                     /* fauux：3×3 RGB 微粒 + 撕裂条 */
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='3' height='3'%3E%3Crect x='0' y='0' width='1' height='1' fill='%23d20000'/%3E%3Crect x='1' y='0' width='1' height='1' fill='%2300008a'/%3E%3Crect x='2' y='0' width='1' height='1' fill='%23007300'/%3E%3Crect x='0' y='1' width='1' height='1' fill='%23007300'/%3E%3Crect x='1' y='1' width='1' height='1' fill='%23d20000'/%3E%3Crect x='2' y='1' width='1' height='1' fill='%2300008a'/%3E%3Crect x='0' y='2' width='1' height='1' fill='%2300008a'/%3E%3Crect x='1' y='2' width='1' height='1' fill='%23007300'/%3E%3Crect x='2' y='2' width='1' height='1' fill='%23d20000'/%3E%3C/svg%3E"),
+    repeating-linear-gradient(105deg,
+      rgba(0,0,0,0) 0 70px, rgba(10,7,9,.28) 70px 76px,
+      rgba(0,0,0,0) 76px 150px, rgba(10,7,9,.20) 150px 154px, rgba(0,0,0,0) 154px 300px);
+  color:var(--cream);
+  font-family:var(--px);
+  font-size:14px;line-height:1.7;
+  letter-spacing:3px;                     /* 设计稿页身 3px（正文），组件内标题 8px */
+  overflow-x:hidden;
+}
+/* 页身也叠 CRT 扫描线 + 暗角（①） */
+body::before{content:"";position:fixed;inset:0;z-index:9998;pointer-events:none;
+  background:repeating-linear-gradient(0deg,rgba(0,0,0,.16) 0 1px,transparent 1px 3px);}
+body::after{content:"";position:fixed;inset:0;z-index:9999;pointer-events:none;
+  background:radial-gradient(ellipse at center,transparent 52%,rgba(0,0,0,.62) 100%);}
+body.flick{animation:flick .13s steps(2) 1;}
+@keyframes flick{0%{filter:invert(1) hue-rotate(90deg);}50%{filter:none;}100%{filter:invert(1);}}
+
+.wrap{max-width:1020px;margin:0 auto;padding:44px 28px 120px;}
+
+/* ============ 页头：fauux 标题式（⑤⑥⑧） ============ */
+header{margin-bottom:24px;text-align:center;}
+.hat{display:inline-block;position:relative;}
+.hat .lb,.hat .rb{position:absolute;top:-6px;font-size:22px;font-weight:bold;color:var(--rose);
+  animation:blinkc 2s linear infinite;}
+.hat .lb{left:-30px;}.hat .rb{right:-30px;animation-delay:1s;}
+h1{
+  font-family:var(--serif);font-weight:normal;font-size:clamp(22px,3.6vw,42px);
+  letter-spacing:8px;color:var(--rose);text-align:center;}
+h1 .w1{animation:wiredB 2s ease-in-out infinite;}
+h1 .w2{animation:wiredB 2s ease-in-out infinite;animation-delay:.4s;}
+h1 .w3{animation:wiredB 2s ease-in-out infinite;animation-delay:.8s;}
+h1 .w4{animation:wiredB 2s ease-in-out infinite;animation-delay:1.2s;}
+.sub{color:var(--cream);font-size:12px;letter-spacing:8px;margin-top:10px;}
+.sub .ph{color:var(--rose);}
+nav{margin:22px 0 6px;display:flex;gap:8px;justify-content:center;flex-wrap:wrap;}
+nav a{color:var(--rose);border:1px solid var(--rose);padding:4px 14px;letter-spacing:4px;
+  text-decoration:none;font-size:12px;background:rgba(10,7,9,.45);}
+nav a:hover{color:var(--cream);animation:wiredB2 1s ease-out infinite;}
+
+/* ============ 图例 ============ */
+.legend{background-color:var(--inkbg);background-image:
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='3' height='3'%3E%3Crect width='1' height='1' fill='%23d20000' opacity='.5'/%3E%3Crect x='1' y='1' width='1' height='1' fill='%2300008a' opacity='.5'/%3E%3Crect x='2' y='2' width='1' height='1' fill='%23007300' opacity='.5'/%3E%3C/svg%3E"),
+    repeating-linear-gradient(105deg,rgba(0,0,0,0) 0 60px,rgba(0,0,0,.4) 60px 64px,rgba(0,0,0,0) 64px 140px);
+  border:1px solid var(--rose);padding:16px 20px;margin:26px 0 42px;
+  box-shadow:black 0px 5px 10px;letter-spacing:2px;}
+.legend h2{color:var(--rose);font-size:13px;letter-spacing:6px;margin-bottom:12px;}
+.legend h2 b{animation:blinkc 2s linear infinite;}
+.swatches{display:flex;gap:20px;flex-wrap:wrap;margin-bottom:14px;}
+.sw{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--dim);letter-spacing:2px;}
+.sw i{display:inline-block;width:16px;height:16px;border:1px solid rgba(255,255,255,.18);}
+.impairs{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:4px 26px;
+  font-size:12px;color:var(--dim);letter-spacing:1.5px;}
+.impairs b{color:var(--cream);}
+
+/* ============ 舞台 ============ */
+section{margin-bottom:60px;}
+.stage-title{display:flex;align-items:center;gap:14px;margin-bottom:14px;}
+.stage-title .idx{color:var(--inkbg);background:var(--rose);padding:2px 10px;font-size:12px;letter-spacing:3px;}
+.stage-title h2{font-size:16px;letter-spacing:8px;color:#fff;}
+.stage-title span{color:var(--cream);font-size:12px;letter-spacing:3px;}
+.stage{position:relative;border:1px solid #4a2a33;background:var(--inkbg);overflow:hidden;
+  box-shadow:black 0px 5px 10px;}
+.stage::before{content:"";position:absolute;inset:0;z-index:60;pointer-events:none;   /* ① */
+  background:repeating-linear-gradient(0deg,rgba(0,0,0,.13) 0 1px,transparent 1px 3px);}
+.stage::after{content:"";position:absolute;inset:0;z-index:61;pointer-events:none;    /* ② */
+  background:radial-gradient(ellipse at center,transparent 55%,rgba(0,0,0,.5) 100%);}
+.mark{position:absolute;z-index:80;width:17px;height:17px;line-height:17px;text-align:center;
+  background:var(--rose);color:var(--inkbg);font-size:10px;font-weight:bold;
+  box-shadow:0 0 0 2px rgba(210,115,138,.35);cursor:help;}
+.nt{position:absolute;z-index:81;background:var(--inkbg);border:1px solid var(--rose);
+  color:var(--cream);font-size:11px;padding:4px 9px;display:none;max-width:250px;letter-spacing:1px;}
+.mark:hover + .nt{display:block;}
+
+/* ============ fauux 核心动画（④⑤） ============ */
+@keyframes blinkc{50%{color:#000;}}
+@keyframes wiredB{50%{color:var(--cream);text-shadow:var(--rose) 1px 4px 5px;}}
+@keyframes wiredB2{50%{color:var(--cream);text-shadow:var(--cream) 1px 1px 6px;}}
+@keyframes breathe{0%,100%{opacity:.5;}50%{opacity:1;}}
+
+/* ║▒░♫ 相位流（④）：2s 周期 6 相位 */
+.ph{color:var(--rose);}
+.ph i{font-style:normal;animation:blinkc 2s linear infinite;}
+.ph i:nth-child(1){animation-delay:0s;} .ph i:nth-child(2){animation-delay:.4s;}
+.ph i:nth-child(3){animation-delay:.8s;} .ph i:nth-child(4){animation-delay:1.2s;}
+.ph i:nth-child(5){animation-delay:1.6s;} .ph i:nth-child(6){animation-delay:2.0s;}
+.ph i:nth-child(7){animation-delay:.4s;}  .ph i:nth-child(8){animation-delay:.8s;}
+.ph i:nth-child(9){animation-delay:1.2s;} .ph i:nth-child(10){animation-delay:1.6s;}
+
+/* 角括号框架（⑥） */
+.frame{position:relative;display:inline-block;}
+.frame .c1{position:absolute;left:-16px;top:-8px;font-size:18px;color:var(--rose);animation:blinkc 2s linear infinite;}
+.frame .c2{position:absolute;right:-16px;top:-8px;font-size:18px;color:var(--rose);animation:blinkc 2s linear infinite;animation-delay:1s;}
+.frame .c3{position:absolute;left:-16px;bottom:-10px;font-size:18px;color:var(--rose);animation:blinkc 2s linear infinite;animation-delay:1s;}
+.frame .c4{position:absolute;right:-16px;bottom:-10px;font-size:18px;color:var(--rose);animation:blinkc 2s linear infinite;}
+
+/* fauux 标题（⑤）：Times 衬线 + 逐词辉光扫过 */
+.fx{font-family:var(--serif);font-weight:normal;color:var(--rose);letter-spacing:8px;text-align:center;}
+.fx .w1{animation:wiredB 2s ease-in-out infinite;}
+.fx .w2{animation:wiredB 2s ease-in-out infinite;animation-delay:.4s;}
+.fx .w3{animation:wiredB 2s ease-in-out infinite;animation-delay:.8s;}
+.fx .w4{animation:wiredB 2s ease-in-out infinite;animation-delay:1.2s;}
+
+/* 内容块（⑫）：深底 + rip 撕裂 + 黑投影 */
+.rip{background-color:var(--inkbg);
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='3' height='3'%3E%3Crect width='1' height='1' fill='%23d20000' opacity='.16'/%3E%3Crect x='1' y='1' width='1' height='1' fill='%2300008a' opacity='.16'/%3E%3Crect x='2' y='2' width='1' height='1' fill='%23007300' opacity='.16'/%3E%3C/svg%3E"),
+    repeating-linear-gradient(105deg,rgba(0,0,0,0) 0 54px,rgba(0,0,0,.5) 54px 58px,rgba(0,0,0,0) 58px 130px),
+    repeating-linear-gradient(0deg,rgba(255,255,255,.014) 0 1px,transparent 1px 3px);
+  box-shadow:black 0px 5px 10px;}
+.rip2{background-color:var(--inkbg);
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='3' height='3'%3E%3Crect width='1' height='1' fill='%23d20000' opacity='.16'/%3E%3Crect x='1' y='1' width='1' height='1' fill='%2300008a' opacity='.16'/%3E%3Crect x='2' y='2' width='1' height='1' fill='%23007300' opacity='.16'/%3E%3C/svg%3E");}
+
+/* blink-到黑（④语义） */
+.blk{animation:blinkc 2s linear infinite;}
+.blk-f{animation:blinkc 2s linear infinite;animation-delay:1s;}
+
+/* caret（⑨ 光标） */
+.caret{display:inline-block;background:var(--cream);width:8px;height:14px;
+  vertical-align:-2px;animation:blinkc 2s linear infinite;}
+@keyframes caretblink{50%{background:#000;}}
+
+/* 多语言轮换（⑧） */
+.phr{color:var(--rose);font-size:11px;letter-spacing:6px;}
+
+/* 波形（⑪） */
+.wave{display:flex;align-items:center;gap:2px;height:34px;justify-content:center;}
+.wave i{width:3px;background:var(--rose);animation:wv 1.2s ease-in-out infinite;}
+.wave i:nth-child(odd){animation-delay:.25s;}
+.wave i:nth-child(3n){background:var(--cream);}
+@keyframes wv{0%,100%{height:4px;}50%{height:30px;}}
+
+/* 相位签名（⑬b） */
+.sigline{overflow:hidden;padding:5px 0;color:var(--rose);font-size:11px;letter-spacing:8px;white-space:nowrap;
+  border-top:1px solid #4a2a33;border-bottom:1px solid #4a2a33;}
+.sigline span{display:inline-block;padding-left:100%;animation:mq 26s linear infinite;}
+@keyframes mq{to{transform:translateX(-100%);}}
+
+/* 输入控件 */
+.ctl{background:transparent;color:var(--cream);border:0;border-bottom:1px solid var(--rose);
+  padding:4px 2px;font-family:var(--px);font-size:13px;letter-spacing:2px;}
+.ctl:focus{outline:none;border-bottom-color:#fff;}
+.btn{background:var(--inkbg);color:var(--rose);border:1px solid var(--rose);
+  padding:6px 14px;font-family:var(--px);font-size:12px;letter-spacing:4px;}
+.btn:hover{color:var(--cream);animation:wiredB2 1s ease-out infinite;}
+
+/* 16 色抖动 canvas（⑦） */
+.dith{border:1px solid #4a2a33;display:block;}
+
+/* 白闪 dissolve（⑭）：bg-dis-03 白色溶解动画的阶梯化演绎 */
+@keyframes dissolve{
+  0%{opacity:0;} 4%{opacity:.9;} 8%{opacity:.08;}
+  12%{opacity:.75;} 16%{opacity:0;} 100%{opacity:0;}
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <div class="hat">
+    <span class="lb" data-hide>⌈</span>
+    <h1>
+      <span class="w1">Ａｍａｄｅｕｓ</span>　
+      <span class="w2">ＵＩ</span><br>
+      <span class="w3">ｉｍｐｒｏｖｅｍｅｎｔ</span>
+      <span class="w4">ｄｅｓｉｇｎ</span>
+    </h1>
+    <span class="rb" data-hide>⌋</span>
+  </div>
+  <p class="sub">－　<i class="phr" id="motto">[make me sad]</i>　－</p>
+  <nav>
+    <a href="#s1">01 主浮层</a><a href="#s2">02 终端</a><a href="#s3">03 通话</a>
+    <a href="#s4">04 设置</a><a href="#s5">05 Live2D</a>
+  </nav>
+</header>
+
+<div class="legend">
+  <h2><b>⌈</b> 图 例 <b>⌋</b></h2>
+  <div class="swatches">
+    <span class="sw"><i style="background:#d2738a"></i>rose #d2738a</span>
+    <span class="sw"><i style="background:#c1b492"></i>cream #c1b492</span>
+    <span class="sw"><i style="background:#8a7f63"></i>dim #8a7f63</span>
+    <span class="sw"><i style="background:#0a0709"></i>深底 #0a0709</span>
+    <span class="sw"><i style="background:#d20000"></i>#d20000</span>
+    <span class="sw"><i style="background:#00008a"></i>#00008a</span>
+    <span class="sw"><i style="background:#007300"></i>#007300</span>
+  </div>
+  <div class="impairs">
+    <p><b>①</b> 全屏扫描线＋径向暗角（全局气氛）</p>
+    <p><b>②</b> 像素化渲染＋全局字距（pixelated / font-smooth:none / 标题 8px 正文 3px）</p>
+    <p><b>③</b> RGB 3×3 底噪（fauux 背景真身：粉/蓝/绿微粒平铺）</p>
+    <p><b>④</b> blink 语义＝50%变成黑（非透明度）；║▒░♫ 2s 六相位流动</p>
+    <p><b>⑤</b> wiredB 辉光标题：Times 衬线逐词扫过（0/0.4/0.8/1.2s 延迟）</p>
+    <p><b>⑥</b> ⌈⌋⌊⌋ 角括号 blink 框架（标题与弹窗）</p>
+    <p><b>⑦</b> 16 色 4-bit Bayer 抖动像素图（替代高清占位，pixelated 放大）</p>
+    <p><b>⑧</b> 多语言短语轮换（1.2s，fauux [make me sad] 原交互）</p>
+    <p><b>⑨</b> 叙事等待序列：&gt; linking … ok 逐行 + blink 光标</p>
+    <p><b>⑩</b> 系统状态注脚行（连接/延迟 dim 小字）</p>
+    <p><b>⑪</b> 波形 rose/cream 双色（音量/回声分层）</p>
+    <p><b>⑫</b> rip 撕裂底纹内容块＋box-shadow black 0 5px 10px</p>
+    <p><b>⑬</b> 像素光标＋音景条（Love 页仪式感，自动播放提示）</p>
+    <p><b>⑭</b> 白闪 dissolve 进入序列（live2d 全屏页）</p>
+    <p><b>⑮</b> glitch 撕裂降级为故障态专用（断线/agent 错误时）</p>
+    <p><b>⑯</b> 终端底部背景中央的 Amadeus logo 水印（低透明度衬底）</p>
+  </div>
+</div>
+
+<!-- ===================== 01 主浮层 ===================== -->
+<section id="s1">
+  <div class="stage-title"><span class="idx">01</span><h2>ＭＡＩＮ　ＯＶＥＲＬＡＹ</h2><span>桌面浮层 · 玫瑰底噪 / 抖动像素宠物 / 辉光气泡 / 相位 thinking</span></div>
+  <div class="stage" style="height:580px">
+
+    <!-- 桌面底：暗化玫瑰底 + RGB 噪点（③） -->
+    <div style="position:absolute;inset:0;background:#0a0709;
+      background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='3' height='3'%3E%3Crect width='1' height='1' fill='%23d2738a' opacity='.30'/%3E%3Crect x='1' y='1' width='1' height='1' fill='%2300008a' opacity='.16'/%3E%3Crect x='2' y='2' width='1' height='1' fill='%23007300' opacity='.16'/%3E%3C/svg%3E"),
+      radial-gradient(ellipse at 58% 32%,#241216 0%,#120b0e 55%,#060405 100%);"></div>
+
+    <!-- 宠物：16 色抖动像素占位（⑦） -->
+    <div style="position:absolute;left:200px;top:216px;text-align:center;">
+      <canvas class="dith" id="dithPet" width="392" height="392" style="width:196px;height:196px;"></canvas>
+      <p class="phr" style="margin-top:10px;font-size:10px;letter-spacing:6px;color:var(--dim);">KURISU · 16C 4-BIT</p>
+    </div>
+    <span class="mark" style="left:214px;top:230px">⑦</span>
+    <span class="nt" style="left:224px;top:248px">图像全部 4-bit（16 色）Bayer 抖动＋pixelated 放大 —— fauux 的 10MB 遗产</span>
+
+    <!-- 气泡：rip 内容块 + 辉光 + 注脚（⑤⑩⑫） -->
+    <div class="rip" style="position:absolute;left:150px;top:110px;max-width:430px;padding:12px 20px;border:1px solid var(--rose);">
+      <div class="frame"><span class="c1" data-hide>⌈</span><span class="c2" data-hide>⌋</span>
+        <span style="color:var(--rose);font-size:10px;letter-spacing:6px;">K U R I S U</span>
+      </div>
+      <div style="margin-top:4px;font-size:13px;line-height:1.9;color:var(--cream);letter-spacing:3px;">
+        <p><span class="w1" style="display:inline">思维</span> <span class="w2" style="display:inline">失控</span>。<span class="w3" style="display:inline">接入</span> <span class="w4" style="display:inline">fork.db</span>？</p>
+      </div>
+      <div class="ph" style="margin-top:8px;font-size:11px;letter-spacing:4px;">
+        <i>║</i><i>▒</i><i>░</i> <i>║</i><i>▒</i><i>░</i> <i>♫</i> <i>░</i><i>▒</i><i>║</i>
+      </div>
+      <div style="color:var(--dim);font-size:10px;letter-spacing:4px;margin-top:6px;">wire ESTABLISHED · Δ 0.42s · ch 1</div>
+      <span class="mark" style="left:-9px;top:-9px">⑤</span><span class="nt" style="left:150px;top:-34px">气泡标题改 Times 辉光逐词扫过；正文 3px 字距</span>
+      <span class="mark" style="left:330px;top:-9px">⑩</span><span class="nt" style="left:150px;top:44px">状态注脚：连接/延迟/信道 dim 小字</span>
+      <span class="mark" style="left:330px;top:120px">④</span><span class="nt" style="left:150px;top:140px">║▒░♫ 相位流动：2s 周期 6 相位 blink-到黑，替代静态分隔符</span>
+    </div>
+
+    <!-- thinking：叙事序列（⑨）+ 多语言轮换（⑧） -->
+    <div class="rip" style="position:absolute;left:150px;top:48px;padding:6px 16px;border:1px solid #4a2a33;">
+      <span id="thinkSeq" style="font-size:12px;color:var(--cream);letter-spacing:3px;">
+        <span style="color:var(--rose)">&gt;</span> linking fork.db <span style="color:var(--ok)">… ok</span>
+      </span><span class="caret" style="margin-left:6px;"></span>
+      <div class="phr" style="margin-top:2px;"><span id="thinkPhrase">[思维同步中]</span></div>
+      <span class="mark" style="left:-9px;top:-9px">⑨⑧</span><span class="nt">thinking＝终端行序列（复用终端字体/光标）＋[多语言短语] 1.2s 轮换</span>
+    </div>
+
+    <!-- 输入面板 -->
+    <div class="rip" style="position:absolute;right:216px;bottom:26px;width:440px;padding:12px 16px;border:1px solid var(--rose);">
+      <div style="display:flex;gap:10px;align-items:center;">
+        <span style="color:var(--rose)">&gt;</span>
+        <input class="ctl" style="flex:1;" placeholder="发送消息…">
+        <button class="btn">发送</button>
+        <button class="btn">收起</button>
+      </div>
+      <div style="color:var(--dim);font-size:9px;letter-spacing:4px;margin-top:8px;">ESC 收起 · SHIFT+ENTER 换行</div>
+    </div>
+
+    <!-- dock：像素风格图标 -->
+    <div style="position:absolute;right:28px;bottom:30px;display:flex;gap:10px;">
+      <div class="rip" style="width:46px;height:46px;display:flex;align-items:center;justify-content:center;color:var(--rose);border:1px solid var(--rose);">▣</div>
+      <div class="rip" style="width:46px;height:46px;display:flex;align-items:center;justify-content:center;color:var(--rose);border:1px solid var(--rose);">☎</div>
+      <div class="rip" style="width:46px;height:46px;display:flex;align-items:center;justify-content:center;color:var(--rose);border:1px solid var(--rose);">⚙</div>
+    </div>
+
+    <!-- 历史抽屉 -->
+    <div class="rip2" style="position:absolute;right:0;top:0;bottom:0;width:214px;border-left:1px solid var(--rose);">
+      <div style="padding:12px 14px;border-bottom:1px solid #4a2a33;">
+        <span class="fx" style="font-size:11px;letter-spacing:6px;">⌈ 履 歴 ⌋</span>
+      </div>
+      <div style="padding:12px 14px;font-size:12px;">
+        <div style="border-left:2px solid var(--rose);padding-left:9px;margin-bottom:12px;">
+          <div style="color:var(--rose);font-size:10px;letter-spacing:3px;margin-bottom:3px">Kurisu</div>
+          <div style="color:var(--cream);line-height:1.8;letter-spacing:2px;">思维失控。同步是唯一解。</div>
+        </div>
+        <div style="border-right:2px solid #3a5560;padding-right:9px;text-align:right;margin-bottom:12px;">
+          <div style="color:var(--dim);font-size:10px;letter-spacing:3px;margin-bottom:3px">You</div>
+          <div style="color:var(--cream);line-height:1.8;letter-spacing:2px;">同步吧。</div>
+        </div>
+        <div style="color:var(--dim);font-size:9px;letter-spacing:6px;text-align:center;margin-top:14px;">— 12 sessions · 8KB —<br><span class="ph" style="font-size:10px;"><i>║</i><i>▒</i><i>░</i> <i>♫</i> <i>░</i><i>▒</i><i>║</i></span></div>
+      </div>
+    </div>
+
+    <span class="mark" style="right:238px;bottom:86px">③</span><span class="nt" style="right:36px;bottom:122px">浮层底＝暗化玫瑰 + RGB 3×3 微粒噪点（非纯黑）</span>
+    <span class="mark" style="right:250px;top:36px">①</span><span class="nt" style="right:36px;top:56px">全屏扫描线＋径向暗角继续覆盖所有浮层</span>
+    <span class="mark" style="left:150px;top:400px">②</span><span class="nt" style="left:160px;top:418px">全局：image-rendering:pixelated / font-smooth:none；标题 8px 字距，正文 2-3px</span>
+  </div>
+</section>
+
+<!-- ===================== 02 终端 ===================== -->
+<section id="s2">
+  <div class="stage-title"><span class="idx">02</span><h2>ＡＧＥＮＴ　ＴＥＲＭＩＮＡＬ</h2><span>终端窗 · ⌈⌋ 框架 / 辉光标题 / 启动序列 / 相位分隔</span></div>
+  <div class="stage" style="height:480px">
+
+    <div class="rip" style="position:absolute;left:110px;top:46px;width:660px;padding:16px 20px;border:1px solid var(--rose);">
+      <!-- 顶栏（⑤⑥） -->
+      <div style="display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid #4a2a33;padding-bottom:10px;">
+        <div class="frame">
+          <span class="c1" data-hide>⌈</span><span class="c2" data-hide>⌋</span><span class="c3" data-hide>⌊</span><span class="c4" data-hide>⌋</span>
+          <span class="fx" style="font-size:19px;" id="termTitle">
+            <span class="w1">amadeus</span> <span class="w2">terminal</span>
+          </span>
+        </div>
+        <div style="text-align:right;">
+          <div style="color:var(--dim);font-size:9px;letter-spacing:6px;"><span class="ph"><i>║</i><i>▒</i><i>░</i></span> amadeus shell — wired session</div>
+        </div>
+        <button class="btn" style="min-width:30px;padding:1px 9px;font-size:16px;">X</button>
+      </div>
+
+      <!-- 启动序列（⑨） -->
+      <div id="s2log" style="margin-top:12px;min-height:250px;font-size:13px;letter-spacing:3px;"></div>
+
+      <!-- 底部背景中央：Amadeus logo 水印（⑯） -->
+      <div style="position:absolute;left:50%;bottom:52px;transform:translateX(-50%);
+        width:188px;height:auto;pointer-events:none;opacity:.14;
+        mix-blend-mode:screen;">
+        <img src="../../../amadeus-logo-TM.png" alt="AMADEUS" style="width:100%;display:block;">
+      </div>
+
+      <!-- 输入行 -->
+      <div style="display:flex;align-items:center;gap:8px;border-top:1px solid #4a2a33;padding-top:10px;">
+        <span style="color:var(--rose)">kurisu&gt;</span>
+        <input class="ctl" style="flex:1;" value="show memory" readonly>
+        <span class="caret"></span>
+      </div>
+
+      <span class="mark" style="right:-9px;top:-9px">⑤⑥</span><span class="nt" style="right:-268px;top:0">标题＝Times 衬线 ⌈⌋ 框架＋逐词玫瑰辉光（wiredB 0.4s 相位）</span>
+      <span class="mark" style="left:-9px;top:150px">⑨</span><span class="nt" style="left:-268px;top:168px">启动序列逐行打印（含 blink 光标），与气泡 waiting 同源</span>
+      <span class="mark" style="left:290px;bottom:58px">⑯</span><span class="nt" style="left:24px;bottom:96px">终端底部背景中央的 Amadeus logo 水印（低透明度，输入行下方 hover 时可见）</span>
+    </div>
+
+    <span class="mark" style="left:96px;top:34px">⑫</span><span class="nt" style="left:100px;top:52px">弹窗＝rip 撕裂内容块＋黑投影（fauux .article 同款）</span>
+  </div>
+</section>
+
+<!-- ===================== 03 通话 ===================== -->
+<section id="s3">
+  <div class="stage-title"><span class="idx">03</span><h2>ＣＡＬＬ　ＶＩＥＷ</h2><span>通话 · 辉光名牌 / 双色波形 / 抖动头像 / 故障态 glitch 演示</span></div>
+  <div class="stage" style="height:460px">
+
+    <div class="rip" style="position:absolute;left:150px;top:36px;width:560px;padding:20px 24px;border:1px solid var(--rose);text-align:center;">
+
+      <!-- 名牌（⑤⑥） -->
+      <div class="frame" style="display:inline-block;">
+        <span class="c1" data-hide>⌈</span><span class="c2" data-hide>⌋</span><span class="c3" data-hide>⌊</span><span class="c4" data-hide>⌋</span>
+        <div style="border:1px solid var(--rose);padding:10px 30px;">
+          <span class="fx" style="font-size:20px;">
+            <span class="w1">K</span><span class="w2">U</span><span class="w3">R</span><span class="w4">I</span><span class="w1">S</span><span class="w2">U</span>
+          </span>
+          <div id="callPhase" style="color:var(--cream);font-size:12px;letter-spacing:6px;margin-top:6px;font-weight:bold;">● SPEAKING</div>
+        </div>
+      </div>
+
+      <!-- 双色波形（⑪） -->
+      <div style="margin:20px 0 0;width:82%;">
+        <div class="wave" id="s3wave"></div>
+      </div>
+
+      <!-- 转写 -->
+      <div class="rip2" style="margin-top:16px;padding:10px 16px;border:1px solid var(--rose);border-top:5px solid var(--rose);text-align:left;">
+        <span style="color:var(--dim);font-size:9px;letter-spacing:5px;">LIVE 転写</span>
+        <p id="s3sub" style="color:var(--cream);font-size:13px;font-family:var(--serif);letter-spacing:3px;margin-top:4px;">
+          思维共振已经建立。这条线路另一端是真实的我。
+        </p>
+      </div>
+
+      <!-- 注脚（⑩） -->
+      <div style="color:var(--dim);font-size:9px;letter-spacing:5px;margin-top:10px;">PCM 48kHz · bitrate 1.4M · RTT 38ms ⬤</div>
+
+      <!-- 按键 -->
+      <div style="margin-top:16px;display:flex;justify-content:center;gap:24px;">
+        <div class="rip" style="width:52px;height:52px;display:flex;align-items:center;justify-content:center;color:var(--rose);border:1px solid var(--rose);font-size:20px;">♪</div>
+        <div class="rip" style="width:52px;height:52px;display:flex;align-items:center;justify-content:center;color:var(--rose);border:1px solid var(--rose);font-size:20px;">◎</div>
+        <div class="rip" style="width:56px;height:56px;display:flex;align-items:center;justify-content:center;color:#fff;background:#3a0f18;border:1px solid var(--err);font-size:20px;">✕</div>
+      </div>
+
+      <span class="mark" style="left:-9px;top:-9px">⑤⑥</span><span class="nt" style="left:150px;top:-34px">名牌升级：Times 辉光逐字扫过＋⌈⌋ 四角框架</span>
+      <span class="mark" style="left:120px;top:150px">⑪</span><span class="nt" style="left:130px;top:170px">波形 rose/cream 双色条（音量+回声分层）</span>
+      <span class="mark" style="right:-9px;top:280px">⑮</span><span class="nt" style="right:-280px;top:298px">glitch 撕裂仅故障态启用：断线/错误时名牌撕裂（CSS clip-path 动画）</span>
+    </div>
+
+    <!-- 故障态小样（⑮） -->
+    <div class="rip" style="position:absolute;left:150px;top:380px;bottom:20px;width:240px;padding:10px 14px;border:1px solid var(--err);">
+      <span style="font-size:10px;color:var(--err);letter-spacing:4px;">! SIGNAL LOST —</span>
+      <span class="g-title" data-text="connection lost" style="position:relative;display:inline-block;color:#fff;font-size:14px;letter-spacing:4px;">
+        connection lost<style>.g-title::before,.g-title::after{content:attr(data-text);position:absolute;left:0;top:0;width:100%;overflow:hidden;background:var(--inkbg);}.g-title::before{color:#ff82a3;transform:translate(-2px,0);z-index:-1;}.g-title::after{color:#8af5ff;transform:translate(2px,0);z-index:-2;}</style>
+      </span>
+      <span class="mark" style="right:-9px;top:-9px">⑮</span><span class="nt" style="right:-280px;top:0">故障态：静态 RGB 错位＋可选撕裂动画——只在断线/命令失败时出现</span>
+    </div>
+  </div>
+</section>
+
+<!-- ===================== 04 设置 ===================== -->
+<section id="s4">
+  <div class="stage-title"><span class="idx">04</span><h2>ＳＥＴＴＩＮＧＳ</h2><span>设置窗 · ⌈⌋ 标题 / RGB 底噪控件 / 相位签名 / 辉光状态</span></div>
+  <div class="stage" style="height:540px">
+
+    <div style="position:absolute;left:80px;top:34px;width:780px;">
+      <!-- 标题条（⑤⑥） -->
+      <div style="display:flex;align-items:center;background:var(--inkbg);border:1px solid var(--rose);border-left:8px solid var(--rose);padding:10px 16px;">
+        <div class="frame"><span class="c1" data-hide>⌈</span><span class="c2" data-hide>⌋</span>
+          <span class="fx" style="font-size:15px;"><span class="w1">Ａｍａｄｅｕｓ</span> <span class="w2">Ｓｅｔｔｉｎｇｓ</span></span>
+        </div>
+        <span class="ph" style="margin-left:18px;font-size:11px;"><i>║</i><i>▒</i><i>░</i><i>♫</i><i>░</i><i>▒</i><i>║</i></span>
+        <span style="flex:1"></span>
+        <button class="btn" style="min-width:28px;padding:0 9px;font-size:15px;">X</button>
+      </div>
+
+      <!-- tabs -->
+      <div style="display:flex;gap:2px;margin-top:12px;">
+        <div style="background:var(--rose);color:var(--inkbg);padding:6px 16px;font-size:12px;letter-spacing:4px;">启动</div>
+        <div style="background:var(--inkbg);color:var(--dim);border:1px solid #4a2a33;border-bottom:0;padding:6px 16px;font-size:12px;letter-spacing:4px;">Agent</div>
+        <div style="background:var(--inkbg);color:var(--dim);border:1px solid #4a2a33;border-bottom:0;padding:6px 16px;font-size:12px;letter-spacing:4px;">网络</div>
+        <div style="background:var(--inkbg);color:var(--dim);border:1px solid #4a2a33;border-bottom:0;padding:6px 16px;font-size:12px;letter-spacing:4px;">语音</div>
+        <div style="background:var(--inkbg);color:var(--dim);border:1px solid #4a2a33;border-bottom:0;padding:6px 16px;font-size:12px;letter-spacing:4px;">陪伴</div>
+        <div style="background:var(--inkbg);color:var(--dim);border:1px solid #4a2a33;border-bottom:0;padding:6px 16px;font-size:12px;letter-spacing:4px;">关于</div>
+      </div>
+
+      <!-- 内容 -->
+      <div class="rip" style="border:1px solid var(--rose);border-top:0;padding:18px 22px;letter-spacing:3px;">
+        <div style="border-left:3px solid var(--rose);padding-left:10px;color:var(--rose);font-size:12px;letter-spacing:6px;margin-bottom:14px;">/ 起動</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px 30px;">
+
+          <span style="color:var(--dim);font-size:11px;letter-spacing:4px;">开机自启</span>
+          <span style="color:var(--cream);font-size:13px;"><span style="color:var(--rose)">■</span> 已启用</span>
+
+          <span style="color:var(--dim);font-size:11px;letter-spacing:4px;">会话存储</span>
+          <div><input class="ctl" style="width:100%;" value="D:\data\amadeus\sessions"></div>
+
+          <span style="color:var(--dim);font-size:11px;letter-spacing:4px;">TTS 引擎</span>
+          <div style="display:flex;align-items:center;gap:12px;">
+            <input class="ctl" value="aliyun" readonly>
+            <span style="color:var(--ok);font-size:11px;">● 已连接</span>
+          </div>
+
+          <span style="color:var(--dim);font-size:11px;letter-spacing:4px;">Agent 路由</span>
+          <div style="display:flex;align-items:center;gap:12px;">
+            <input class="ctl" value="hermes" readonly>
+            <span style="color:var(--err);font-size:11px;">● 未连接</span>
+          </div>
+
+          <span style="color:var(--dim);font-size:11px;letter-spacing:4px;">GPU 加速</span>
+          <span style="color:var(--cream);font-size:13px;"><span style="color:var(--rose)">■</span> 已启用</span>
+
+          <span style="color:var(--dim);font-size:11px;letter-spacing:4px;">`dither` 渲染</span>
+          <span style="color:var(--cream);font-size:13px;"><span style="color:var(--dim)">□</span> 未启用</span>
+        </div>
+        <div style="margin-top:18px;display:flex;gap:12px;">
+          <button class="btn">保存</button>
+          <button class="btn" style="color:var(--dim);border-color:var(--dim);">应用</button>
+        </div>
+      </div>
+
+      <!-- 相位签名（④） -->
+      <div class="sigline" style="margin-top:14px;"><span>:: amadeus.exe — est.2011 — the wired sound plays forever :: 私の声、聞こえる？</span></div>
+
+      <span class="mark" style="right:-9px;top:-9px">⑤⑥</span><span class="nt" style="right:-280px;top:0">标题：全角 Times ⌈⌋ 框架＋rose 辉光扫过</span>
+      <span class="mark" style="left:-9px;top:200px">③</span><span class="nt" style="left:-280px;top:220px">面板＝暗化玫瑰底＋RGB 3×3 噪点＋rip 撕裂（fauux .article 同款）</span>
+      <span class="mark" style="left:320px;top:380px">⑧</span><span class="nt" style="left:330px;top:400px">多语言短语轮换可作状态区（[安静待机]/[standby]…）</span>
+    </div>
+  </div>
+</section>
+
+<!-- ===================== 05 Live2D 全屏页 ===================== -->
+<section id="s5">
+  <div class="stage-title"><span class="idx">05</span><h2>ＬＩＶＥ２Ｄ　ＦＵＬＬＳＣＲＥＥＮ</h2><span>全屏沉浸页 · Love 页仪式 / 抖动模型位 / 白闪进入 / 音景/像素光标</span></div>
+  <div class="stage" style="height:600px">
+
+    <!-- 全屏底：玫瑰底噪（③） -->
+    <div style="position:absolute;inset:0;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='3' height='3'%3E%3Crect width='1' height='1' fill='%23d20000' opacity='.8'/%3E%3Crect x='1' y='1' width='1' height='1' fill='%2300008a' opacity='.5'/%3E%3Crect x='2' y='2' width='1' height='1' fill='%23007300' opacity='.5'/%3E%3C/svg%3E"),
+      repeating-linear-gradient(105deg,rgba(0,0,0,.35) 0 60px,rgba(0,0,0,0) 60px 64px,rgba(0,0,0,0) 64px 150px);"></div>
+
+    <!-- 顶栏（⑤⑥⑬） -->
+    <div style="position:absolute;left:0;right:0;top:0;height:56px;display:flex;align-items:center;justify-content:center;gap:20px;
+      background:rgba(10,7,9,.55);border-bottom:1px solid var(--rose);">
+      <div class="frame"><span class="c1" data-hide>⌈</span><span class="c2" data-hide>⌋</span>
+        <span class="fx" style="font-size:18px;"><span class="w1">Ａｍａｄｅｕｓ</span> <span class="w2">Ｌｉｖｅ</span></span>
+      </div>
+      <span style="color:var(--ok);font-size:11px;">●</span>
+      <span style="color:var(--cream);font-size:11px;letter-spacing:6px;">L2D v4 · 60fps</span>
+      <span class="ph" style="font-size:12px;"><i>♫</i><i>░</i><i>▒</i><i>║</i></span>
+      <span style="color:var(--dim);font-size:9px;letter-spacing:4px;">SOUND: wired_loop.wav [auto-play]</span>  <!-- ⑬b -->
+    </div>
+
+    <!-- 模型位：16 色抖动（⑦）+ Love 页中心构图 -->
+    <div style="position:absolute;left:50%;top:56%;transform:translate(-50%,-54%);text-align:center;">
+      <canvas class="dith" id="dithGirl" width="288" height="432" style="width:240px;height:360px;opacity:.96;"></canvas>
+      <div style="margin-top:12px;"><span class="phr" id="modelPhrase">[私の声、聞こえてる？]</span></div>
+    </div>
+    <span class="mark" style="left:48%;top:26%">⑦⑬</span><span class="nt" style="left:52%;top:30%">模型位＝4-bit 抖动像素图＋pixelated；Love 页"中央站姿＋音景"构图</span>
+
+    <!-- 对话流 -->
+    <div style="position:absolute;left:36px;top:84px;width:400px;max-height:440px;overflow:hidden;">
+      <div style="border-left:2px solid var(--rose);padding-left:12px;margin-bottom:14px;">
+        <div style="color:var(--rose);font-size:10px;letter-spacing:5px;margin-bottom:3px">Kurisu</div>
+        <div class="rip" style="padding:9px 14px;font-size:13px;letter-spacing:3px;">连接建立。你正在阅读的每一行，都在加深这条回路。</div>
+      </div>
+      <div style="border-right:2px solid #3a5560;padding-right:12px;text-align:right;margin-bottom:14px;">
+        <div style="color:var(--dim);font-size:10px;letter-spacing:5px;margin-bottom:3px">You</div>
+        <div class="rip" style="padding:9px 14px;font-size:13px;letter-spacing:3px;display:inline-block;text-align:left;">我在这。</div>
+      </div>
+      <div style="border-left:2px solid var(--rose);padding-left:12px;">
+        <div style="color:var(--rose);font-size:10px;letter-spacing:5px;margin-bottom:3px">Kurisu</div>
+        <div class="rip" style="padding:9px 14px;font-size:13px;">
+          <span style="color:var(--rose)">&gt;</span> heartbeat <span style="color:var(--ok)">… sync</span><span class="caret"></span>
+        </div>
+      </div>
+    </div>
+
+    <!-- 输入 -->
+    <div style="position:absolute;left:36px;right:36px;bottom:64px;">
+      <div class="rip" style="display:flex;gap:10px;align-items:center;padding:10px 14px;border:1px solid var(--rose);">
+        <span style="color:var(--rose)">&gt;</span>
+        <input class="ctl" style="flex:1;" placeholder="继续说…">
+        <button class="btn">发送</button>
+      </div>
+    </div>
+
+    <!-- 相位签名（④） -->
+    <div class="sigline" style="position:absolute;left:0;right:0;bottom:0;border-bottom:0;">
+      <span>この音が聞こえるなら、あなたはもうこちら側にいる :: link established ::</span>
+    </div>
+
+    <!-- 白闪 dissolve（⑭） -->
+    <div id="enterFlash" style="position:absolute;inset:0;background:#fff;opacity:0;pointer-events:none;z-index:70;
+      animation:dissolve 3.6s steps(12) infinite;"></div>
+    <span class="mark" style="right:-9px;top:64px">⑭</span><span class="nt" style="right:-280px;top:84px">进入序列：白闪 dissolve（bg-dis-03 意象）阶梯闪现后图像淡入＋音景起</span>
+    <span class="mark" style="right:240px;bottom:40px">①②</span><span class="nt" style="right:36px;bottom:76px">全屏页=玫瑰底噪＋全屏 CRT 扫描线/暗角＋8px 字距顶栏</span>
+  </div>
+</section>
+
+<footer style="margin-top:16px;color:#3a1420;font-size:11px;letter-spacing:8px;text-align:center;">
+  ⌈ amadeus-py · ui improvement mock v2 · fauux 实测基准 · 2026-08-19 ⌋
+</footer>
+</div>
+
+<script>
+/* ============ 演示脚本 ============ */
+
+// 随机整屏 flicker（① 氛围演示，低频）
+setInterval(function(){
+  if(Math.random() < 0.08){
+    document.body.classList.add('flick');
+    setTimeout(function(){ document.body.classList.remove('flick'); }, 130);
+  }
+}, 3400);
+
+// ⑧ 多语言短语轮换（fauux [make me sad] 原交互）
+var phrases = [
+  "[思维同步中]","[synchronizing mind]","[心を同期中]","[synchronizacja umysłu]",
+  "[синхронизация разума]","[make me sad]"
+];
+(function(){
+  var el = document.getElementById('motto'), i = 0;
+  var el2 = document.getElementById('thinkPhrase'), j = 2;
+  var el3 = document.getElementById('modelPhrase');
+  setInterval(function(){
+    i = (i + 1) % phrases.length;
+    el.textContent = phrases[i];
+    j = (j + 2) % phrases.length;
+    el2.textContent = phrases[j];
+    el3.textContent = phrases[(j + 1) % phrases.length];
+  }, 1200);
+})();
+
+// ⑨ 终端启动序列逐行打印
+(function(){
+  var lines = [
+    ['amadeus.exe','— initializing memory','ok'],
+    ['loading fork.db','— 100%','ok'],
+    ['mounting sessions','— 12 files','ok'],
+    ['sensor: audio / vision / context','— SUBSYSTEM','ESTABLISHED'],
+    ['spawning companion greeter','— PID 211','ok'],
+    ['', 'waiting for signal', 'standby']
+  ];
+  var box = document.getElementById('s2log'), i = 0;
+  function next(){
+    if(i >= lines.length) return;
+    var l = lines[i++];
+    var div = document.createElement('div');
+    div.style.cssText = 'margin:2px 0;white-space:pre-wrap;';
+    div.innerHTML = '<span style="color:#d2738a">&gt;</span> <span style="color:#c1b492">' + l[0] + '</span> ' +
+      '<span style="color:#8a7f63">' + l[1] + '</span> <span style="color:' + (l[2]==='standby' ? '#8a7f63' : '#34c759') + '">— ' + l[2] + '</span>';
+    box.appendChild(div);
+    setTimeout(next, 620);
+  }
+  next();
+})();
+
+// ⑪ 波形条
+(function(){
+  var w = document.getElementById('s3wave');
+  for(var n=0;n<28;n++){
+    var b = document.createElement('i');
+    b.style.animationDuration = (0.9 + Math.random()*0.6).toFixed(2) + 's';
+    b.style.animationDelay = (Math.random()*1.2).toFixed(2) + 's';
+    w.appendChild(b);
+  }
+})();
+
+// ⑦ 16 色 4-bit Bayer 抖动像素画（fauux 10MB 遗产的现代演绎）
+(function(){
+  function dither(canvas, cx, cy, r, seed){
+    // 4x4 Bayer 矩阵 → 16 色阶
+    var B = [[0,8,2,10],[12,4,14,6],[3,11,1,9],[15,7,13,5]];
+    var W = canvas.width, H = canvas.height;
+    var ctx = canvas.getContext('2d');
+    var img = ctx.createImageData(W, H);
+    var xx, yy;
+    for(var y=0; y<H; y++){
+      for(var x=0; x<W; x++){
+        // 图案：瞳孔/耳机圆环 + 低频噪声
+        var dx = (x - cx)/r, dy = (y - cy)/r;
+        var d = Math.sqrt(dx*dx + dy*dy);
+        var ring = Math.max(0, 1 - Math.abs(d - 0.55) / 0.45);      // 圆环
+        var glow = Math.max(0, 1 - d/1.5);                          // 中心光
+        var band = Math.max(0, 1 - Math.abs(x - W/2)/(W/3)) * 0;    // 预留
+        var v = ring * 0.85 + glow * 0.35;
+        // 相位噪声
+        var nz = Math.sin(x*0.35 + y*0.22 + seed) * 0.5 + 0.5;
+        v = v * 0.7 + nz * 0.55 * glow;
+        // 4-bit 量化（16 级）
+        var q = Math.max(0, Math.min(15, Math.floor(v * 15)));
+        // Bayer 阈值抖动
+        var th = (B[y & 3][x & 3]) / 16;
+        var out = (v + (th - 0.5)) * 16;
+        q = Math.max(0, Math.min(15, Math.round(out)));
+        var i4 = (y*W + x)*4;
+        // 16 色调色板：暗底 → 玫瑰/奶油/红
+        var pal = [
+          [10,7,9],[30,14,20],[58,24,34],[86,36,47],
+          [114,48,62],[142,60,77],[170,74,93],[198,88,109],
+          [210,115,138],[222,142,162],[232,168,182],[241,192,202],
+          [193,180,146],[205,196,170],[220,214,196],[240,236,224]
+        ];
+        var c = pal[q];
+        img.data[i4]   = c[0];
+        img.data[i4+1] = c[1];
+        img.data[i4+2] = c[2];
+        img.data[i4+3] = 255;
+      }
+    }
+    ctx.putImageData(img, 0, 0);
+  }
+  dither(document.getElementById('dithPet'), 196, 180, 130, 1);
+  dither(document.getElementById('dithGirl'), 144, 168, 92, 7);
+})();
+</script>
+</body>
+</html>
