@@ -33,10 +33,17 @@ class AliyunTTS:
         *,
         language: str = "ja",
         target_model: str | None = None,
-    ) -> str | None:
-        """Create a cloned voice and return the Aliyun voice id."""
+        ref_text: str | None = None,
+    ) -> tuple[str | None, bool, str | None]:
+        """Create a cloned voice.
+
+        Returns (voice_id, fallback_mode, fallback_reason). fallback_mode=True
+        means Aliyun degraded the clone (audio quality or audio/text mismatch),
+        per 声音复刻 HTTP API 参考 (qwen-voice-enrollment). ref_text aligns the
+        clone with the reference audio text and improves clone quality.
+        """
         if not self.api_key:
-            return None
+            return None, False, None
         ref_audio_path = Path(ref_audio_path)
         if not ref_audio_path.exists():
             raise FileNotFoundError(str(ref_audio_path))
@@ -45,22 +52,24 @@ class AliyunTTS:
             mime,
             base64.b64encode(ref_audio_path.read_bytes()).decode("ascii"),
         )
-        payload = {
-            "model": "qwen-voice-enrollment",
-            "input": {
-                "action": "create",
-                "target_model": target_model or self.TARGET_MODEL,
-                "preferred_name": preferred_name,
-                "audio": {"data": data_url},
-                "language": language,
-            },
+        input_params = {
+            "action": "create",
+            "target_model": target_model or self.TARGET_MODEL,
+            "preferred_name": preferred_name,
+            "audio": {"data": data_url},
+            "language": language,
         }
+        if ref_text and ref_text.strip():
+            input_params["text"] = ref_text.strip()
+        payload = {"model": "qwen-voice-enrollment", "input": input_params}
         response = self._post_json(self.CLONE_URL, payload)
         output = response.get("output") if isinstance(response, dict) else None
         if not isinstance(output, dict):
-            return None
+            return None, False, None
         voice = output.get("voice") or output.get("voice_id")
-        return str(voice).strip() if voice else None
+        fallback = bool(output.get("fallback_mode")) or False
+        reason = str(output.get("fallback_reason") or "").strip() or None
+        return (str(voice).strip() if voice else None), fallback, reason
 
     def synthesize(
         self,

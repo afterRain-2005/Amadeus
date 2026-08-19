@@ -21,7 +21,7 @@ class FakeResponse:
 
 
 def test_clone_voice_payload():
-    ref = Path("resources/voice_sample_clip_v2.wav")
+    ref = Path("resources/crs_1393.wav")
     assert ref.exists()
     seen = {}
 
@@ -32,13 +32,59 @@ def test_clone_voice_payload():
         return FakeResponse(json.dumps({"output": {"voice": "voice_123"}}).encode("utf-8"))
 
     with patch("core.aliyun_tts_client.urlopen", fake_urlopen):
-        voice = AliyunTTS(" key ").clone_voice(ref, preferred_name="kurisu")
+        voice, fallback, reason = AliyunTTS(" key ").clone_voice(
+            ref,
+            preferred_name="kurisu",
+            ref_text="それに、例えば、小学生の頃の自分。",
+        )
 
     assert voice == "voice_123"
+    assert fallback is False
+    assert reason is None
     assert seen["headers"]["Authorization"] == "Bearer key"
     assert seen["payload"]["model"] == "qwen-voice-enrollment"
     assert seen["payload"]["input"]["preferred_name"] == "kurisu"
     assert seen["payload"]["input"]["audio"]["data"].startswith("data:audio/")
+    assert seen["payload"]["input"]["text"] == "それに、例えば、小学生の頃の自分。"
+
+
+def test_clone_voice_payload_without_text():
+    """不传 ref_text 时 payload 不含 text 字段（与 amadeus clone route 兼容）。"""
+    ref = Path("resources/crs_1393.wav")
+    seen = {}
+
+    def fake_urlopen(request, timeout=0):
+        seen["payload"] = json.loads(request.data.decode("utf-8"))
+        return FakeResponse(json.dumps({"output": {"voice": "voice_123"}}).encode("utf-8"))
+
+    with patch("core.aliyun_tts_client.urlopen", fake_urlopen):
+        voice, _, _ = AliyunTTS("key").clone_voice(ref, preferred_name="kurisu")
+
+    assert voice == "voice_123"
+    assert "text" not in seen["payload"]["input"]
+
+
+def test_clone_voice_reports_fallback_mode():
+    """fallback_mode=true 时返回降级原因（音频质量差或与文本不匹配）。"""
+    ref = Path("resources/crs_1393.wav")
+
+    def fake_urlopen(request, timeout=0):
+        return FakeResponse(
+            json.dumps({
+                "output": {
+                    "voice": "voice_fb",
+                    "fallback_mode": True,
+                    "fallback_reason": "no_valid_asr_segments",
+                }
+            }).encode("utf-8")
+        )
+
+    with patch("core.aliyun_tts_client.urlopen", fake_urlopen):
+        voice, fallback, reason = AliyunTTS("key").clone_voice(ref, ref_text="text")
+
+    assert voice == "voice_fb"
+    assert fallback is True
+    assert reason == "no_valid_asr_segments"
 
 
 def test_synthesize_downloads_audio_url():

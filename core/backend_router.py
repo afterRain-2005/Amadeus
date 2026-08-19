@@ -17,6 +17,19 @@ GUI_NUDGE = "Please use operate_gui for this task."
 _codex_session_started = False
 
 
+# ============================================================
+# 函数：classify_input()
+# 作用：把用户输入的文字分类成三种路由之一：
+#       "chat"（普通聊天）/ "agent"（任务/工具）/ "gui"（桌面 GUI 操作）。
+#       判断顺序：空输入→chat；短句打招呼→chat；含 GUI 关键词→gui；
+#       含 agent 关键词→agent；都匹配不上→用 LLM 分类（可选）。
+# 参数：
+#   text             str  用户输入的原始文字
+#   openclaw_enabled bool 是否启用 OpenClaw GUI 后端（默认 False）
+#   llm_classify     callable|None 可选的 LLM 分类函数（入参 text，返回
+#                    "chat"/"agent"/"gui" 或 None），None 时跳过 LLM 分类
+# 返回值：str —— "chat" | "agent" | "gui" 之一
+# ============================================================
 def classify_input(text: str, *, openclaw_enabled: bool = False, llm_classify=None) -> str:
     text = (text or "").strip()
     if not text:
@@ -36,6 +49,20 @@ def classify_input(text: str, *, openclaw_enabled: bool = False, llm_classify=No
     return result if result in ("chat", "agent", "gui") else "chat"
 
 
+# ============================================================
+# 函数：_llm_classify()
+# 作用：用远程 LLM（如 DeepSeek）把输入分类成 chat/agent/gui。
+#       调用 OpenAI 兼容的 /chat/completions 接口，要求模型只返回
+#       {"route":"..."} 的 JSON，再从中解析 route 字段。
+#       任何异常（网络错误/解析失败/返回非法值）都返回 None，
+#       由调用方回退到"chat"——失败要"漏回"最安全路径，不能崩。
+# 参数：
+#   text     str  用户输入
+#   endpoint str  LLM 接口地址（OpenAI 兼容）
+#   api_key  str  API 密钥
+#   model    str  模型名
+# 返回值：str | None —— "chat"/"agent"/"gui"，失败时返回 None
+# ============================================================
 def _llm_classify(text: str, *, endpoint: str, api_key: str, model: str) -> str | None:
     system = 'Return JSON only: {"route":"chat|agent|gui"}. chat for normal chat, agent for task/tool use, gui for desktop GUI actions.'
     try:
@@ -65,6 +92,32 @@ def _llm_classify(text: str, *, endpoint: str, api_key: str, model: str) -> str 
         return None
 
 
+# ============================================================
+# 函数：route_and_send()
+# 作用：★整个 AI 对话的路由总入口。根据配置和输入决定走哪个后端，
+#       调用对应后端发消息，返回 (回复文本, 实际使用的路由名)。
+#       路由决策顺序：
+#       1. system_role=="companion"（主动问候）→ 强制 chat
+#       2. auto_route 开启 → 用本地 Ollama 小模型分流 local/harness
+#       3. mode 指定了具体后端 → 直接用该后端
+#       4. 其他（auto 模式）→ classify_input 关键词/LLM 分类
+#       各后端失败时回退到本地直连（run_local_run），保证用户总能收到回复。
+# 参数：
+#   config             dict  全局配置（含 agent_router 等子配置）
+#   input_text         str   用户输入的文本
+#   soul_md            str   角色人设文本（system prompt）
+#   conversation_history list[dict]|None 对话历史
+#   memories           list[dict]|None 长期记忆
+#   on_delta           callable 流式输出回调（每吐一个字调用一次）
+#   on_status          callable 状态提示回调（如"正在切换后端"）
+#   on_tool_event      callable 工具执行事件回调（harness 用）
+#   on_approval        callable 工具审批回调（默认一律拒绝）
+#   system_role        str   调用角色："user"=用户聊天；"companion"=主动问候
+#   skip_history       bool  是否不把本次输入追加进历史
+#   inject_system_prompt str|None 额外叠加的系统提示词
+# 返回值：tuple[str, str] —— (AI 回复文本, 实际路由名)
+#         路由名可能是 "chat"/"agent"/"gui"/"hermes"/"harness"/"deepseek"/"codex"
+# ============================================================
 def route_and_send(
     *,
     config: dict,

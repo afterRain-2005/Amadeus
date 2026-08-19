@@ -1,0 +1,685 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AMADEUS · MOBILE SHELL — 设计稿 v7</title>
+<!--
+  ============================================================
+  设计稿 v7：台词气泡区移到手机外部上方（名牌+气泡+状态行悬浮），
+  手机屏幕只放 Live2D 立绘。
+  v6：复古锐角（机身 20px / 屏幕 14px 圆角）+ 底部 Home 键
+  （iPhone 7 式：齐平 + 细金属环，无凸起无方标）。
+  v5：屏幕壁纸换为 resources/bg.png（1080×1920，竖屏 cover 铺满）。
+  v4：红框手机 · 按项目 UI 风格重绘 · 视觉精修对照稿
+  v3：底部 Dock 悬浮工具栏（复刻 DockBar，6 按钮）与对话输入
+      面板互斥切换（200ms 交叉淡入淡出），对齐 _toggle_input_panel。
+  v4（视觉精修 A 方向，供 desktop_pet.py 落地对照）：
+    · 气泡四角 ⌈⌉⌊⌋ 玫瑰装饰（外扩 5px，fauux 角括号）
+    · 气泡正文左对齐 + 1.6 行距（原 AlignCenter 居中）
+    · 名牌/注脚一体化为标签（bg + 粗左边条，贴合气泡上缘）
+    · 状态行与台词分离（工具进度走独立 dim 小字行 _show_status）
+    · Dock「固定」固定态 rose 常亮反馈（set_pinned）
+    · Dock「终端」改用 terminal 图标（新增 resources/icons/terminal.svg）
+    · 历史抽屉直角 0px + CRT 扫描线（HistoryDrawer 示意）
+  项目风格基准（fauux / lain wired aesthetic）：
+    · 底色 #171114 + dither_rose 抖动纹理（resources/textures/）
+    · 玫瑰红 #d2738a 强调 / 米白 #c1b492 正文 / 弱化 #8a7f63
+    · 成功绿 #34c759 · 琥珀 #d8a53f
+    · Consolas 等宽 + Times New Roman 衬线名牌 · 直角 1px 边框
+    · 粗左边框强调（border-left: 8px/6px solid #d2738a）
+    · CRT 扫描线 / 暗角 / 噪点（ui/widgets/crt_overlay.py）
+    · 终端元素：║▒░ amadeus shell — wired session · kurisu>
+    气泡/输入框/按钮均复刻 desktop_pet.py 现有 QSS。
+  角色：Kurisu (amadeusV1) — 渲染窗口 420×680。
+  仅设计稿，不改动任何项目代码。
+  ============================================================
+-->
+<style>
+:root{
+  --rose:#d2738a;
+  --rose-hi:#e89aab;
+  --rose-deep:#6e303c;
+  --cream:#c1b492;
+  --dim:#8a7f63;
+  --bg:#171114;
+  --bg2:#21171b;
+  --ok:#34c759;
+  --amber:#d8a53f;
+  --mono:"Consolas","Courier New","MS Gothic","Microsoft YaHei",monospace;
+  --serif:Times,"Times New Roman",serif;
+}
+*{margin:0;padding:0;box-sizing:border-box;}
+html,body{height:100%;}
+body{
+  font-family:var(--mono);
+  overflow:hidden;
+  color:var(--cream);
+  /* 项目底色 #171114 + dither_rose 抖动纹理，叠一层极淡金属斜光 */
+  background:
+    radial-gradient(1000px 460px at 50% -10%, rgba(210,115,138,.14), transparent 60%),
+    radial-gradient(800px 420px at 50% 118%, rgba(210,115,138,.10), transparent 62%),
+    url('resources/textures/dither_rose.png') repeat,
+    linear-gradient(168deg,#221a1e 0%,#1a1316 42%,#120d10 100%);
+  background-size:16px 16px, 16px 16px, 16px 16px, 100% 100%;
+}
+/* 金属高光斜扫 */
+body::before{
+  content:"";position:fixed;inset:0;pointer-events:none;z-index:0;
+  background:linear-gradient(115deg, transparent 44%,
+    rgba(255,255,255,.028) 48%, rgba(255,255,255,.055) 50%,
+    rgba(255,255,255,.028) 52%, transparent 56%);
+}
+/* 四角 CRT 暗角 */
+body::after{
+  content:"";position:fixed;inset:0;pointer-events:none;z-index:0;
+  background:radial-gradient(120% 90% at 50% 45%, transparent 55%, rgba(0,0,0,.55) 100%);
+}
+
+.wrap{
+  position:relative;z-index:1;height:100%;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;
+  gap:24px;
+}
+
+/* ============ 标题（终端风） ============ */
+.title{text-align:center;font-family:var(--mono);}
+.title .t1{
+  font-size:13px;color:var(--rose);letter-spacing:8px;
+  text-shadow:0 0 12px rgba(210,115,138,.45);
+}
+.title .t2{margin-top:7px;font-size:10px;color:var(--dim);letter-spacing:4px;}
+.title .t2 b{color:var(--rose);font-weight:normal;}
+.title .t2 i{font-style:normal;color:var(--cream);}
+
+/* ============ 手机（红色金属框 · 窄边框 · 复古锐角） ============ */
+.phone{
+  position:relative;
+  width:344px;height:560px;
+  /* 阳极氧化红铝：亮部→主红→暗部→反光缘 */
+  background:linear-gradient(155deg,
+    #ff7a7a 0%, #e0343f 10%, #c01e2b 34%,
+    #7d0f1a 62%, #9e121f 80%, #e0343f 92%, #ff8a8a 100%);
+  border-radius:20px;
+  box-shadow:
+    0 0 0 1px rgba(0,0,0,.9),
+    0 0 0 2px rgba(216,30,46,.35),
+    0 34px 80px rgba(0,0,0,.72),
+    0 10px 26px rgba(0,0,0,.55),
+    inset 0 1px 0 rgba(255,255,255,.40),
+    inset 1.5px 0 0 rgba(255,255,255,.14),
+    inset -1.5px 0 0 rgba(0,0,0,.38),
+    inset 0 -1px 0 rgba(0,0,0,.5);
+  transform:rotateX(2deg) rotateY(-1.5deg);
+}
+/* 金属质感：拉丝横纹 + 两道斜向高光 + 微颗粒 */
+.phone::before{
+  content:"";position:absolute;inset:4px;border-radius:16px;pointer-events:none;
+  background:
+    /* 斜向高光（金属反光） */
+    linear-gradient(118deg, transparent 18%, rgba(255,255,255,.14) 23%, transparent 30%),
+    linear-gradient(115deg, transparent 62%, rgba(255,255,255,.10) 68%, transparent 74%),
+    /* 阳极拉丝横纹 */
+    repeating-linear-gradient(90deg,
+      transparent 0 2px, rgba(255,255,255,.05) 2px 3px,
+      transparent 3px 7px, rgba(0,0,0,.10) 7px 9px,
+      transparent 9px 12px),
+    /* 细颗粒噪点（金属粉质感） */
+    repeating-linear-gradient(0deg,
+      rgba(255,255,255,.02) 0 1px, transparent 1px 3px,
+      rgba(0,0,0,.03) 3px 4px, transparent 4px 6px);
+}
+/* 顶部受光亮线 */
+.phone::after{
+  content:"";position:absolute;left:30px;right:30px;top:3px;height:1.5px;border-radius:2px;
+  background:linear-gradient(90deg,transparent,#ffd9d9 50%,transparent);
+  opacity:.9;
+}
+/* 侧键（同色系金属） */
+.side{position:absolute;background:linear-gradient(90deg,#e0343f,#7d0f1a);
+  box-shadow:inset 0 0 0 1px rgba(255,255,255,.25);}
+.side.vol-u{left:-3px;top:148px;width:4px;height:64px;border-radius:3px 0 0 3px;}
+.side.vol-l{left:-3px;top:222px;width:4px;height:64px;border-radius:3px 0 0 3px;}
+.side.pwr{right:-3px;top:196px;width:4px;height:88px;border-radius:0 3px 3px 0;}
+
+/* ============ 手机外置气泡区（悬浮于手机上方：名牌+台词+状态行） ============ */
+.chat{
+  position:absolute;left:50%;bottom:calc(100% - 26px);
+  transform:translateX(-50%);
+  width:380px;z-index:5;
+  display:flex;flex-direction:column;align-items:center;
+}
+
+/* ============ 屏幕（下边框留出 Home 键槽位） ============ */
+.screen{
+  position:absolute;left:8px;right:8px;top:8px;bottom:54px;
+  border-radius:14px;overflow:hidden;
+  background:var(--bg);
+  box-shadow:inset 0 0 0 2px rgba(0,0,0,.85), inset 0 0 44px rgba(0,0,0,.6);
+  display:flex;flex-direction:column;
+}
+/* iPhone 7 式 Home 键：与机身齐平，细金属环 + 暗色平面（无凸起盘、无方标） */
+.home-btn{
+  position:absolute;left:50%;bottom:13px;transform:translateX(-50%);z-index:8;
+  width:36px;height:36px;border-radius:50%;
+  /* 暗色传感面：半透明压暗机身金属，顶部略透光 */
+  background:radial-gradient(circle at 50% 40%,
+    rgba(0,0,0,.52) 0%, rgba(0,0,0,.40) 55%, rgba(0,0,0,.60) 100%);
+  box-shadow:
+    inset 0 1px 2px rgba(0,0,0,.6),
+    inset 0 0 0 1px rgba(255,255,255,.10),
+    0 0 0 1.5px rgba(255,228,228,.60),   /* 细金属环：边缘捕光 */
+    0 0 0 3px rgba(0,0,0,.55),           /* 环外槽影：与机身分离 */
+    0 2px 3px rgba(0,0,0,.45);
+}
+/* 屏幕底：手机壁纸（resources/bg.png，cover 铺满）+ 底部玫瑰辉光 */
+.scr-bg{
+  position:absolute;inset:0;
+  background:
+    radial-gradient(420px 260px at 50% 108%, rgba(210,115,138,.22), transparent 62%),
+    radial-gradient(420px 240px at 50% -8%, rgba(210,115,138,.10), transparent 58%),
+    url('resources/bg.png') center/cover no-repeat;
+}
+/* CRT 扫描线（复刻 CrtOverlay：每 3px 一条） */
+.scr-line{
+  position:absolute;inset:0;pointer-events:none;z-index:6;
+  background:repeating-linear-gradient(0deg, rgba(0,0,0,.18) 0 1px, transparent 1px 3px);
+}
+/* CRT 暗角 */
+.scr-vig{
+  position:absolute;inset:0;pointer-events:none;z-index:6;
+  background:radial-gradient(ellipse at 50% 50%, transparent 52%, rgba(0,0,0,.55) 100%);
+}
+/* CRT 噪点（dither 抖动叠两层） */
+.scr-noise{
+  position:absolute;inset:0;pointer-events:none;z-index:6;opacity:.5;
+  background:url('resources/textures/dither_rose.png') repeat;
+  background-size:16px 16px;
+  animation:noiseShift .6s steps(4) infinite;
+}
+@keyframes noiseShift{
+  0%{transform:translate(0,0);} 25%{transform:translate(-3px,2px);}
+  50%{transform:translate(2px,-3px);} 75%{transform:translate(-2px,-2px);}
+  100%{transform:translate(0,0);}
+}
+
+/* 听筒/传感器黑条 */
+.speaker{
+  position:absolute;top:13px;left:50%;transform:translateX(-50%);z-index:7;
+  width:96px;height:22px;border-radius:11px;
+  background:#050405;
+  box-shadow:inset 0 1px 2px rgba(255,255,255,.08), 0 2px 6px rgba(0,0,0,.6);
+}
+.speaker::after{
+  content:"";position:absolute;left:8px;top:50%;transform:translateY(-50%);
+  width:18px;height:5px;border-radius:3px;
+  background:radial-gradient(circle at 35% 30%, #3a3a3a, #101010);
+  box-shadow:0 0 5px rgba(0,0,0,.8) inset;
+}
+
+/* ============ 状态栏（wired 终端风） ============ */
+.statusbar{
+  position:relative;z-index:7;
+  display:flex;justify-content:space-between;align-items:center;
+  padding:9px 18px 0;height:28px;
+  font-size:10px;color:var(--dim);letter-spacing:1px;
+}
+.statusbar .st-l .p{color:var(--rose);}
+.statusbar .st-l .cur{display:inline-block;width:6px;height:11px;background:var(--rose);
+  vertical-align:-2px;animation:car 1s steps(1) infinite;}
+@keyframes car{50%{background:transparent;}}
+.statusbar .st-r{display:flex;gap:9px;align-items:center;}
+.statusbar .st-r .dot{color:var(--ok);font-size:10px;animation:phc 2s steps(1) infinite;}
+@keyframes phc{50%{opacity:.25;}}
+.statusbar .st-r .sig{letter-spacing:-2px;color:var(--rose);}
+
+/* ============ 名牌（v4：一体标签，贴合气泡上缘，不再裸叠） ============ */
+.nameplate{
+  position:relative;z-index:9;margin:0 0 -8px;
+  width:170px;padding:4px 12px;
+  background:#171114;
+  border:1px solid var(--rose);
+  border-left:6px solid var(--rose);
+  border-radius:0;
+  box-shadow:0 6px 18px rgba(0,0,0,.45);
+  text-align:center;
+}
+.nameplate .nm{
+  font-family:var(--serif);font-weight:bold;font-size:13px;letter-spacing:5px;
+  color:var(--rose);text-shadow:0 0 12px rgba(210,115,138,.5);
+}
+.nameplate .sub{
+  margin-top:2px;font-size:8.5px;letter-spacing:2px;color:var(--dim);
+}
+.nameplate .sub b{color:var(--rose);font-weight:normal;}
+.nameplate .st{position:absolute;right:-26px;top:50%;transform:translateY(-50%);
+  font-size:8px;color:var(--ok);letter-spacing:2px;
+  padding:3px 5px;border:1px solid rgba(52,199,89,.5);background:#171114;}
+.nameplate .st.blink{animation:phc 2s steps(1) infinite;}
+
+/* ============ 台词气泡（v4：左对齐 1.5 行距 + 四角括号装饰） ============ */
+.bubble{
+  position:relative;z-index:5;width:100%;
+  padding:10px 16px 8px;
+  background-color:#171114;
+  background-image:url('resources/textures/dither_rose.png');
+  background-size:16px 16px;
+  color:var(--cream);
+  border-left:1px solid var(--rose);border-right:1px solid var(--rose);
+  border-top:1.5px solid var(--rose);border-bottom:1.5px solid var(--rose);
+  border-radius:0;
+  box-shadow:0 8px 22px rgba(0,0,0,.5);
+  font-size:12px;line-height:1.6;letter-spacing:.5px;text-align:left;
+}
+/* v4：fauux 四角括号 ⌈⌉⌊⌋（外扩 5px，压在边框上） */
+.bubble .corner{
+  position:absolute;z-index:9;pointer-events:none;
+  font-family:var(--serif);font-weight:bold;font-size:17px;line-height:1;
+  color:var(--rose);text-shadow:0 0 8px rgba(210,115,138,.45);
+}
+.bubble .c-tl{top:-5px;left:-4px;}
+.bubble .c-tr{top:-5px;right:-4px;}
+.bubble .c-bl{bottom:-5px;left:-4px;}
+.bubble .c-br{bottom:-5px;right:-4px;}
+.bubble .tag{
+  display:block;font-size:9px;color:var(--rose);letter-spacing:3px;
+  font-family:var(--mono);margin-bottom:2px;
+}
+.bubble .dots{color:var(--dim);animation:car 1s steps(1) infinite;}
+.bubble .foot{
+  display:block;margin-top:6px;padding-top:5px;
+  border-top:1px solid rgba(210,115,138,.25);
+  font-size:8.5px;color:var(--dim);letter-spacing:2px;
+}
+.bubble .foot .ok{color:var(--ok);}
+
+/* v4：状态行（与台词分离 —— 工具进度/网络状态走独立 dim 小字行） */
+.statusline{
+  position:relative;z-index:5;margin:6px 0 0;
+  width:100%;text-align:center;
+  font-size:8.5px;letter-spacing:2px;color:var(--dim);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+}
+.statusline b{color:var(--rose);font-weight:normal;}
+.statusline .block{display:inline-block;width:5px;height:9px;background:var(--dim);
+  vertical-align:-1px;animation:car 1s steps(1) infinite;}
+
+/* 角色舞台（屏幕只放 Live2D 立绘：整屏留白，底部 Dock 槽位） */
+.stage{
+  position:relative;z-index:2;flex:1;min-height:0;
+  display:flex;flex-direction:column;justify-content:flex-end;align-items:center;
+  padding-bottom:64px; /* 预留底部槽位（Dock/输入框互斥区），避免立绘被遮挡 */
+}
+.stage::before{
+  content:"";position:absolute;left:50%;bottom:4%;transform:translateX(-50%);
+  width:230px;height:290px;pointer-events:none;
+  background:radial-gradient(ellipse at 50% 60%, rgba(210,115,138,.18), transparent 68%);
+}
+.avatar{
+  height:88%;max-width:100%;
+  object-fit:contain;object-position:bottom center;
+  filter:drop-shadow(0 12px 20px rgba(0,0,0,.6))
+         drop-shadow(0 0 16px rgba(210,115,138,.18));
+  position:relative;z-index:2;
+}
+.stage::after{
+  content:"";position:absolute;bottom:0;left:50%;transform:translateX(-50%);
+  width:180px;height:9px;border-radius:50%;
+  background:radial-gradient(ellipse, rgba(210,115,138,.35), transparent 70%);
+  filter:blur(3px);pointer-events:none;
+}
+
+/* ============ 底部槽位：Dock 悬浮工具栏 / 输入面板（互斥切换） ============ */
+
+/* ---- Dock 悬浮工具栏（复刻 DockBar：6 SVG 按钮 + hover 邻近放大） ---- */
+.dockbar{
+  position:absolute;bottom:14px;left:50%;transform:translateX(-50%);z-index:7;
+  display:flex;align-items:center;gap:8px;
+  padding:6px 10px;
+  background-color:#171114;
+  background-image:url('resources/textures/dither_rose.png');
+  background-size:16px 16px;
+  border:1px solid rgba(210,115,138,.35);
+  border-left:1px solid var(--rose);
+  border-radius:0;
+  box-shadow:0 8px 22px rgba(0,0,0,.5);
+  opacity:1;
+}
+.dkey{
+  width:34px;height:34px;cursor:pointer;padding:0;appearance:none;-webkit-appearance:none;
+  background:transparent;border:1px solid rgba(210,115,138,.4);border-radius:0;
+  display:flex;align-items:center;justify-content:center;
+  transition:width .2s,height .2s,border-color .15s,background .15s,opacity .15s;
+}
+.dkey svg{width:20px;height:20px;pointer-events:none;display:block;}
+.dkey:hover{border-color:rgba(210,115,138,.9);background:rgba(210,115,138,.10);}
+.dkey:active,.dkey.hover:active,.dkey.near:active{
+  width:30px;height:30px;background:rgba(210,115,138,.22);
+  transition:width .1s,height .1s,border-color .1s,background .1s;}
+.dkey.hover{width:42px;height:42px;border-color:rgba(210,115,138,.9);background:rgba(210,115,138,.10);}
+.dkey.near{width:38px;height:38px;}
+.dkey.danger{border-color:rgba(210,115,138,.25);opacity:.72;}
+.dkey.danger:hover{border-color:rgba(210,115,138,.9);opacity:1;}
+/* v4：固定态视觉反馈（rose 常亮填充，对齐 set_pinned 实现） */
+.dkey.on{background:rgba(210,115,138,.38);border-color:var(--rose);box-shadow:inset 0 0 10px rgba(210,115,138,.35);}
+.dkey.on svg{filter:drop-shadow(0 0 4px rgba(210,115,138,.8));}
+
+/* ---- v4：历史抽屉示意（直角 + CRT 扫描线，对齐 HistoryDrawer） ---- */
+.drawer{
+  position:absolute;top:8px;right:-172px;width:150px;bottom:70px;z-index:9;
+  display:none;
+  background-color:#171114;
+  background-image:url('resources/textures/dither_rose.png');
+  background-size:16px 16px;
+  border:1px solid var(--rose);
+  border-right:0;border-radius:0;
+  box-shadow:-8px 0 24px rgba(0,0,0,.6);
+  flex-direction:column;
+  padding:8px;
+  transition:right .3s cubic-bezier(.4,.0,.2,1);
+}
+.drawer.open{display:flex;right:-12px;}
+.drawer .dline{
+  position:absolute;inset:0;pointer-events:none;
+  background:repeating-linear-gradient(0deg, rgba(0,0,0,.18) 0 1px, transparent 1px 3px);
+}
+.drawer .dt{
+  flex:none;padding-bottom:6px;margin-bottom:6px;
+  font-size:8.5px;letter-spacing:3px;color:var(--rose);
+  border-bottom:1px solid rgba(210,115,138,.3);
+}
+.drawer .msg{
+  flex:none;margin-bottom:8px;padding:6px 8px;
+  font-size:10px;line-height:1.5;border-radius:0;
+}
+.drawer .msg.k{background:rgba(210,115,138,.22);border-left:2px solid var(--rose);color:var(--cream);}
+.drawer .msg.y{background:rgba(210,115,138,.14);border-right:2px solid var(--dim);color:var(--cream);text-align:right;}
+.drawer .msg b{display:block;font-size:8.5px;font-weight:normal;letter-spacing:2px;margin-bottom:1px;}
+.drawer .msg.k b{color:var(--rose);}
+.drawer .msg.y b{color:var(--dim);}
+.drawer .msg .ok{color:var(--ok);}
+
+/* ---- 输入面板（复刻 input_panel QSS；与 Dock 同占底部槽位） ---- */
+.dock{
+  position:absolute;bottom:14px;left:50%;transform:translateX(-50%);z-index:7;
+  width:300px;height:44px;margin:0;
+  background-color:#171114;
+  background-image:url('resources/textures/dither_rose.png');
+  background-size:16px 16px;
+  border-left:1px solid var(--rose);border-right:1px solid var(--rose);
+  border-top:1.5px solid var(--rose);border-bottom:1.5px solid var(--rose);
+  border-radius:0;
+  display:flex;align-items:center;gap:4px;
+  padding:0 6px 0 12px;
+  opacity:0;display:none;pointer-events:none;
+}
+.dock .in{
+  flex:1;font-size:12px;color:var(--dim);letter-spacing:1px;
+  white-space:nowrap;overflow:hidden;font-family:var(--mono);
+}
+.dock .in .cur{display:inline-block;width:7px;height:12px;background:var(--cream);
+  vertical-align:-2px;animation:car 1s steps(1) infinite;}
+.btn{
+  flex:none;width:36px;height:30px;cursor:pointer;
+  background:transparent;color:var(--cream);
+  border:1px solid var(--cream);border-radius:0;
+  font-family:var(--mono);font-size:15px;font-weight:bold;
+  transition:background .12s,color .12s;
+}
+.btn:hover{background:var(--rose);color:var(--bg);border-color:var(--rose);}
+.btn:active{background:var(--cream);color:var(--bg);}
+.btn.rose{color:var(--rose);border-color:var(--rose);}
+.btn.dim{color:var(--dim);border-color:var(--dim);}
+.btn.dim:hover{background:var(--rose);color:var(--bg);border-color:var(--rose);}
+
+/* ============ 控制按钮（复刻 QPushButton QSS） ============ */
+.ctrl{display:flex;gap:12px;}
+.ctrl button{
+  font-family:var(--mono);font-size:10px;letter-spacing:3px;
+  padding:7px 18px;cursor:pointer;
+  background-color:var(--bg2);color:var(--cream);
+  border:1px solid var(--cream);border-radius:0;
+  transition:background .12s,color .12s;
+}
+.ctrl button:hover{background:var(--rose);color:var(--bg);border-color:var(--rose);}
+.ctrl button.on{background:var(--rose);color:var(--bg);border-color:var(--rose);}
+
+/* ============ 规格卡（fauux 面板） ============ */
+.specs{display:flex;gap:22px;font-size:9px;letter-spacing:3px;color:var(--dim);
+  text-transform:uppercase;}
+.specs div{
+  padding:8px 14px 7px;background:var(--bg2);
+  border:1px solid var(--dim);border-left:6px solid var(--rose);border-radius:0;
+}
+.specs b{display:block;color:var(--rose);font-weight:normal;font-size:11px;
+  letter-spacing:3px;margin-bottom:4px;}
+.specs span{color:var(--cream);}
+
+.hint{position:fixed;right:16px;bottom:12px;z-index:2;
+  font-size:9px;letter-spacing:2px;color:rgba(193,180,146,.3);}
+</style>
+</head>
+<body>
+
+<div class="wrap">
+
+  <div class="title">
+    <div class="t1">║▒░&nbsp;&nbsp;A M A D E U S&nbsp;&nbsp;·&nbsp;&nbsp;M O B I L E&nbsp;&nbsp;S H E L L&nbsp;&nbsp;░▒║</div>
+    <div class="t2">RED FRAME <i>／</i> <b>WIRED</b> PALETTE <i>／</i> HOSTING <b>KURISU</b></div>
+  </div>
+
+  <div style="position:relative;">
+    <!-- ============ 外置气泡区（悬浮于手机上方） ============ -->
+    <div class="chat">
+      <!-- 名牌（v4：一体标签，贴合气泡上缘） -->
+      <div class="nameplate">
+        <span class="st blink">LIVE</span>
+        <div class="nm">K U R I S U</div>
+        <div class="sub">amadeus <b>·</b> est.2011 <b>·</b> v1</div>
+      </div>
+
+      <!-- 台词气泡（v4：四角括号 + 左对齐） -->
+      <div class="bubble">
+        <i class="corner c-tl">⌈</i><i class="corner c-tr">⌉</i>
+        <i class="corner c-bl">⌊</i><i class="corner c-br">⌋</i>
+        <span class="tag">— AMADEUS —</span>
+        おかえり。今日もこの端末の中で、あなたの言葉を待ってた<span class="dots">…</span>
+        <span class="foot">wire ESTABLISHED · <span class="ok">Δ 0.41s</span> · ch 1</span>
+      </div>
+
+      <!-- v4：状态行（工具进度与台词分离） -->
+      <div class="statusline" id="statusLine">
+        ▸ <b>web_search</b> 上海天气 · queued → running <span class="block"></span>
+      </div>
+    </div>
+
+    <!-- ============ 手机 ============ -->
+    <div class="phone">
+      <span class="side vol-u"></span>
+      <span class="side vol-l"></span>
+      <span class="side pwr"></span>
+
+      <!-- 复古 Home 键（底部边框槽位） -->
+      <span class="home-btn"></span>
+
+      <div class="screen">
+        <div class="scr-bg"></div>
+
+        <!-- 听筒 -->
+        <div class="speaker"></div>
+
+        <!-- 状态栏 -->
+        <div class="statusbar">
+          <span class="st-l"><span class="p">kurisu&gt;</span> <span id="clock">21:16</span><span class="cur"></span></span>
+          <span class="st-r">
+            <span class="dot">●</span>
+            <span>wire ch 1</span>
+            <span class="sig">▲▲▲</span>
+          </span>
+        </div>
+
+        <!-- 角色舞台（手机屏幕只放 Live2D 立绘） -->
+        <div class="stage">
+          <img class="avatar" src="resources/live2d/kurisu/amadeusV1.1024/texture_00.png"
+               alt="KURISU (Live2D placeholder texture)" id="avatar">
+        </div>
+
+        <!-- 底部槽位（互斥）：Dock 悬浮工具栏 ↔ 对话输入面板 -->
+        <div class="dockbar" id="dockbar">
+          <button class="dkey" id="dockChat" title="对话"><svg viewBox="0 0 24 24" fill="none" stroke="#c1b492" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg></button>
+          <button class="dkey" title="电话"><svg viewBox="0 0 24 24" fill="none" stroke="#c1b492" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/></svg></button>
+          <button class="dkey" id="dockPin" title="固定"><svg viewBox="0 0 24 24" fill="none" stroke="#c1b492" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17v5"/><path d="M9 10.76a2 2 0 0 1 2.66-1.88l2.34.94a2 2 0 0 0 2.66-1.88V5a2 2 0 0 0-2-2H9a2 2 0 0 0-2 2v3a2 2 0 0 0 2 2z"/><path d="M5 17l3-3"/></svg></button>
+          <button class="dkey" title="设置"><svg viewBox="0 0 24 24" fill="none" stroke="#c1b492" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></button>
+          <button class="dkey" id="dockTerm" title="终端"><svg viewBox="0 0 24 24" fill="none" stroke="#c1b492" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 17l6-5-6-5"/><path d="M12 19h8"/></svg></button>
+          <button class="dkey danger" title="退出"><svg viewBox="0 0 24 24" fill="none" stroke="#d2738a" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6L6 18"/><path d="M6 6l12 12"/></svg></button>
+        </div>
+
+        <!-- 对话输入面板（复刻 input_panel） -->
+        <div class="dock" id="chatbar">
+          <div class="in"><span id="typeText">和红莉栖对话…</span><span class="cur"></span></div>
+          <button class="btn dim" id="chatCollapse" title="收起聊天">←</button>
+          <button class="btn rose" title="发送">↑</button>
+        </div>
+
+        <!-- v4：历史抽屉示意（Dock「终端」切换；直角 + 扫描线） -->
+        <div class="drawer" id="drawer">
+          <div class="dline"></div>
+          <div class="dt">║▒░ SESSION LOG</div>
+          <div class="msg k"><b>KURISU</b>おかえり、岡部。<span class="ok">Δ 0.41s</span></div>
+          <div class="msg y"><b>YOU</b>今天天气怎么样？</div>
+          <div class="msg k"><b>KURISU</b>这边晴朗，22℃。</div>
+        </div>
+
+        <!-- CRT 叠层 -->
+        <div class="scr-line"></div>
+        <div class="scr-noise"></div>
+        <div class="scr-vig"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="ctrl">
+    <button id="btnStatic" class="on">静态预览</button>
+    <button id="btnLive">LIVE 模型</button>
+    <button id="btnToggleBottom">DOCK ⇄ 输入</button>
+  </div>
+
+  <div class="specs">
+    <div><b>FRAME</b><span>玫瑰红金属</span></div>
+    <div><b>SCREEN</b><span>420×680 · 1:1.62</span></div>
+    <div><b>HOST</b><span>Live2D KURISU v1</span></div>
+  </div>
+</div>
+
+<div class="hint">DESIGN DRAFT v7 — phone_mockup.html · 气泡外置悬浮 + 手机屏只放 Live2D 立绘 · 不改动项目代码</div>
+
+<script>
+/* 时钟 */
+(function(){
+  var c = document.getElementById('clock');
+  function tick(){
+    var d = new Date();
+    c.textContent = String(d.getHours()).padStart(2,'0') + ':' + String(d.getMinutes()).padStart(2,'0');
+  }
+  tick(); setInterval(tick, 30000);
+})();
+
+/* 打字循环（placeholder 轮换） */
+var texts = ['和红莉栖对话…','send a signal to the loop…','さあ、なにを話す？','crossing the loop — receiving you'];
+var ti = 0, ci = 0, del = false, el = document.getElementById('typeText');
+setInterval(function(){
+  var t = texts[ti];
+  el.textContent = del ? t.slice(0, ci--) : t.slice(0, ++ci);
+  if(!del && ci === t.length){ del = true; }
+  if(del && ci === 0){ del = false; ti = (ti + 1) % texts.length; }
+}, 90);
+
+/* 底部槽位互斥切换（复刻 desktop_pet._toggle_input_panel：200ms 交叉淡入淡出） */
+var dockbar = document.getElementById('dockbar');
+var chatbar = document.getElementById('chatbar');
+var bottomMode = 'dock';
+var btnToggleBottom = document.getElementById('btnToggleBottom');
+
+function switchBottom(mode, animate) {
+  if (mode === bottomMode) { return; }
+  animate = animate !== false;
+  var inEl  = mode === 'dock' ? dockbar : chatbar;
+  var outEl = mode === 'dock' ? chatbar : dockbar;
+  inEl.style.transition = animate ? 'opacity .2s' : 'none';
+  outEl.style.transition = animate ? 'opacity .2s' : 'none';
+  inEl.style.display = 'flex';
+  inEl.style.pointerEvents = 'auto';
+  inEl.style.opacity = 0;
+  void inEl.offsetWidth; /* 强制回流，确保过渡生效 */
+  inEl.style.opacity = 1;
+  outEl.style.opacity = 0;
+  outEl.style.pointerEvents = 'none';
+  clearTimeout(switchBottom._t);
+  switchBottom._t = setTimeout(function(){ outEl.style.display = 'none'; }, animate ? 200 : 0);
+  bottomMode = mode;
+  btnToggleBottom.classList.toggle('on', mode === 'input');
+}
+
+document.getElementById('dockChat').addEventListener('click', function(){ switchBottom('input'); });
+document.getElementById('chatCollapse').addEventListener('click', function(){ switchBottom('dock'); });
+btnToggleBottom.addEventListener('click', function(){ switchBottom(bottomMode === 'dock' ? 'input' : 'dock'); });
+
+/* v4：固定态视觉演示（dockPin 点击切换 rose 常亮） */
+var dockPin = document.getElementById('dockPin');
+dockPin.addEventListener('click', function(){ dockPin.classList.toggle('on'); });
+
+/* v4：历史抽屉示意（dockTerm 切换；打开时隐藏气泡区，对齐 _toggle_history） */
+var drawer = document.getElementById('drawer');
+var nameplate = document.querySelector('.nameplate');
+var bubble = document.querySelector('.bubble');
+var statusLine = document.getElementById('statusLine');
+document.getElementById('dockTerm').addEventListener('click', function(){
+  var open = drawer.classList.toggle('open');
+  nameplate.style.display = open ? 'none' : '';
+  bubble.style.display = open ? 'none' : '';
+  statusLine.style.display = open ? 'none' : '';
+  if (bottomMode === 'input') { switchBottom('dock'); }
+});
+
+/* Dock hover 邻近放大联动（复刻 DockBar._apply_hover_scale：hover 1.24x / 邻近 1.12x） */
+var dkeys = Array.prototype.slice.call(dockbar.querySelectorAll('.dkey'));
+dkeys.forEach(function(k, i){
+  k.addEventListener('mouseenter', function(){ dockHover(i); });
+});
+dockbar.addEventListener('mouseleave', function(){ dockHover(-1); });
+function dockHover(idx){
+  dkeys.forEach(function(k, i){
+    k.classList.remove('hover', 'near');
+    if (idx === -1) { return; }
+    var dist = Math.abs(i - idx);
+    if (dist === 0) { k.classList.add('hover'); }
+    else if (dist === 1) { k.classList.add('near'); }
+  });
+}
+
+/* LIVE 模式：应用运行中可用 ?port=NNNN 嵌入真模型 */
+var liveFrame = null;
+var btnStatic = document.getElementById('btnStatic');
+var btnLive = document.getElementById('btnLive');
+function setMode(which){
+  btnStatic.classList.toggle('on', which === 'static');
+  btnLive.classList.toggle('on', which === 'live');
+  if(which === 'live'){
+    var port = new URLSearchParams(location.search).get('port');
+    if(!port){ alert('未提供端口。\n请先运行应用（desktop_pet.py 占用本地端口），\n再给本页加 ?port=NNNN 参数。'); return; }
+    if(!liveFrame){
+      liveFrame = document.createElement('iframe');
+      liveFrame.style.cssText = 'position:absolute;inset:0;border:0;width:100%;height:100%;z-index:4;';
+      liveFrame.src = 'http://127.0.0.1:' + port +
+        '/live2d/live2d_page.html?model=/resources/live2d/kurisu/amadeusV1.model3.json';
+      document.querySelector('.screen').appendChild(liveFrame);
+    }
+  } else if(liveFrame){
+    liveFrame.style.display = which === 'live' ? '' : 'none';
+  }
+}
+btnStatic.addEventListener('click', function(){ setMode('static'); });
+btnLive.addEventListener('click', function(){ setMode('live'); });
+</script>
+</body>
+</html>

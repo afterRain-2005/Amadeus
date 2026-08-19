@@ -804,16 +804,23 @@ class SettingsDialog(QDialog):
                 from core.aliyun_tts_client import AliyunTTS
 
                 cfg = {**ALIYUN_TTS_DEFAULTS, **(load_config().get("aliyun_tts") or {})}
-                ref_audio = resources_path(str(cfg.get("ref_audio", "/voice_sample_clip_v2.wav")))
-                voice_id = AliyunTTS(api_key).clone_voice(
+                ref_audio = resources_path(str(cfg.get("ref_audio", "/crs_1393.wav")))
+                ref_text = str(cfg.get("ref_text", "") or "").strip() or None
+                voice_id, fallback_mode, fallback_reason = AliyunTTS(api_key).clone_voice(
                     ref_audio,
                     preferred_name=preferred_name,
                     target_model=model or str(ALIYUN_TTS_DEFAULTS["model"]),
+                    ref_text=ref_text,
                 )
                 if voice_id:
                     QMetaObject.invokeMethod(
                         self, "_on_clone_done", Qt.QueuedConnection, Q_ARG(str, voice_id)
                     )
+                    if fallback_mode:
+                        reason = fallback_reason or "音频与文本不匹配或音频质量不佳"
+                        QMetaObject.invokeMethod(
+                            self, "_on_clone_warn", Qt.QueuedConnection, Q_ARG(str, reason)
+                        )
                 else:
                     QMetaObject.invokeMethod(
                         self, "_on_clone_failed", Qt.QueuedConnection,
@@ -838,6 +845,11 @@ class SettingsDialog(QDialog):
         self.aliyun_status.setText(message)
         self.aliyun_status.setStyleSheet("color:#d2738a")
         self.aliyun_clone_btn.setEnabled(True)
+
+    @Slot(str)
+    def _on_clone_warn(self, reason: str) -> None:
+        self.aliyun_status.setText(f"克隆成功（降级模式）：{reason}")
+        self.aliyun_status.setStyleSheet("color:#d8a53f")
 
     def _save(self) -> None:
         config = load_config()

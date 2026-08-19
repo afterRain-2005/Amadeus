@@ -14,6 +14,13 @@ def test_dock_bar_has_5_icons():
         assert svg.read_text(encoding="utf-8").startswith("<svg")
 
 
+def test_dock_bar_terminal_icon():
+    """终端按钮使用独立 terminal 图标（rose 语义修正）。"""
+    svg = ROOT / "resources" / "icons" / "terminal.svg"
+    assert svg.exists(), f"缺少图标 {svg}"
+    assert svg.read_text(encoding="utf-8").startswith("<svg")
+
+
 def test_dock_bar_icon_colors():
     """4 个普通图标为米黄 #c1b492，close 为玫瑰 #d2738a（fauux 配色）。"""
     for name in ["chat", "pin", "settings", "history"]:

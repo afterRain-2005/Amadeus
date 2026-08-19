@@ -29,14 +29,38 @@ from core.storage import APP_DIR as _APP_DIR
 READY_FILE = _APP_DIR / "desktop_pet.ready"
 
 
+# ============================================================
+# 类：QuietHandler
+# 作用：HTTP 服务处理器——给 renderer 进程提供静态文件（Live2D 页面）。
+#       继承 SimpleHTTPRequestHandler，只覆盖了"不打印访问日志"。
+# ============================================================
 class QuietHandler(SimpleHTTPRequestHandler):
+    # ============================================================
+    # 函数：__init__()
+    # 作用：构造时指定静态文件根目录为项目根（ROOT）
+    # 参数：*args/**kwargs 透传给父类
+    # 返回值：无（None）
+    # ============================================================
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=str(ROOT), **kwargs)
 
+    # ============================================================
+    # 函数：log_message()
+    # 作用：覆盖父类的日志打印为"什么都不做"，避免请求日志刷屏
+    # 参数：format/*args 透传（本来要打印的日志内容，这里直接丢弃）
+    # 返回值：无（None）
+    # ============================================================
     def log_message(self, format, *args):
         pass
 
 
+# ============================================================
+# 函数：free_port()
+# 作用：获取一个系统空闲的端口号（绑定 127.0.0.1:0 让系统随机分配，
+#       拿到端口号后立即关闭释放）。用于 renderer 进程的本地 HTTP 服务。
+# 参数：无
+# 返回值：int —— 空闲端口号
+# ============================================================
 def free_port() -> int:
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
@@ -44,11 +68,15 @@ def free_port() -> int:
 
 
 def _locate_gpt_sovits(root: Path) -> tuple[Path, Path] | None:
-    """定位 (venv_python, GPT-SoVITS 目录)。
+    """定位 GPT-SoVITS 的运行环境位置。
 
-    dev：ROOT/gpt_sovits_venv + ROOT/GPT-SoVITS。
-    frozen：ROOT 是 _MEIPASS 临时目录不可用，改探 exe 同级及其父级
-    （exe 常放 dist\，父级即项目根）。
+    作用：在可能的目录里寻找 gpt_sovits_venv（虚拟环境）和 GPT-SoVITS 源码目录。
+          dev 模式：项目根目录下；
+          frozen 模式：exe 同目录及其父目录（exe 常放 dist\，父级即项目根）。
+    参数：
+        root Path 项目根目录（dev 模式为项目根，frozen 模式为临时解压目录）
+    返回值：tuple[Path, Path] | None —— (venv 的 python.exe 路径, GPT-SoVITS 目录)；
+          找不到返回 None
     """
     exe_dir = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else root
     for base in (root, root.parent, exe_dir, exe_dir.parent):
@@ -62,13 +90,14 @@ def _locate_gpt_sovits(root: Path) -> tuple[Path, Path] | None:
 def maybe_start_gpt_sovits(spawn=subprocess.Popen) -> bool:
     """GPT-SoVITS API 不在线时后台拉起（幂等：在线则跳过）。
 
-    返回是否发起了启动进程。拉起后模型加载需数十秒，由 SpeechPlayer
-    的 available TTL 重查（60s）自愈衔接，不阻塞 UI。
-
-    根据 config.gpt_sovits.mode 选择：
-    - local：拉本地子进程（要求本机有 GPU）
-    - ssh：建 SSH 隧道到远程 GPU 服务器
-    - auto：优先 SSH（若配置了 ssh_host），失败回退本地
+    作用：启动本地 GPT-SoVITS 语音合成服务。根据配置决定走
+          local（本地子进程）/ ssh（SSH 隧道到远程 GPU）/ auto（自动）。
+          拉起后模型加载需数十秒，由 SpeechPlayer 的 available TTL
+          重查（60s）自愈衔接，不阻塞 UI。
+    参数：
+        spawn callable 启动子进程的函数（默认 subprocess.Popen，测试时可注入 mock）
+    返回值：bool —— True=本次发起了启动；False=已在运行/启动失败/无需启动
+              （阿里云 TTS 时无需启动本地服务，直接返回 False）
     """
     try:
         from config import TTS_PROVIDER_DEFAULT
@@ -145,15 +174,14 @@ def maybe_start_gpt_sovits(spawn=subprocess.Popen) -> bool:
 def _warmup_gpt_sovits(max_wait: float = 90.0) -> None:
     """后台预热 GPT-SoVITS 模型到 GPU。
 
-    GPT-SoVITS API 启动后首次合成会触发模型加载（torch 加载权重到 GPU
-    约 10-20s）。若不预热，用户首句话需等「拉起子进程→API ready→首次合成
-    加载模型→合成」全链路，首句延迟可达 14-24s。
-
-    预热策略：轮询 KurisuTTS.available（每 0.5s 一次，最多 90s），可达即
-    发一次极短日语文本 "あ。" 合成请求让模型加载到 GPU。合成结果丢弃。
-
-    失败不抛异常：预热是优化项，失败不影响主流程（用户首次合成会触发
-    模型加载，仅延迟较高）。
+    作用：GPT-SoVITS API 启动后首次合成会触发模型加载（torch 加载权重
+          到 GPU 约 10-20s）。预热策略：轮询 KurisuTTS.available（每 0.5s，
+          最多 90s），可达即发一次极短日语文本 "あ。" 合成请求，让模型
+          提前加载到 GPU，把真实首句延迟从 ~14s 降到 ~4s。
+          失败不抛异常：预热是优化项，不影响主流程。
+    参数：
+        max_wait float 最多等待秒数（默认 90.0）
+    返回值：无（None）
     """
     try:
         from core.gpt_sovits_client import KurisuTTS
@@ -190,10 +218,16 @@ _ssh_tunnel = None
 
 
 def _start_ssh_tunnel(host_alias: str, cfg: dict) -> bool:
-    """根据 host 别名建 SSH 隧道。成功返回 True。
+    """根据 host 别名建 SSH 隧道。
 
-    从 ~/.ssh/config 解析 Host 信息，用 SSHTunnel 建隧道。
-    隧道句柄保存到模块级 _ssh_tunnel，供 stop_gpt_sovits 清理。
+    作用：从 ~/.ssh/config 解析 Host 信息，用 SSHTunnel 建隧道
+          （把远程服务器的 9880 端口映射到本地），这样本地 TTS 客户端
+          就能通过隧道访问远程 GPU 服务器上的 GPT-SoVITS。
+          隧道句柄保存到模块级 _ssh_tunnel，供 stop_gpt_sovits 清理。
+    参数：
+        host_alias str  SSH 配置里的 Host 别名（如 "my-gpu-server"）
+        cfg        dict GPT-SoVITS 配置（含 local_port/remote_port）
+    返回值：bool —— True=隧道建立成功；False=解析失败/无此 Host/启动失败
     """
     global _ssh_tunnel
     try:
@@ -224,7 +258,12 @@ def _start_ssh_tunnel(host_alias: str, cfg: dict) -> bool:
 def stop_gpt_sovits(timeout: float = 5.0) -> None:
     """退出时清理：终止本地子进程 + 停止 SSH 隧道。
 
-    三段式终止：terminate → wait → kill（lessons 2026-08-17 教训 1）。
+    作用：桌宠退出时调用，避免留下占显存/端口的孤儿进程。
+          采用三段式终止：terminate（温柔请求）→ wait（等它自己退出）→
+          kill（等不及就强杀）。
+    参数：
+        timeout float 等待子进程退出的秒数（默认 5.0）
+    返回值：无（None）
     """
     global _gpt_sovits_proc, _ssh_tunnel
     # 清理本地子进程
@@ -251,6 +290,21 @@ def stop_gpt_sovits(timeout: float = 5.0) -> None:
             _ssh_tunnel = None
 
 
+# ============================================================
+# 函数：renderer_process()
+# 作用：★renderer 子进程的入口（由桌面宠进程 mp.Process 拉起）。
+#       在这个独立进程里：启动本地 HTTP 服务器（提供 Live2D 页面静态文件），
+#       用 pywebview 创建透明网页窗口加载 Live2D 模型。
+#       主循环（stream_frames）：
+#         1. 接收 overlay 主进程发来的命令（如"说话/表情"）→ 用 JS 驱动 Live2D
+#         2. 截取网页 canvas 画面 → 通过 mp.Pipe 发回主进程显示
+#         3. 每秒 15 帧
+#       ★注意：import webview 必须放在函数内部（不能放文件顶部）——
+#       主进程若提前加载 Qt，子进程的 QtWebEngine 渲染必崩（lessons 8-15 事故）。
+# 参数：
+#   connection Connection mp.Pipe 的一端（子进程端），用来和主进程收发数据
+# 返回值：无（None，函数结束后子进程退出）
+# ============================================================
 def renderer_process(connection: Connection) -> None:
     import webview
 
@@ -263,7 +317,26 @@ def renderer_process(connection: Connection) -> None:
         x=-10000, y=-10000, frameless=True, shadow=False,
     )
 
+    # ============================================================
+    # 函数：loaded()
+    # 作用：webview 页面加载完成后的回调（window.events.loaded 触发）。
+    #       启动 stream_frames 线程，开始"命令接收 + 画面截帧"主循环。
+    # 参数：无
+    # 返回值：无（None）
+    # ============================================================
     def loaded() -> None:
+        # ============================================================
+        # 函数：stream_frames()
+        # 作用：★renderer 主循环（独立线程，daemon=True）。
+        #       1. 先等 Live2D 模型就绪（轮询页面 title 变为 KURISU_READY）
+        #       2. 循环：接收主进程命令→JS 驱动 Live2D 动作；
+        #                截取 canvas 画面→经 Pipe 发回主进程；
+        #                每秒 15 帧
+        #       异常处理：管道断裂（主进程退出）时静默结束；
+        #                结束前销毁 webview 窗口。
+        # 参数：无
+        # 返回值：无（None）
+        # ============================================================
         def stream_frames() -> None:
             try:
                 for _ in range(30):
@@ -307,18 +380,98 @@ def renderer_process(connection: Connection) -> None:
         server.shutdown()
 
 
-def _sync_bubble_accessories(header, footer, x, w, h) -> None:
-    """气泡头部名牌/底部注脚跟随气泡几何（fauux 稿⑤⑩）。
+# ============================================================
+# 函数：_sync_bubble_accessories()
+# 作用：让气泡顶部的名牌（header）和底部的注脚（footer）跟随气泡的
+#       几何位置自动对齐。
+#       初始化早期 header/footer 可能还没创建（在 reply_bubble 之后才建），
+#       所以先用 None 判断做保护，避免 AttributeError 崩溃。
+# 参数：
+#   header  QWidget|None 顶部名牌控件
+#   footer  QWidget|None 底部注脚控件
+#   x       int 气泡横坐标
+#   w       int 气泡宽度
+#   h       int 气泡高度
+# 返回值：无（None）
+# ============================================================
+def _sync_bubble_accessories(header, footer, corners, status_line, x, w, h) -> None:
+    """气泡头部名牌/底部注脚/四角括号/状态行跟随气泡几何（fauux 稿⑤⑩④）。
 
     初始化早期（bubble_header/footer 创建于 reply_bubble 之后）可能先行调用
-    _set_bubble_text，此时二者尚未存在，保护式访问避免 AttributeError
+    _set_bubble_text，此时配件尚未创建，保护式访问避免 AttributeError
     （历史会话存在时 exe/start.bat 启动即静默崩溃）。
+    v4：名牌/注脚改为一体标签（贴合气泡上下缘，不再裸叠立绘），
+        corners 为 4 个 ⌈⌉⌊⌋ 角括号 QLabel，status_line 为状态行。
     """
-    if header is not None and footer is not None:
-        header.setGeometry(x, 8, w, 12)
-        footer.setGeometry(x, 6 + h - 14, w, 12)
+    if header is not None:
+        hw = min(w, 150)
+        header.setGeometry(x + (w - hw) // 2, 4, hw, 16)
+    if footer is not None:
+        fw = min(w, 200)
+        footer.setGeometry(x + (w - fw) // 2, 6 + h - 16, fw, 16)
+    if corners is not None:
+        c = 12
+        corners[0].setGeometry(x - 5, 4, c, c)
+        corners[1].setGeometry(x + w - 7, 4, c, c)
+        corners[2].setGeometry(x - 5, 6 + h - 7, c, c)
+        corners[3].setGeometry(x + w - 7, 6 + h - 7, c, c)
+    if status_line is not None:
+        status_line.setGeometry(x + 8, 6 + h + 6, w - 16, 14)
 
 
+# ============================================================
+# 函数：_wrap_bubble_html()
+# 作用：把气泡正文包装为富文本 HTML：HTML 转义 + 换行转 <br> +
+#       1.5 行距 + 左对齐（QLabel 富文本才能表达 line-height，
+#       QSS 不支持 QLabel 行距）。纯函数，便于单元测试。
+# 参数：
+#   text str 气泡纯文本
+# 返回值：str —— 富文本 HTML
+# ============================================================
+def _wrap_bubble_html(text: str) -> str:
+    """气泡正文富文本包装（v4：1.5 行距 + 左对齐）。"""
+    safe = html.escape(text).replace("\n", "<br>")
+    return (
+        "<html><body style='margin:0;line-height:150%;text-align:left;"
+        "color:#c1b492;font-size:14px'>" + safe + "</body></html>"
+    )
+
+
+# ============================================================
+# 函数：_bubble_size_hint()
+# 作用：用 QTextDocument 估算气泡富文本尺寸（QLabel 无法用
+#       QFontMetrics 测富文本行距）。纯函数，便于单元测试。
+# 参数：
+#   html   str     富文本 HTML（_wrap_bubble_html 输出）
+#   font   QFont   气泡字体（QTextDocument 默认字体）
+#   max_w  int     最大宽度
+# 返回值：tuple[int, int] —— (宽, 高)，含 padding 余量
+# ============================================================
+def _bubble_size_hint(html_text: str, font, max_w: int) -> tuple[int, int]:
+    """QTextDocument 估算富文本气泡尺寸（v4）。"""
+    from PySide6.QtGui import QTextDocument
+
+    doc = QTextDocument()
+    doc.setDefaultFont(font)
+    doc.setHtml(html_text)
+    doc.setTextWidth(max_w - 36)
+    return int(doc.idealWidth()) + 36, int(doc.size().height()) + 24
+
+
+# ============================================================
+# 函数：_decide_delta_action()
+# 作用：AI 回复以流式增量（逐段）到达时，做纯逻辑决策：
+#       把新内容累积进 streamed_reply，并决定是否显示"思考点"动画。
+#       ★纯函数（不碰 UI、无副作用），方便单元测试。
+#       决策规则：delta 期间不更新气泡文字（等 finished 阶段统一显示）；
+#       历史面板没展开时才显示思考点动画（避免重复展示）。
+# 参数：
+#   streamed_reply    str  已累积的回复内容
+#   text              str  本次新到达的增量文本
+#   history_expanded  bool 历史面板是否已展开
+# 返回值：tuple[str, bool, bool] ——
+#   (新的累积内容, 是否显示思考点动画, 是否更新气泡文字)
+# ============================================================
 def _decide_delta_action(
     streamed_reply: str, text: str, history_expanded: bool
 ) -> tuple[str, bool, bool]:
@@ -336,12 +489,27 @@ def _decide_delta_action(
     return new_streamed, should_show_thinking, should_set_bubble_text
 
 
+# ============================================================
+# 函数：_decide_send_instant_action()
+# 作用：用户按下发送瞬间的"即时反应"决策——返回一个动作字典，
+#       让 UI 显示呼吸动画 + thinking 情绪（"让我想想…"由动画取代）。
+# 参数：无
+# 返回值：dict —— {"show_thinking_dots": bool, "emotion": str}
+# ============================================================
 def _decide_send_instant_action() -> dict:
     """_send 发送瞬间的即时反应决策：呼吸动画 + thinking emotion。
     返回 {show_thinking_dots, emotion}。不再用静态'让我想想…'。"""
     return {"show_thinking_dots": True, "emotion": "thinking"}
 
 
+# ============================================================
+# 函数：_decide_call_toggle_action()
+# 作用：Dock 电话按钮点击时的决策：非通话态→进入通话；通话态→挂断。
+#       纯函数便于测试（同 _decide_delta_action 模式）。
+# 参数：
+#   in_call bool 当前是否正在通话中
+# 返回值：dict —— {"enter_call": bool, "hangup": bool}
+# ============================================================
 def _decide_call_toggle_action(in_call: bool) -> dict:
     """Dock 电话按钮点击决策：非通话态→进入通话，通话态→挂断。
 
@@ -352,33 +520,63 @@ def _decide_call_toggle_action(in_call: bool) -> dict:
     return {"enter_call": True, "hangup": False}
 
 
+# ============================================================
+# 函数：_build_kurisu_html()
+# 作用：把红莉栖（AI）的回复文本渲染成气泡 HTML（fauux 玫瑰色主题：
+#       玫瑰软底 + 玫瑰左边条）。文本先做 HTML 转义防注入，再换行符转 <br>。
+# 参数：
+#   text str 红莉栖的回复文本
+# 返回值：str —— 完整的气泡 HTML 片段
+# ============================================================
 def _build_kurisu_html(text: str) -> str:
     """Kurisu 消息 HTML：fauux 玫瑰软底 + 玫瑰左边条。"""
     safe = html.escape(text).replace("\n", "<br>")
     return (
         "<div style='margin:0 0 12px 0;padding:8px 10px;background:rgba(210,115,138,0.22);"
-        "border-left:2px solid #d2738a;border-radius:4px'>"
+        "border-left:2px solid #d2738a;border-radius:0px'>"
         "<div style='color:#d2738a;font-weight:bold;font-size:11px;margin-bottom:2px'>Kurisu</div>"
         f"<div style='line-height:1.42;color:#c1b492;font-size:13px'>{safe}</div></div>"
     )
 
 
+# ============================================================
+# 函数：_build_you_html()
+# 作用：把用户（You）的文本渲染成气泡 HTML（淡玫瑰底 + 右米黄边条，
+#       右对齐）。
+# 参数：
+#   text str 用户的文本
+# 返回值：str —— 完整的气泡 HTML 片段
+# ============================================================
 def _build_you_html(text: str) -> str:
     """You 消息 HTML：淡玫瑰底 + 右米黄边条。"""
     safe = html.escape(text).replace("\n", "<br>")
     return (
         "<div style='margin:0 0 12px 0;padding:8px 10px;background:rgba(210,115,138,0.14);"
-        "border-right:2px solid #8a7f63;border-radius:4px;text-align:right'>"
+        "border-right:2px solid #8a7f63;border-radius:0px;text-align:right'>"
         "<div style='color:#8a7f63;font-weight:bold;font-size:11px;margin-bottom:2px'>You</div>"
         f"<div style='line-height:1.42;color:#c1b492;font-size:13px'>{safe}</div></div>"
     )
 
 
+# ============================================================
+# 函数：_dither_texture_url()
+# 作用：返回 fauux 抖动纹理图片的绝对路径（正斜杠格式，
+#       因为 QSS 的 url() 引用要求正斜杠，Windows 反斜杠会出错）。
+# 参数：无
+# 返回值：str —— 纹理图片的绝对路径
+# ============================================================
 def _dither_texture_url() -> str:
     """fauux 抖动纹理的绝对路径（正斜杠，供 QSS url() 引用）。"""
     return str(ROOT / "resources" / "textures" / "dither_rose.png").replace("\\", "/")
 
 
+# ============================================================
+# 函数：_ensure_dither_texture()
+# 作用：首次运行时用 Qt 画图 API 生成 16×16 抖动纹理图片
+#       （已存在则跳过）。生成失败时静默忽略（界面退化为纯色）。
+# 参数：无
+# 返回值：无（None）
+# ============================================================
 def _ensure_dither_texture() -> None:
     """首次运行时生成 16×16 抖动纹理（已存在则跳过）。失败退化为纯色。"""
     target = ROOT / "resources" / "textures" / "dither_rose.png"
@@ -416,6 +614,15 @@ _TERMINAL_DIM = "#8a7f63"
 _TERMINAL_PROMPT = "guest@wired:~$"
 
 
+# ============================================================
+# 函数：_render_markdown()
+# 作用：把 LLM 回复的 markdown 文本渲染成 HTML（支持代码块/表格等），
+#       用于终端显示。markdown 库未安装时退化为纯文本（HTML 转义）。
+#       单段落时去掉 <p> 包装，让内容与 "kurisu>" 前缀保持同行。
+# 参数：
+#   text str markdown 源文本
+# 返回值：str —— 渲染后的 HTML
+# ============================================================
 def _render_markdown(text: str) -> str:
     """把 LLM 回复渲染成 HTML（markdown 支持）。markdown 库缺失时退化为纯文本。"""
     try:
@@ -429,6 +636,17 @@ def _render_markdown(text: str) -> str:
     return rendered
 
 
+# ============================================================
+# 函数：_build_terminal_line_html()
+# 作用：把终端的一行日志渲染成 HTML。按 kind 分类显示：
+#       cmd=用户命令 / out=AI 输出（支持 markdown）/ err=错误（玫瑰色!）/
+#       tool=工具调用（⟳ 图标）/ diff=文件差异 / 其他=普通行。
+# 参数：
+#   kind  str   行类型（cmd/out/err/sys/tool/diff）
+#   text  str   行内容
+#   extra dict|None 附加信息（diff 类型时含 path/old/new）
+# 返回值：str —— 单行终端 HTML
+# ============================================================
 def _build_terminal_line_html(kind: str, text: str, extra: dict | None = None) -> str:
     """单行终端 HTML。kind: cmd/out/err/sys/tool=工具调用/diff=差异。"""
     safe = html.escape(text).replace("\n", "<br>")
@@ -462,6 +680,17 @@ def _build_terminal_line_html(kind: str, text: str, extra: dict | None = None) -
     return f"<div style='margin:2px 0;color:{_TERMINAL_DIM}'>{safe}</div>"
 
 
+# ============================================================
+# 函数：_render_diff_html()
+# 作用：把 str_replace_editor 工具的 old/new 文本渲染成 CRT 风格的行内
+#       diff（+ 新增=米黄 / - 删除=玫瑰 / 空格=上下文=暗色），
+#       difflib.ndiff 计算逐行差异。
+# 参数：
+#   path str       文件名（显示在 diff 头部）
+#   old  str|None  修改前的文件内容（None=新建文件）
+#   new  str|None  修改后的文件内容
+# 返回值：str —— diff 的 HTML 片段
+# ============================================================
 def _render_diff_html(path: str, old: str | None, new: str | None) -> str:
     """把 str_replace_editor 的 old/new 渲染成 CRT 风格行内 diff（+ 新增 / - 删除 / 空格 上下文）。"""
     import difflib
@@ -495,6 +724,15 @@ def _render_diff_html(path: str, old: str | None, new: str | None) -> str:
     )
 
 
+# ============================================================
+# 函数：_editor_diff_extra()
+# 作用：从 str_replace_editor 工具的 arguments 里提取用于显示 diff 的
+#       path/old/new 三元组。按 command 类型处理：
+#       create=新建文件（old 为 None）；str_replace=替换（old/new 都有）。
+# 参数：
+#   args dict 工具的 arguments（含 command/path/old_str/new_str/file_text 等）
+# 返回值：dict —— {"path": str, "old": str|None, "new": str|None}
+# ============================================================
 def _editor_diff_extra(args: dict) -> dict:
     """从 str_replace_editor 的 arguments 提取 diff 的 path/old/new。"""
     command = str(args.get("command", ""))
@@ -506,6 +744,14 @@ def _editor_diff_extra(args: dict) -> dict:
     return {"path": path, "old": None, "new": None}
 
 
+# ============================================================
+# 函数：_tool_args_summary()
+# 作用：把工具调用的 arguments 压缩成一行简短摘要（最多取前 3 个参数、
+#       每个值超过 40 字符截断加 …），用于终端工具行显示。
+# 参数：
+#   args dict 工具参数
+# 返回值：str —— 摘要文本（空参数时返回空字符串）
+# ============================================================
 def _tool_args_summary(args: dict) -> str:
     if not args:
         return ""
@@ -518,6 +764,14 @@ def _tool_args_summary(args: dict) -> str:
     return " ".join(parts)
 
 
+# ============================================================
+# 函数：_line_cache_key()
+# 作用：计算终端行的缓存键。含 extra(dict) 的行用 id() 作为键的一部分
+#       （dict 不可哈希，且避免重复序列化的开销）。
+# 参数：
+#   item tuple —— 终端行 (kind, text) 或 (kind, text, extra)
+# 返回值：tuple —— 缓存键
+# ============================================================
 def _line_cache_key(item) -> tuple:
     """终端行的缓存键。extra(dict) 用 id() 避免不可哈希与重复序列化开销。"""
     if len(item) == 3:
@@ -525,6 +779,14 @@ def _line_cache_key(item) -> tuple:
     return (item[0], item[1])
 
 
+# ============================================================
+# 函数：_build_terminal_html()
+# 作用：把终端的所有行（lines）拼成完整 HTML（含标题栏"amadeus shell"
+#       和分隔线），供 QTextBrowser 显示（自动滚动到底部）。
+# 参数：
+#   lines list —— 终端行列表，每项为 (kind, text) 或 (kind, text, extra)
+# 返回值：str —— 完整终端 HTML
+# ============================================================
 def _build_terminal_html(lines: list) -> str:
     """终端完整 HTML（QTextBrowser 用，自动滚底）。"""
     parts = [
@@ -541,6 +803,23 @@ def _build_terminal_html(lines: list) -> str:
     return "".join(parts)
 
 
+# ============================================================
+# 函数：run_overlay()
+# 作用：★桌宠 UI 主进程的完整实现（本文件最大的函数，~2000 行）。
+#       在这里创建 Qt 应用程序和所有 UI 组件：
+#       - PetWindow（主窗口：Live2D 覆盖层 + 气泡/Dock/终端/设置）
+#       - 各种内部类：AgentTask（AI 请求后台任务）、DockButton、Toolbar、
+#         ReplyBubble、TerminalView 等
+#       流程：创建 QApplication → 构造 PetWindow → 进入 Qt 事件循环
+#       （app.exec()），直到退出返回退出码。
+#       ★PySide6 相关导入全部放在本函数内部（延迟导入）——因为
+#       desktop_pet.py 主进程顶层绝对不能 import PySide6，否则 renderer
+#       子进程的 QtWebEngine 渲染会崩（lessons 8-15 重大事故）。
+# 参数：
+#   connection Connection mp.Pipe 的一端（主进程端），与 renderer 子进程通信
+#   renderer   mp.Process renderer 子进程对象（退出时需 terminate）
+# 返回值：int —— Qt 事件循环退出码（0=正常）
+# ============================================================
 def run_overlay(connection: Connection, renderer: mp.Process) -> int:
     from PySide6.QtCore import QByteArray, QEasingCurve, QEvent, QObject, QPoint, QPropertyAnimation, QRect, QRectF, QRunnable, Qt, QSize, QThreadPool, QTimer, Signal
     from PySide6.QtGui import QColor, QFont, QFontMetrics, QIcon, QImage, QKeyEvent, QLinearGradient, QMouseEvent, QPainter, QPixmap, QRadialGradient
@@ -563,6 +842,15 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
 
     character = get_character_by_id("kurisu")
 
+    # ============================================================
+    # 函数：send_command()
+    # 作用：overlay 主进程 → renderer 子进程发送命令（如 emotion 表情、
+    #       speaking 口型），通过 duplex 管道发送序列化后的命令。
+    #       管道断裂（renderer 已退出）时静默忽略，不崩溃。
+    # 参数：
+    #   **payload dict —— 命令参数（如 {"type": "emotion", "value": "blush"}）
+    # 返回值：无（None）
+    # ============================================================
     def send_command(**payload) -> None:
         """overlay→renderer 发送命令（emotion/speaking），走 duplex 管道。"""
         try:
@@ -570,6 +858,14 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
         except (BrokenPipeError, OSError):
             pass
 
+    # ============================================================
+    # 类：AgentSignals（QObject）
+    # 作用：后台 AI 任务（AgentTask）与主线程之间的信号桥。
+    #       Qt 信号可以在线程之间安全传递：AI 任务在后台线程发出信号，
+    #       主线程通过 connect 接收并更新 UI。
+    #       信号列表：status=状态文本 / delta=流式增量 / finished=完整回复 /
+    #       failed=失败信息 / tool_event=工具调用事件 / confirmation=工具审批请求
+    # ============================================================
     class AgentSignals(QObject):
         status = Signal(str)
         delta = Signal(str)
@@ -578,13 +874,37 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
         tool_event = Signal(object)
         confirmation = Signal(object)
 
+    # ============================================================
+    # 类：AgentTask（QRunnable）
+    # 作用：★后台 AI 请求任务。把"调用 AI + 工具执行"放到线程池里跑，
+    #       避免阻塞 Qt 主线程（否则界面会卡死）。
+    #       流程：run() 里调 route_and_send（路由+发消息），结果通过
+    #       signals 发回主线程（流式增量发 delta，完整结果发 finished）。
+    # ============================================================
     class AgentTask(QRunnable):
+        # ============================================================
+        # 函数：__init__()
+        # 作用：初始化任务，保存对话历史和记忆
+        # 参数：
+        #   history  list[dict] 对话历史（最后 14 条）
+        #   memories list|None  长期记忆
+        # 返回值：无（None）
+        # ============================================================
         def __init__(self, history, memories=None) -> None:
             super().__init__()
             self.history = history
             self.memories = memories or []
             self.signals = AgentSignals()
 
+        # ============================================================
+        # 函数：run()
+        # 作用：★任务的线程入口（QThreadPool 调用）。
+        #       读取 SOUL.md（或人设回退），调用 route_and_send 发消息，
+        #       期间所有状态通过 self.signals 信号发出。
+        #       成功→finished(reply)；任何异常→failed(错误信息)。
+        # 参数：无
+        # 返回值：无（None）
+        # ============================================================
         def run(self) -> None:
             config = load_config()
             # 读取 SOUL.md（若存在），否则回退到 config.py 中的 KURISU_PERSONALITY
@@ -606,6 +926,16 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             except Exception as exc:
                 self.signals.failed.emit(str(exc))
 
+        # ============================================================
+        # 函数：_handle_approval()
+        # 作用：★工具审批（危险操作需要用户确认）。
+        #       AI 想执行高权限工具时，发送 confirmation 信号到主线程，
+        #       主线程弹出确认框；本函数用 Event 阻塞等待用户选择
+        #       （once/session/always/deny），然后返回选择结果。
+        # 参数：
+        #   payload dict 工具调用详情（command/description 等）
+        # 返回值：str —— 用户选择："once" | "session" | "always" | "deny"
+        # ============================================================
         def _handle_approval(self, payload: dict) -> str:
             import threading
             request = {"payload": payload, "event": threading.Event(), "choice": "deny"}
@@ -613,16 +943,33 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             request["event"].wait()
             return request["choice"]
 
+    # ============================================================
+    # 类：DockButton（QPushButton）
+    # 作用：Dock 单个按钮：SVG 图标 + hover 放大动画 + 按压回弹。
+    #       fauux 刻蚀按钮物理感（hover 放大、按下缩小）。
+    # ============================================================
     class DockButton(QPushButton):
         """Dock 单个按钮：SVG 图标 + hover 放大。"""
         BASE_SIZE = 40
         HOVER_SIZE = 48
         NEAR_SIZE = 44
 
+        # ============================================================
+        # 函数：__init__()
+        # 作用：初始化按钮：设置大小/提示/鼠标指针，加载 SVG 图标
+        #       （QSvgRenderer 渲染），创建 hover 放大和按下回弹动画
+        # 参数：
+        #   icon_name str   图标文件名（resources/icons/{name}.svg）
+        #   tooltip   str   鼠标悬停提示文字
+        #   is_danger bool  是否危险按钮（退出），视觉弱化
+        #   parent    QWidget|None 父控件
+        # 返回值：无（None）
+        # ============================================================
         def __init__(self, icon_name: str, tooltip: str, is_danger: bool = False, parent=None):
             super().__init__(parent)
             self._icon_name = icon_name
             self._is_danger = is_danger
+            self._pinned = False
             self.setFixedSize(self.BASE_SIZE, self.BASE_SIZE)
             self.setToolTip(tooltip)
             self.setCursor(Qt.PointingHandCursor)
@@ -638,6 +985,13 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             self._press_anim.setDuration(110)
             self._press_anim.setEasingCurve(QEasingCurve.OutQuad)
 
+        # ============================================================
+        # 函数：mousePressEvent()
+        # 作用：按下时播放"快速下压"动画（缩小到 88%，制造按压反馈）
+        # 参数：
+        #   event QMouseEvent 鼠标事件
+        # 返回值：无（None）
+        # ============================================================
         def mousePressEvent(self, event) -> None:
             if event.button() == Qt.LeftButton:
                 self._hover_anim.stop()
@@ -647,12 +1001,27 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
                 self._press_anim.start()
             super().mousePressEvent(event)
 
+        # ============================================================
+        # 函数：mouseReleaseEvent()
+        # 作用：松开时回弹：仍在按钮上则放大到 hover 尺寸，否则恢复 1.0
+        # 参数：
+        #   event QMouseEvent 鼠标事件
+        # 返回值：无（None）
+        # ============================================================
         def mouseReleaseEvent(self, event) -> None:
             super().mouseReleaseEvent(event)
             self._press_anim.stop()
             target = DockButton.HOVER_SIZE / DockButton.BASE_SIZE if self.underMouse() else 1.0
             self.set_target_scale(target)
 
+        # ============================================================
+        # 函数：get_scale() / set_scale()
+        # 作用：缩放比例属性（property "scale" 供 QPropertyAnimation 动画用）。
+        #       set_scale 会按比例改变按钮的固定尺寸并重绘。
+        # 参数（set_scale）：
+        #   value float 目标缩放比例（1.0=原始大小）
+        # 返回值：get 返回 float 当前缩放比例；set 无返回
+        # ============================================================
         def get_scale(self) -> float:
             return self._scale
 
@@ -664,12 +1033,39 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
 
         scale = property(get_scale, set_scale)
 
+        # ============================================================
+        # 函数：set_target_scale()
+        # 作用：启动 hover 缩放动画（从当前缩放平滑过渡到目标缩放）
+        # 参数：
+        #   scale float 目标缩放比例
+        # 返回值：无（None）
+        # ============================================================
         def set_target_scale(self, scale: float) -> None:
             self._hover_anim.stop()
             self._hover_anim.setStartValue(self._scale)
             self._hover_anim.setEndValue(scale)
             self._hover_anim.start()
 
+        # ============================================================
+        # 函数：set_pinned()
+        # 作用：设置固定态（v4）：固定时玫瑰常亮填充 + 实线边框，
+        #       让用户能感知当前是否已固定（原 _toggle_pin 无视觉反馈）
+        # 参数：
+        #   pinned bool 是否固定
+        # 返回值：无（None）
+        # ============================================================
+        def set_pinned(self, pinned: bool) -> None:
+            self._pinned = pinned
+            self.update()
+
+        # ============================================================
+        # 函数：paintEvent()
+        # 作用：自定义绘制按钮：按状态（按下/hover/固定/危险/普通）画不同
+        #       玫瑰色背景边框，再渲染 SVG 图标（按下时下沉 1px）
+        # 参数：
+        #   event QPaintEvent 绘制事件
+        # 返回值：无（None）
+        # ============================================================
         def paintEvent(self, event) -> None:
             painter = QPainter(self)
             painter.setRenderHint(QPainter.Antialiasing)
@@ -682,6 +1078,9 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             elif hovered:
                 bg = QColor(210, 115, 138, 10)
                 border = QColor(210, 115, 138, 200)
+            elif self._pinned:
+                bg = QColor(210, 115, 138, 60)
+                border = QColor(210, 115, 138, 255)
             elif self._is_danger:
                 bg = QColor(0, 0, 0, 0)
                 border = QColor(210, 115, 138, 110)
@@ -703,8 +1102,20 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
                        self.width() - pad * 2, self.height() - pad * 2),
             )
 
+    # ============================================================
+    # 类：DockBar（QWidget）
+    # 作用：底部悬浮 Dock 工具栏：6 个按钮（对话/电话/固定/设置/终端/退出）
+    #       + hover 时邻近按钮依次放大的联动效果。
+    # ============================================================
     class DockBar(QWidget):
         """底部悬浮 Dock 工具栏：5 按钮 + hover 邻近放大。"""
+        # ============================================================
+        # 函数：__init__()
+        # 作用：初始化透明背景工具栏和水平布局，创建全部按钮
+        # 参数：
+        #   parent QWidget|None 父控件
+        # 返回值：无（None）
+        # ============================================================
         def __init__(self, parent=None):
             super().__init__(parent)
             self.setAttribute(Qt.WA_TranslucentBackground, True)
@@ -716,13 +1127,21 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             self.setLayout(layout)
             self._build_buttons()
 
+        # ============================================================
+        # 函数：_build_buttons()
+        # 作用：按规格表创建 6 个 DockButton（图标名/提示/是否危险），
+        #       装入列表并加入布局，每个按钮安装事件过滤器（用于
+        #       hover 联动放大）
+        # 参数：无
+        # 返回值：无（None）
+        # ============================================================
         def _build_buttons(self) -> None:
             specs = [
                 ("chat", "对话", False),
                 ("phone", "电话", False),
                 ("pin", "固定", False),
                 ("settings", "设置", False),
-                ("history", "终端", False),
+                ("terminal", "终端", False),
                 ("close", "退出", True),
             ]
             for icon_name, tooltip, is_danger in specs:
@@ -731,6 +1150,14 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
                 self._buttons.append(btn)
                 self.layout().addWidget(btn)
 
+        # ============================================================
+        # 函数：eventFilter()
+        # 作用：监听按钮的鼠标 Enter/Leave 事件，触发邻近放大动画
+        # 参数：
+        #   obj   QObject 事件来源对象
+        #   event QEvent   事件
+        # 返回值：bool —— True=事件已处理；False=继续传给父类
+        # ============================================================
         def eventFilter(self, obj, event) -> bool:
             if obj in self._buttons:
                 idx = self._buttons.index(obj)
@@ -740,6 +1167,14 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
                     self._apply_leave_scale()
             return super().eventFilter(obj, event)
 
+        # ============================================================
+        # 函数：_apply_hover_scale()
+        # 作用：hover 联动：被 hover 的按钮放大到 HOVER_SIZE，
+        #       相邻按钮放大到 NEAR_SIZE，其余恢复 1.0
+        # 参数：
+        #   hover_idx int 被 hover 按钮的索引
+        # 返回值：无（None）
+        # ============================================================
         def _apply_hover_scale(self, hover_idx: int) -> None:
             for i, btn in enumerate(self._buttons):
                 dist = abs(i - hover_idx)
@@ -750,18 +1185,44 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
                 else:
                     btn.set_target_scale(1.0)
 
+        # ============================================================
+        # 函数：_apply_leave_scale()
+        # 作用：鼠标离开 Dock 时所有按钮恢复原始大小
+        # 参数：无
+        # 返回值：无（None）
+        # ============================================================
         def _apply_leave_scale(self) -> None:
             for btn in self._buttons:
                 btn.set_target_scale(1.0)
 
+        # ============================================================
+        # 函数：button()
+        # 作用：按提示文字查找按钮（如 button("对话")）
+        # 参数：
+        #   name str 按钮 tooltip（提示文字）
+        # 返回值：DockButton —— 匹配的按钮；找不到抛 KeyError
+        # ============================================================
         def button(self, name: str):
             for btn in self._buttons:
                 if btn.toolTip() == name:
                     return btn
             raise KeyError(name)
 
+    # ============================================================
+    # 类：HistoryDrawer（QWidget）
+    # 作用：右侧滑入的历史对话抽屉（QTextBrowser 显示全部聊天记录，
+    #       支持滑入/滑出动画）。
+    # ============================================================
     class HistoryDrawer(QWidget):
         """右侧滑入历史抽屉。"""
+        # ============================================================
+        # 函数：__init__()
+        # 作用：初始化历史抽屉：透明背景 + 右侧 QTextBrowser 面板
+        #       （fauux 样式），创建滑入/滑出动画
+        # 参数：
+        #   parent QWidget|None 父控件
+        # 返回值：无（None）
+        # ============================================================
         def __init__(self, parent=None):
             super().__init__(parent)
             self.setAttribute(Qt.WA_TranslucentBackground, True)
@@ -781,8 +1242,18 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             )
             self.history.setOpenExternalLinks(False)
             layout.addWidget(self.history)
+            # v4：历史抽屉 CRT 扫描线（与气泡/面板一致；暗角/噪点保持关闭）
+            self._drawer_crt = CrtOverlay(self, scanlines=True, vignette=False, noise=False)
+            self._drawer_crt.raise_()
             self._slide_anim = None
 
+        # ============================================================
+        # 函数：set_messages_html()
+        # 作用：把聊天记录 HTML 写入抽屉并滚动到底部
+        # 参数：
+        #   html_content str 聊天记录的完整 HTML
+        # 返回值：无（None）
+        # ============================================================
         def set_messages_html(self, html_content: str) -> None:
             self.history.setHtml(
                 "<html><body style='margin:0;background:transparent'>"
@@ -791,6 +1262,12 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             )
             self.history.verticalScrollBar().setValue(self.history.verticalScrollBar().maximum())
 
+        # ============================================================
+        # 函数：slide_in()
+        # 作用：300ms 从右侧滑入（InOutCubic 缓动）
+        # 参数：无
+        # 返回值：无（None）
+        # ============================================================
         def slide_in(self) -> None:
             """300ms 从右滑入。"""
             if self.parent() is None:
@@ -805,6 +1282,12 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             anim.start()
             self._slide_anim = anim
 
+        # ============================================================
+        # 函数：slide_out()
+        # 作用：300ms 滑出到右侧屏幕外
+        # 参数：无
+        # 返回值：无（None）
+        # ============================================================
         def slide_out(self) -> None:
             """300ms 滑出到右侧外。"""
             if self.parent() is None:
@@ -819,6 +1302,12 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             anim.start()
             self._slide_anim = anim
 
+    # ============================================================
+    # 类：GlitchLabel（QWidget）
+    # 作用：全角标题 + CRT glitch 双色分裂动画（参考 fauux .glitch）。
+    #       主文字 cream，两层偏移副本（rose 浅 / dim 暗）只在偶发 glitch
+    #       帧的随机水平条带内显示，制造 RGB 分裂撕裂感；多数时间保持稳定。
+    # ============================================================
     class GlitchLabel(QWidget):
         """全角标题 + CRT glitch 双色分裂动画（参考 fauux .glitch）。
 
@@ -827,6 +1316,14 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
         配色保持 rose/cream 系，色调不变。
         """
 
+        # ============================================================
+        # 函数：__init__()
+        # 作用：初始化标签文字，启动 70ms 定时器驱动 glitch 动画帧
+        # 参数：
+        #   text   str          显示的标题文字
+        #   parent QWidget|None 父控件
+        # 返回值：无（None）
+        # ============================================================
         def __init__(self, text: str, parent=None):
             super().__init__(parent)
             self._text = text
@@ -839,6 +1336,13 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             self._timer.timeout.connect(self._advance)
             self._timer.start()
 
+        # ============================================================
+        # 函数：_advance()
+        # 作用：动画推进：更新随机种子，约 3% 概率进入 glitch 状态
+        #       （持续 2~4 帧约 140~280ms），其余时间保持稳定，然后重绘
+        # 参数：无
+        # 返回值：无（None）
+        # ============================================================
         def _advance(self) -> None:
             self._seed = (self._seed + 1) % 10000
             import random
@@ -850,17 +1354,36 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
                 self._glitch_frames = rnd.randint(2, 4)
             self.update()
 
+        # ============================================================
+        # 函数：_font()
+        # 作用：构建标题字体（Consolas 15px 粗体 + 112% 字距）
+        # 参数：无
+        # 返回值：QFont —— 标题字体
+        # ============================================================
         def _font(self) -> QFont:
-            font = QFont("Consolas")
-            font.setPixelSize(15)
+            font = QFont("Times New Roman")
+            font.setPixelSize(13)
             font.setBold(True)
-            font.setLetterSpacing(QFont.PercentageSpacing, 112)
             return font
 
+        # ============================================================
+        # 函数：sizeHint()
+        # 作用：根据文字宽度估算控件的建议尺寸
+        # 参数：无
+        # 返回值：QSize —— 建议尺寸（文字宽 + 16，文字高 + 10）
+        # ============================================================
         def sizeHint(self):
             fm = QFontMetrics(self._font())
             return QSize(fm.horizontalAdvance(self._text) + 16, fm.height() + 10)
 
+        # ============================================================
+        # 函数：paintEvent()
+        # 作用：绘制标题：先画主文字（cream），glitch 状态时在随机
+        #       水平条带内画 rose/dim 两层偏移副本（模拟 RGB 撕裂）
+        # 参数：
+        #   event QPaintEvent 绘制事件
+        # 返回值：无（None）
+        # ============================================================
         def paintEvent(self, event) -> None:
             import random
             painter = QPainter(self)
@@ -892,6 +1415,13 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             finally:
                 painter.end()
 
+    # ============================================================
+    # 类：AgentTerminal（QDialog）
+    # 作用：★独立 CRT 命令行 agent 窗口（fauux 风格，类 Codex CLI）。
+    #       终端日志区 + 命令行输入框 + blink 光标 + CRT 特效
+    #       （扫描线/暗角/噪点/闪烁）+ 输入历史/
+    #       Tab 补全/Ctrl+C 中断。与 SettingsDialog 同级的独立窗口。
+    # ============================================================
     class AgentTerminal(QDialog):
         """独立 CRT 命令行 agent 窗口（fauux 风格，类 Codex CLI）。
 
@@ -902,6 +1432,17 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
         """
         submitted = Signal(str)
 
+        # ============================================================
+        # 函数：__init__()
+        # 作用：★构建整个终端窗口：标题栏（glitch + 辉光 + 关闭钮）、
+        #       日志区（QTextBrowser）、输入行（提示符+输入框+blink光标）、
+        #       各种定时器（blink/渲染节流/CRT闪烁/噪点）。
+        #       关键细节：关闭按钮必须关掉 autoDefault（否则回车误触发
+        #       关闭）；渲染用 33ms 节流合并 setHtml 防卡死。
+        # 参数：
+        #   parent QWidget|None 父控件
+        # 返回值：无（None）
+        # ============================================================
         def __init__(self, parent=None):
             super().__init__(parent)
             self.setWindowTitle("Amadeus Terminal")
@@ -1027,42 +1568,19 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             self._noise_timer.start()
 
             # 背景 logo 水印：加载后暗化，作为 CRT 背景的底层衬底
-            self._logo = self._load_darkened_logo()
+            # 背景图片（terminal_back.png）+ logo 水印：图片铺满终端，logo 叠放其上
+            self._bg = self._load_background()
+            self._bg_scaled = None  # 已按当前窗口尺寸缩放好的背景缓存
+            self._bg_size = (0, 0)
+            self._logo = self._load_logo()
 
-            # 启动序列（fauux 稿⑨）：构造后逐行打印 boot 日志（blink 光标独立运行）
-            self._boot_lines = [
-                ("amadeus.exe — initializing memory", "ok"),
-                ("loading fork.db — 100%", "ok"),
-                ("mounting sessions — 12 files", "ok"),
-                ("sensor: audio / vision / context — SUBSYSTEM", "ESTABLISHED"),
-                ("spawning companion greeter — PID 211", "ok"),
-                ("waiting for signal", "standby"),
-            ]
-            self._boot_index = 0
-            self._boot_timer = QTimer(self)
-            self._boot_timer.setInterval(480)
-            self._boot_timer.timeout.connect(self._tick_boot)
-            self._boot_timer.start()
-
-        def _tick_boot(self) -> None:
-            """打印下一行启动序列；打印完毕停止定时器。"""
-            if self._boot_index >= len(self._boot_lines):
-                self._boot_timer.stop()
-                return
-            cmd, st = self._boot_lines[self._boot_index]
-            self._boot_index += 1
-            if st == "standby":
-                color = _TERMINAL_DIM
-            else:
-                color = "#34c759"
-            self.log.append(
-                f'<span style="color:{_TERMINAL_ROSE}">&gt;</span> '
-                f'<span style="color:{_TERMINAL_CREAM}">{cmd}</span> '
-                f'<span style="color:{color}">— {st}</span>'
-            )
-            sb = self.log.verticalScrollBar()
-            sb.setValue(sb.maximum())
-
+        # ============================================================
+        # 函数：resizeEvent()
+        # 作用：终端尺寸变化时通知主窗口重新定位
+        # 参数：
+        #   event QResizeEvent 尺寸变化事件
+        # 返回值：无（None）
+        # ============================================================
         def resizeEvent(self, event) -> None:
             super().resizeEvent(event)
             # 终端固定在主窗口左侧：尺寸变化时通知主窗口重新定位
@@ -1070,19 +1588,40 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             if p is not None and hasattr(p, "_position_terminal"):
                 p._position_terminal()
 
+        # ============================================================
+        # 函数：_flicker()
+        # 作用：CRT 屏幕闪烁：窗口整体 opacity 在 0.98~1.0 之间随机微调，
+        #       模拟老式 CRT 刷新感（70ms 定时器驱动）
+        # 参数：无
+        # 返回值：无（None）
+        # ============================================================
         def _flicker(self) -> None:
             import random
             # 0.98~1.0 之间微调 opacity，模拟老式 CRT 屏幕的轻微闪烁
             self._flicker_effect.setOpacity(0.98 + 0.02 * random.random())
 
+        # ============================================================
+        # 函数：_advance_noise()
+        # 作用：静电噪点动画推进：更新随机种子并重绘（80ms 定时器驱动）
+        # 参数：无
+        # 返回值：无（None）
+        # ============================================================
         def _advance_noise(self) -> None:
             self._noise_seed = (self._noise_seed + 1) % 10000
             self.update()
 
+        # ============================================================
+        # 函数：paintEvent()
+        # 作用：绘制终端背景（背景图片 → logo 水印 → 暗角 → 扫描线 → 噪点）
+        # 参数：
+        #   event QPaintEvent 绘制事件
+        # 返回值：无（None）
+        # ============================================================
         def paintEvent(self, event) -> None:
             super().paintEvent(event)
             painter = QPainter(self)
             try:
+                self._paint_background(painter)
                 self._paint_logo(painter)
                 self._paint_vignette(painter)
                 self._paint_scanlines(painter)
@@ -1090,17 +1629,67 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             finally:
                 painter.end()
 
-        def _load_darkened_logo(self):
-            """加载终端背景 logo 并暗化，返回 QPixmap（失败返回 None）。"""
+        # ============================================================
+        # 函数：_load_background()
+        # 作用：加载终端背景图片 resources/terminal_back.png（原图，
+        #       不处理），作为终端背景底层。文件缺失/加载失败返回 None
+        # 参数：无
+        # 返回值：QPixmap | None —— 背景图片
+        # ============================================================
+        def _load_background(self):
+            """加载终端背景图片 resources/terminal_back.png（失败返回 None）。"""
+            path = ROOT / "resources" / "terminal_back.png"
+            if not path.exists():
+                return None
+            pix = QPixmap(str(path))
+            return None if pix.isNull() else pix
+
+        # ============================================================
+        # 函数：_paint_background()
+        # 作用：把背景图片按 cover 模式铺满整个终端窗口（保持比例，
+        #       裁掉多余部分），并按窗口尺寸缓存缩放结果避免重复缩放。
+        #       绘制后叠加暗化蒙版（半透明黑），保证终端文字可读
+        # 参数：
+        #   painter QPainter 绘制器
+        # 返回值：无（None）
+        # ============================================================
+        def _paint_background(self, painter: QPainter) -> None:
+            """把 terminal_back.png 按 cover 模式铺满终端背景，再叠加暗化蒙版。"""
+            if self._bg is None:
+                return
+            w, h = self.width(), self.height()
+            if w <= 0 or h <= 0:
+                return
+            if self._bg_scaled is None or self._bg_size != (w, h):
+                self._bg_scaled = self._bg.scaled(
+                    w, h, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation
+                )
+                self._bg_size = (w, h)
+            x = (w - self._bg_scaled.width()) // 2
+            y = (h - self._bg_scaled.height()) // 2
+            painter.drawPixmap(x, y, self._bg_scaled)
+            # 暗化蒙版：半透明黑整幅压暗，保证终端文字可读
+            painter.fillRect(self.rect(), QColor(0, 0, 0, 110))
+
+        # ============================================================
+        # 函数：_load_logo()
+        # 作用：加载 amadeus 品牌 logo（amadeus-logo-TM.png）并暗化
+        #       （透明度降至 0.55，保留 alpha），作为终端背景水印叠放
+        #       在背景图片之上。文件缺失/加载失败返回 None
+        # 参数：无
+        # 返回值：QPixmap | None —— 暗化后的 logo
+        # ============================================================
+        def _load_logo(self):
+            """加载 amadeus logo 并暗化（0.55 透明度），作为终端背景水印。"""
             path = ROOT / "amadeus-logo-TM.png"
             if not path.exists():
                 return None
             src = QPixmap(str(path))
             if src.isNull():
                 return None
-            # 暗化：在暗色底上以较低透明度重绘，得到深色、低对比的水印
+            # 暗化：在透明底上以 0.55 透明度重绘，得到低对比水印（保留 alpha）
             dark = QPixmap(src.size())
-            dark.fill(QColor(23, 17, 20))
+            dark.fill(Qt.GlobalColor.transparent)
             p = QPainter(dark)
             try:
                 p.setOpacity(0.55)
@@ -1109,8 +1698,16 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
                 p.end()
             return dark
 
+        # ============================================================
+        # 函数：_paint_logo()
+        # 作用：把 logo 原图绘制为终端底部背景中央的水印（输入行上方），
+        #       叠放在背景图片之上
+        # 参数：
+        #   painter QPainter 绘制器
+        # 返回值：无（None）
+        # ============================================================
         def _paint_logo(self, painter: QPainter) -> None:
-            """把暗化后的 logo 绘制为终端底部背景中央的水印（输入行之上）。"""
+            """把 logo 原图绘制为终端底部背景中央的水印（输入行之上）。"""
             if self._logo is None:
                 return
             w, h = self.width(), self.height()
@@ -1153,6 +1750,58 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             for _ in range(count):
                 painter.drawPoint(rnd.randrange(self.width()), rnd.randrange(self.height()))
 
+        # ============================================================
+        # 函数：_paint_vignette()
+        # 作用：绘制暗角（radial 渐变，边缘渐黑 175 透明度），
+        #       模拟 CRT 屏幕四角变暗的效果
+        # 参数：
+        #   painter QPainter 绘制器
+        # 返回值：无（None）
+        # ============================================================
+        def _paint_vignette(self, painter: QPainter) -> None:
+            w, h = self.width(), self.height()
+            if w <= 0 or h <= 0:
+                return
+            gradient = QRadialGradient(w / 2, h / 2, max(w, h) * 0.75)
+            gradient.setColorAt(0.0, QColor(0, 0, 0, 0))
+            gradient.setColorAt(0.55, QColor(0, 0, 0, 0))
+            gradient.setColorAt(1.0, QColor(0, 0, 0, 175))
+            painter.fillRect(self.rect(), gradient)
+
+        # ============================================================
+        # 函数：_paint_scanlines()
+        # 作用：绘制水平扫描线（每 3px 一条半透明黑线，CRT 特征效果）
+        # 参数：
+        #   painter QPainter 绘制器
+        # 返回值：无（None）
+        # ============================================================
+        def _paint_scanlines(self, painter: QPainter) -> None:
+            painter.setPen(QColor(0, 0, 0, 70))
+            for y in range(0, self.height(), 3):
+                painter.drawLine(0, y, self.width(), y)
+
+        # ============================================================
+        # 函数：_paint_noise()
+        # 作用：绘制静电噪点（随机分布的半透明点，数量约为面积/100）
+        # 参数：
+        #   painter QPainter 绘制器
+        # 返回值：无（None）
+        # ============================================================
+        def _paint_noise(self, painter: QPainter) -> None:
+            import random
+            rnd = random.Random(self._noise_seed)
+            painter.setPen(QColor(193, 180, 146, 45))
+            count = max(0, self.width() * self.height() // 100)
+            for _ in range(count):
+                painter.drawPoint(rnd.randrange(self.width()), rnd.randrange(self.height()))
+
+        # ============================================================
+        # 函数：keyPressEvent()
+        # 作用：终端键盘快捷键：Ctrl+Plus/Minus=字体缩放、Ctrl+C=中断任务
+        # 参数：
+        #   event QKeyEvent 键盘事件
+        # 返回值：无（None）
+        # ============================================================
         def keyPressEvent(self, event) -> None:
             if event.modifiers() & Qt.ControlModifier:
                 if event.key() in (Qt.Key_Plus, Qt.Key_Equal):
@@ -1169,6 +1818,14 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
                     return
             super().keyPressEvent(event)
 
+        # ============================================================
+        # 函数：eventFilter()
+        # 作用：监听输入框键盘事件：Ctrl+C=中断、Up/Down=历史、Tab=补全
+        # 参数：
+        #   obj   QObject 事件来源对象
+        #   event QEvent   事件
+        # 返回值：bool —— True=事件已处理；False=继续传给父类
+        # ============================================================
         def eventFilter(self, obj, event) -> bool:
             if obj is self.input and event.type() == QEvent.KeyPress:
                 key = event.key()
@@ -1186,6 +1843,12 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
                     return True
             return super().eventFilter(obj, event)
 
+        # ============================================================
+        # 函数：_history_prev()
+        # 作用：上一条输入历史（Up 键）——倒序翻历史记录
+        # 参数：无
+        # 返回值：无（None）
+        # ============================================================
         def _history_prev(self) -> None:
             if not self._history:
                 return
@@ -1196,6 +1859,12 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             self.input.setText(self._history[self._history_index])
             self.input.setCursorPosition(len(self.input.text()))
 
+        # ============================================================
+        # 函数：_history_next()
+        # 作用：下一条输入历史（Down 键）——正序翻历史，到底后清空
+        # 参数：无
+        # 返回值：无（None）
+        # ============================================================
         def _history_next(self) -> None:
             if self._history_index < 0:
                 return
@@ -1207,6 +1876,12 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
                 self.input.setText("")
             self.input.setCursorPosition(len(self.input.text()))
 
+        # ============================================================
+        # 函数：_tab_complete()
+        # 作用：Tab 补全：先匹配历史命令，否则文件路径补全
+        # 参数：无
+        # 返回值：无（None）
+        # ============================================================
         def _tab_complete(self) -> None:
             text = self.input.text()
             if not text:
@@ -1221,6 +1896,13 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
                 self.input.setText(common)
                 self.input.setCursorPosition(len(common))
 
+        # ============================================================
+        # 函数：_file_complete()
+        # 作用：文件路径补全：把当前输入当作通配符搜索文件
+        # 参数：
+        #   text str 当前输入文本
+        # 返回值：list[str] —— 匹配的文件路径列表（异常时返回空列表）
+        # ============================================================
         def _file_complete(self, text: str) -> list[str]:
             import glob
             try:
@@ -1228,6 +1910,12 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             except Exception:
                 return []
 
+        # ============================================================
+        # 函数：_interrupt()
+        # 作用：Ctrl+C 中断当前正在运行的 harness 回合（仅 harness 模式生效）
+        # 参数：无
+        # 返回值：无（None）
+        # ============================================================
         def _interrupt(self) -> None:
             """Ctrl+C：中断当前正在运行的 harness 回合（仅 harness 模式生效）。"""
             try:
@@ -1236,6 +1924,13 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             except Exception:
                 pass
 
+        # ============================================================
+        # 函数：_submit()
+        # 作用：提交输入：存入历史（最多 200 条）→ 发出 submitted 信号 →
+        #       清空输入框。主窗口接收信号后发送给 AI。
+        # 参数：无
+        # 返回值：无（None）
+        # ============================================================
         def _submit(self) -> None:
             text = self.input.text().strip()
             if text:
@@ -1247,6 +1942,16 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
                 self.submitted.emit(text)
                 self.input.clear()
 
+        # ============================================================
+        # 函数：render_lines()
+        # 作用：标记待渲染的终端行并启动 33ms 节流定时器（实际刷新在
+        #       _flush_render 合并执行）。full=True=整体更换（全量重建），
+        #       默认增量追加
+        # 参数：
+        #   lines list  终端行列表，每项 (kind, text) 或 (kind, text, extra)
+        #   full  bool  是否强制全量重建（默认 False）
+        # 返回值：无（None）
+        # ============================================================
         def render_lines(self, lines: list, full: bool = False) -> None:
             """标记待渲染并启动节流定时器；实际刷新在 _flush_render 中合并执行。
 
@@ -1383,7 +2088,8 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
 
             self.reply_bubble = QLabel(self)
             self.reply_bubble.setGeometry((self.width() - 390) // 2, 8, 390, 96)
-            self.reply_bubble.setAlignment(Qt.AlignCenter)
+            # v4：正文左对齐（富文本 line-height 1.5 由 _wrap_bubble_html 提供）
+            self.reply_bubble.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
             self.reply_bubble.setWordWrap(True)
             self.reply_bubble.setStyleSheet(
                 "QLabel{background-color:#171114;background-image:url(" + _dither_texture_url() + ");"
@@ -1402,20 +2108,41 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             self._bubble_crt.raise_()
 
             # fauux 稿⑤⑩④：气泡头部名牌 + 底部状态注脚（随气泡 Show/Hide 联动）
+            # v4：名牌/注脚改为一体标签（bg + 粗左边条，贴合气泡上下缘）
             self.bubble_header = QLabel("K U R I S U", self)
             self.bubble_header.setStyleSheet(
-                "color:#d2738a;background:transparent;"
+                "color:#d2738a;background-color:#171114;"
+                "border:1px solid #d2738a;border-left:6px solid #d2738a;border-radius:0px;"
                 "font-family:'Times New Roman','Times',serif;font-size:11px;font-weight:bold;"
             )
             self.bubble_header.setAlignment(Qt.AlignHCenter)
             self.bubble_header.hide()
             self.bubble_footer = QLabel("wire ESTABLISHED · Δ 0.41s · ch 1", self)
             self.bubble_footer.setStyleSheet(
-                "color:#8a7f63;background:transparent;"
+                "color:#8a7f63;background-color:#171114;"
+                "border:1px solid #8a7f63;border-left:6px solid #8a7f63;border-radius:0px;"
                 "font-family:'Consolas','Microsoft YaHei';font-size:9px;"
             )
             self.bubble_footer.setAlignment(Qt.AlignHCenter)
             self.bubble_footer.hide()
+            # v4：气泡四角括号（fauux ⌈⌉⌊⌋，随气泡显示/隐藏联动）
+            self.bubble_corners = []
+            for _ch in ("⌈", "⌉", "⌊", "⌋"):
+                lbl = QLabel(_ch, self)
+                lbl.setStyleSheet(
+                    "color:#d2738a;background:transparent;"
+                    "font-family:'Times New Roman','Times',serif;font-size:15px;font-weight:bold;"
+                )
+                lbl.hide()
+                self.bubble_corners.append(lbl)
+            # v4：状态行（工具进度与台词分离，dim 小字）
+            self.status_line = QLabel("", self)
+            self.status_line.setStyleSheet(
+                "color:#8a7f63;background:transparent;"
+                "font-family:'Consolas','Microsoft YaHei';font-size:9px;"
+            )
+            self.status_line.setAlignment(Qt.AlignHCenter)
+            self.status_line.hide()
             self.reply_bubble.installEventFilter(self)
 
             # 输入面板（默认隐藏，点击💬展开）
@@ -1505,8 +2232,15 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             self._relayout()
 
             self.tray = QSystemTrayIcon(self)
-            icon_pixmap = QPixmap(24, 24)
-            icon_pixmap.fill(QColor(224, 82, 82))
+            # v4：tray 图标用项目 logo 缩略；缺失时回落红色方块（避免空图标）
+            icon_pixmap = QPixmap(str(ROOT / "amadeus-logo-TM.png"))
+            if icon_pixmap.isNull():
+                icon_pixmap = QPixmap(24, 24)
+                icon_pixmap.fill(QColor(224, 82, 82))
+            else:
+                icon_pixmap = icon_pixmap.scaled(
+                    24, 24, Qt.KeepAspectRatio, Qt.SmoothTransformation
+                )
             self.tray.setIcon(QIcon(icon_pixmap))
             tray_menu = QMenu()
             restore_action = tray_menu.addAction("显示红莉栖")
@@ -1525,7 +2259,7 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             self._restore_win.setFixedSize(50, 50)
             screen = QApplication.primaryScreen().availableGeometry()
             self._restore_win.move(screen.right() - 60, screen.bottom() - 120)
-            btn = QPushButton("红利栖", self._restore_win)
+            btn = QPushButton("红莉栖", self._restore_win)
             btn.setGeometry(0, 0, 50, 50)
             btn.setToolTip("点击打开")
             btn.setCursor(Qt.PointingHandCursor)
@@ -1595,38 +2329,40 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             self._fade_in_anim = anim_in
 
         def _toggle_pin(self) -> None:
-            """固定/解锁位置。固定后禁用拖拽和自动贴合。DockButton 视觉反馈由 Task 5 处理。"""
+            """固定/解锁位置。固定后禁用拖拽和自动贴合。v4：DockButton 固定态视觉反馈。"""
             self._pinned = not self._pinned
+            self.dock_bar.button("固定").set_pinned(self._pinned)
 
         def _set_bubble_text(self, text: str) -> None:
             """设置回复气泡文字并自动缩放大小（支持长文本内部滚动）。
 
-            修复：原版高度上限 140px 截断长回复。现改为：
-            - 短文本（高度 ≤ 140）：保持原行为，气泡自适应
-            - 长文本（高度 > 140）：高度上限放宽到 240px（屏幕高度的 1/4），
-              QLabel setWordWrap 自动换行，超长内容由 QLabel 截断显示
-              （后续如需真正滚动，需将 reply_bubble 改为 QScrollArea 包 QLabel）
+            v4：正文走富文本（_wrap_bubble_html：1.5 行距 + 左对齐），
+            尺寸用 QTextDocument 估算（QLabel 无法用 QFontMetrics 测行距）。
+            名牌/注脚/四角括号/状态行随气泡几何同步。
             """
-            self.reply_bubble.setText(text)
-            from PySide6.QtGui import QFontMetrics
-            fm = QFontMetrics(self.reply_bubble.font())
-            max_w = 340
-            rect = fm.boundingRect(0, 0, max_w - 36, 0, Qt.TextWordWrap, text)
-            w = min(max(rect.width() + 36, 80), max_w)
-            h = min(max(rect.height() + 24, 36), 240)
+            bubble_html = _wrap_bubble_html(text)
+            self.reply_bubble.setText(bubble_html)
+            w, h = _bubble_size_hint(bubble_html, self.reply_bubble.font(), 340)
+            w = min(max(w, 80), 340)
+            h = min(max(h, 36), 240)
             x = (self.width() - w) // 2
             self.reply_bubble.setGeometry(x, 6, w, h)
-            # 头部名牌/底部注脚跟随气泡几何（fauux 稿⑤⑩）。
-            # 初始化早期调用本方法时二者尚未创建，传 None 由 _sync_bubble_accessories
+            # 头部名牌/底部注脚/四角括号/状态行跟随气泡几何（fauux 稿⑤⑩④）。
+            # 初始化早期调用本方法时配件尚未创建，传 None 由 _sync_bubble_accessories
             # 跳过同步；构建完成后正常跟随。
             _sync_bubble_accessories(
                 getattr(self, 'bubble_header', None),
                 getattr(self, 'bubble_footer', None),
+                getattr(self, 'bubble_corners', None),
+                getattr(self, 'status_line', None),
                 x, w, h,
             )
 
         def _show_thinking_dots(self) -> None:
             """delta 期间显示等待叙事（fauux 启动序列行 + 多语言短语轮换），气泡呼吸。"""
+            # v4：状态行在思考期间隐藏（工具进度由状态行表达，台词区回到 thinking）
+            if hasattr(self, 'status_line'):
+                self.status_line.hide()
             self._set_bubble_text("> linking fork.db\n… ok")
             # 底部注脚切为相位行（④ ║▒░♫ 与等待叙事同源）
             if getattr(self, 'bubble_footer', None):
@@ -1657,9 +2393,9 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             self._think_phrase_index = (self._think_phrase_index + 1) % len(phrases)
             if not self.reply_bubble.isVisible():
                 return
-            self.reply_bubble.setText(
+            self.reply_bubble.setText(_wrap_bubble_html(
                 f"> linking fork.db\n… ok　{phrases[self._think_phrase_index]}"
-            )
+            ))
 
         def _send_emotion(self, emotion: str) -> None:
             """经 duplex 管道发送 emotion 到 renderer（即时，不等 LLM）。"""
@@ -1789,6 +2525,9 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             # 停止思考呼吸动画，恢复 opacity
             self._stop_thinking_anim()
             self._thinking_dots_shown = False
+            # v4：正式回复到达，状态行隐藏（台词与状态分离）
+            if hasattr(self, 'status_line'):
+                self.status_line.hide()
             segments = re.split(r'(?<=[。！？!?\n])\s*', text.strip())
             merged: list[str] = []
             for seg in segments:
@@ -2112,9 +2851,11 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             self.terminal.render_lines(self._term_lines)
 
         def _show_status(self, text: str) -> None:
+            # v4：状态与台词分离 —— 工具进度走独立 dim 状态行，不覆盖台词气泡
             if not self._history_expanded and not self._terminal_active():
-                self.reply_bubble.show()
-                self._set_bubble_text(self._latest_line(text))
+                if hasattr(self, 'status_line'):
+                    self.status_line.setText("▸ " + text)
+                    self.status_line.show()
 
         def _agent_delta(self, text: str) -> None:
             new_streamed, should_show_thinking, should_set_bubble_text = _decide_delta_action(
@@ -2259,6 +3000,8 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
                 self._term_lines[-1] = ("err", f"任务失败：{error}")
                 self.terminal.render_lines(self._term_lines)
             else:
+                if hasattr(self, 'status_line'):
+                    self.status_line.hide()
                 if not self._history_expanded:
                     self.reply_bubble.show()
                 self._set_bubble_text(self._latest_line(f"任务失败：{error}"))
@@ -2318,12 +3061,16 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             self.update()
 
         def eventFilter(self, obj, event) -> bool:
-            # 气泡的头部名牌/底部注脚跟随气泡显示状态（fauux 稿⑤⑩④）
+            # 气泡的头部名牌/底部注脚/四角括号/状态行跟随气泡显示状态（fauux 稿⑤⑩④）
             if obj is self.reply_bubble and event.type() in (QEvent.Show, QEvent.Hide):
                 vis = event.type() == QEvent.Show
                 if hasattr(self, 'bubble_header'):
                     self.bubble_header.setVisible(vis)
                     self.bubble_footer.setVisible(vis)
+                    for lbl in self.bubble_corners:
+                        lbl.setVisible(vis)
+                    if not vis:
+                        self.status_line.hide()
             return super().eventFilter(obj, event)
 
         def _relayout(self) -> None:

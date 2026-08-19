@@ -18,6 +18,15 @@ import random
 RESOURCES_DIR = Path(__file__).resolve().parent / "resources"
 
 
+# ============================================================
+# 函数：resources_path()
+# 作用：把项目内的 "/xxx" 形式相对路径转换为 resources/ 下的绝对路径。
+#       例："/live2d/kurisu/amadeusV1.model3.json"
+#           → D:\...\amadeus-py\resources\live2d\kurisu\amadeusV1.model3.json
+# 参数：
+#   relative_path str 以 / 开头的资源路径
+# 返回值：Path —— resources/ 目录下的绝对路径
+# ============================================================
 def resources_path(relative_path: str) -> Path:
     """把原项目中的 /xxx 路径转为本地 resources/ 下的绝对路径。
 
@@ -170,7 +179,10 @@ ALIYUN_TTS_DEFAULTS: dict[str, object] = {
     "preferred_name": "amadeus_kurisu",
     "engine": "qwen3-tts-vc",              # 默认 qwen3-tts-vc：与已克隆音色（qwen-tts-vc- 前缀）匹配。CosyVoice 系列要求账号已授权 + 用预置音色（不支持克隆音色）
     "model": "qwen3-tts-vc-2026-01-22",    # qwen3-tts-vc 路径专用 model id（engine=qwen3-tts-vc 时用）
-    "ref_audio": "/voice_sample_clip_v2.wav",
+    # 克隆样本：Kurisu-GPT-SoVITS v2ProPlus 包推荐参考音频 crs_1393.wav（10.94s，官方建议 10~20s），
+    # 与 ref_text 精确对齐（包内 reference audio/reference_text.txt），提升 Qwen 声音复刻效果
+    "ref_audio": "/crs_1393.wav",
+    "ref_text": "それに、例えば、小学生の頃の自分に今の記憶を転送した場合、記憶と肉体のギャップのせいで、精神的な障害が起きるかもしれない……",
     "timeout": 30,
 }
 
@@ -342,6 +354,12 @@ KURISU_GREETINGS = [
 ]
 
 
+# ============================================================
+# 类：Character（角色配置类）
+# 作用：描述一个角色（如红莉栖）的全部资源配置：
+#       id/名字/Live2D 模型路径/背景图/BGM/音色样本/人设/问候语。
+#       下方带 _abs 后缀的方法都是把相对路径转成绝对路径。
+# ============================================================
 @dataclass
 class Character:
     """角色配置（与原 characters.ts Character 接口对齐）。"""
@@ -357,21 +375,57 @@ class Character:
     personality: str
     greetings: list[str] = field(default_factory=list)
 
+    # ============================================================
+    # 函数：live2d_abs()
+    # 作用：返回角色的 Live2D 模型文件绝对路径
+    # 参数：无
+    # 返回值：Path —— Live2D 模型绝对路径
+    # ============================================================
     def live2d_abs(self) -> Path:
         return resources_path(self.live2d_path)
 
+    # ============================================================
+    # 函数：bg_image_abs()
+    # 作用：返回背景图绝对路径
+    # 参数：无
+    # 返回值：Path —— 背景图绝对路径
+    # ============================================================
     def bg_image_abs(self) -> Path:
         return resources_path(self.bg_image)
 
+    # ============================================================
+    # 函数：bg_login_image_abs()
+    # 作用：返回登录页背景图绝对路径
+    # 参数：无
+    # 返回值：Path —— 登录页背景图绝对路径
+    # ============================================================
     def bg_login_image_abs(self) -> Path:
         return resources_path(self.bg_login_image)
 
+    # ============================================================
+    # 函数：bgm_abs()
+    # 作用：返回背景音乐文件绝对路径
+    # 参数：无
+    # 返回值：Path —— BGM 绝对路径
+    # ============================================================
     def bgm_abs(self) -> Path:
         return resources_path(self.bgm)
 
+    # ============================================================
+    # 函数：sprite_logo_abs()
+    # 作用：返回角色 Logo 图片绝对路径
+    # 参数：无
+    # 返回值：Path —— Logo 绝对路径
+    # ============================================================
     def sprite_logo_abs(self) -> Path:
         return resources_path(self.sprite_logo)
 
+    # ============================================================
+    # 函数：voice_sample_abs()
+    # 作用：返回音色样本音频绝对路径（用于 TTS 音色克隆）
+    # 参数：无
+    # 返回值：Path —— 音色样本绝对路径
+    # ============================================================
     def voice_sample_abs(self) -> Path:
         return resources_path(self.voice_sample)
 
@@ -396,6 +450,14 @@ CHARACTERS: list[Character] = [
 DEFAULT_CHARACTER = CHARACTERS[0]
 
 
+# ============================================================
+# 函数：get_character_by_id()
+# 作用：按角色 id 从 CHARACTERS 列表里查找角色配置；
+#       找不到时返回默认角色（CHARACTERS[0]，即红莉栖）。
+# 参数：
+#   character_id str 角色 id（如 "kurisu"）
+# 返回值：Character —— 匹配的角色配置（找不到则返回默认角色）
+# ============================================================
 def get_character_by_id(character_id: str) -> Character:
     for c in CHARACTERS:
         if c.id == character_id:
@@ -403,6 +465,13 @@ def get_character_by_id(character_id: str) -> Character:
     return DEFAULT_CHARACTER
 
 
+# ============================================================
+# 函数：get_random_greeting()
+# 作用：随机返回一条该角色的问候语（用于首次见面/主动打招呼）。
+# 参数：
+#   character_id str 角色 id（如 "kurisu"）
+# 返回值：str —— 随机一条问候语文本
+# ============================================================
 def get_random_greeting(character_id: str) -> str:
     c = get_character_by_id(character_id)
     return random.choice(c.greetings)
