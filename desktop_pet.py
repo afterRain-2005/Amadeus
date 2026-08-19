@@ -2231,6 +2231,7 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             self._history_expanded = False
             self.terminal = None  # AgentTerminal 独立窗口，懒创建
             self._term_lines: list = []
+            self._terminal_reply_index: int | None = None
             self._zoom = 0.9
             self._pinned = False
             self._bubble_segments: list[str] = []
@@ -2878,6 +2879,7 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             # 每次打开都从当前会话重建终端行，避免只加载一次导致
             # 之后主页面新增的聊天记录不显示在终端（历史抽屉是每次重读的）。
             self._term_lines = self._terminal_session_lines()
+            self._terminal_reply_index = None
             self.terminal.render_lines(self._term_lines, full=True)
             self.terminal.show()
             self._position_terminal()
@@ -2895,6 +2897,7 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
                 return
             self._term_lines.append(("cmd", text))
             self._term_lines.append(("out", "▌"))
+            self._terminal_reply_index = len(self._term_lines) - 1
             self.terminal.render_lines(self._term_lines)
             self._send_text(text, show_bubble=False)
 
@@ -2975,6 +2978,11 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             QThreadPool.globalInstance().start(task)
 
         def _confirm_operation(self, request: dict) -> None:
+            if self._terminal_active():
+                self._term_lines.append(("sys", "等待工具审批…"))
+                self.terminal.render_lines(self._term_lines)
+                self.terminal.request_approval(request)
+                return
             payload = request["payload"]
             command = payload.get("command", "")
             description = payload.get("description", "")
@@ -3012,22 +3020,25 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
                 args = event.get("arguments") or {}
                 if name == "str_replace_editor":
                     command = str(args.get("command", ""))
-                    if command in ("create", "str_replace"):
-                        self._term_lines.append(("diff", "", _editor_diff_extra(args)))
-                    else:
-                        self._term_lines.append(("tool", f"{name} {command} {args.get('path', '')}".rstrip()))
-                elif name in ("bash", "run_bash", "run_command"):
+                    self._term_lines.append(("tool", f"{name} {command} {args.get('path', '')}".rstrip()))
+                elif name in ("bash", "pwsh", "run_bash", "run_command"):
                     cmd = args.get("command") or args.get("cmd") or ""
                     self._term_lines.append(("tool", f"{name} $ {cmd}" if cmd else name))
                 else:
                     self._term_lines.append(("tool", f"{name} {_tool_args_summary(args)}".rstrip()))
             elif kind == "tool_result":
-                content = event.get("content", "")
-                is_error = event.get("isError", False)
-                if name in ("bash", "run_bash", "run_command") and content:
-                    self._term_lines.append(("out", content))
-                elif is_error and content:
-                    self._term_lines.append(("err", content))
+                content = str(event.get("content", "") or "")
+                is_error = bool(event.get("isError", False))
+                args = event.get("arguments") or {}
+                command = str(args.get("command", ""))
+                if is_error:
+                    self._term_lines.append(("err", content or f"{name} 执行失败"))
+                elif name == "str_replace_editor" and command in ("create", "str_replace", "insert"):
+                    self._term_lines.append(("diff", "", _editor_diff_extra(args)))
+                elif content:
+                    self._term_lines.append(("result", content))
+                else:
+                    self._term_lines.append(("tool", f"✓ {name}"))
             self.terminal.render_lines(self._term_lines)
 
         def _show_status(self, text: str) -> None:
@@ -3042,11 +3053,15 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
                 self._streamed_reply, text, self._history_expanded or self._terminal_active()
             )
             self._streamed_reply = new_streamed
-            if self._terminal_active() and self._term_lines:
+            if (
+                self._terminal_active()
+                and self._terminal_reply_index is not None
+                and self._terminal_reply_index < len(self._term_lines)
+            ):
                 # 终端模式：流式中文实时回显到最后一行 out
                 chinese = parse_reply(self._streamed_reply).chinese
-                self._term_lines[-1] = ("out", chinese if chinese.strip() else "▌")
-                self.terminal.render_lines(self._term_lines)
+                self._term_lines[self._terminal_reply_index] = ("out", chinese if chinese.strip() else "▌")
+                self.terminal.render_lines(self._term_lines, dirty_from=self._terminal_reply_index)
             if should_set_bubble_text:
                 self._set_bubble_text(self._streamed_reply)
             if should_show_thinking:
@@ -3158,9 +3173,14 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             self._stream_tts_started = False
             if self.terminal is not None:
                 self.terminal.set_busy(False)
-            if self._terminal_active() and self._term_lines:
-                self._term_lines[-1] = ("out", parse_reply(reply).chinese)
-                self.terminal.render_lines(self._term_lines)
+            if (
+                self._terminal_active()
+                and self._terminal_reply_index is not None
+                and self._terminal_reply_index < len(self._term_lines)
+            ):
+                self._term_lines[self._terminal_reply_index] = ("out", parse_reply(reply).chinese)
+                self.terminal.render_lines(self._term_lines, dirty_from=self._terminal_reply_index)
+            self._terminal_reply_index = None
             if not self._history_expanded and not self._terminal_active():
                 # 分层气泡需要完整中文做分段展示，_latest_line 的 105 字截断会丢段
                 self._show_layered_bubbles(parse_reply(reply).chinese)
@@ -3176,9 +3196,13 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             self._stop_thinking_anim()
             if self.terminal is not None:
                 self.terminal.set_busy(False)
-            if self._terminal_active() and self._term_lines:
-                self._term_lines[-1] = ("err", f"任务失败：{error}")
-                self.terminal.render_lines(self._term_lines)
+            if (
+                self._terminal_active()
+                and self._terminal_reply_index is not None
+                and self._terminal_reply_index < len(self._term_lines)
+            ):
+                self._term_lines[self._terminal_reply_index] = ("err", f"任务失败：{error}")
+                self.terminal.render_lines(self._term_lines, dirty_from=self._terminal_reply_index)
             else:
                 if hasattr(self, 'status_line'):
                     self.status_line.hide()
@@ -3187,6 +3211,7 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
                 self._set_bubble_text(self._latest_line(f"任务失败：{error}"))
                 # 失败提示也会闲置后隐藏，避免永久悬挂
                 self._bubble_timer = QTimer.singleShot(9000, self._hide_idle_bubble)
+            self._terminal_reply_index = None
             self.send_button.setDisabled(False)
             send_command(emotion="angry")
 
