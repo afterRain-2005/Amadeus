@@ -311,34 +311,75 @@ def renderer_process(connection: Connection) -> None:
     port = free_port()
     server = ThreadingHTTPServer(("127.0.0.1", port), QuietHandler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
-    url = f"http://127.0.0.1:{port}/live2d/live2d_page.html?model=/resources/live2d/kurisu/amadeusV1.model3.json"
-    window = webview.create_window(
-        "Amadeus Renderer", url=url, width=420, height=680,
-        x=-10000, y=-10000, frameless=True, shadow=False,
+    url = (
+        f"http://127.0.0.1:{port}/live2d/phone_live2d_page.html"
+        f"?model=/resources/live2d/kurisu/amadeusV1.model3.json"
     )
 
     # ============================================================
-    # 函数：loaded()
-    # 作用：webview 页面加载完成后的回调（window.events.loaded 触发）。
-    #       启动 stream_frames 线程，开始"命令接收 + 画面截帧"主循环。
-    # 参数：无
-    # 返回值：无（None）
+    # 类：RendererJsApi
+    # 作用：pywebview 向 JS 暴露的桥接 API（必须在 create_window 前构造）。
+    #       JS 端 Home 键点击 → window.pywebview.api.home_click()
+    #       → 通过管道通知主进程 _minimize_to_tray()。
     # ============================================================
+    class RendererJsApi:
+        def home_click(self) -> None:
+            try:
+                connection.send(("home_click", True))
+            except (BrokenPipeError, OSError):
+                pass
+
+        def hide_window(self) -> None:
+            try:
+                connection.send(("hide_window", True))
+            except (BrokenPipeError, OSError):
+                pass
+
+        def close(self) -> None:
+            try:
+                connection.send(("close", True))
+            except (BrokenPipeError, OSError):
+                pass
+
+    window = webview.create_window(
+        "Amadeus Renderer", url=url, width=340, height=720,
+        x=-10000, y=-10000, frameless=True, shadow=False,
+        js_api=RendererJsApi(),
+    )
+
     def loaded() -> None:
         # ============================================================
         # 函数：stream_frames()
         # 作用：★renderer 主循环（独立线程，daemon=True）。
-        #       1. 先等 Live2D 模型就绪（轮询页面 title 变为 KURISU_READY）
-        #       2. 循环：接收主进程命令→JS 驱动 Live2D 动作；
-        #                截取 canvas 画面→经 Pipe 发回主进程；
-        #                每秒 15 帧
-        #       异常处理：管道断裂（主进程退出）时静默结束；
-        #                结束前销毁 webview 窗口。
-        # 参数：无
-        # 返回值：无（None）
+        #       1. 等模型就绪
+        #       2. 循环：接收命令→驱动动作；监听 Home 键；截取"#app 整页"
+        #         （手机壳+屏幕+辉光+角色一体）回传主进程 paintEvent 直接显示
+        #       每秒 15 帧
         # ============================================================
         def stream_frames() -> None:
             try:
+                # JS 端：给页面原有的单/双击分流提供 pywebview 回调。
+                # 不额外绑定 click，避免双击时第一下 click 立即最小化。
+                home_js = (
+                    "(function(){"
+                    "  window.__amadeusHomeClick = function() {"
+                    "    if (window.pywebview && window.pywebview.api && window.pywebview.api.home_click) {"
+                    "      try { window.pywebview.api.home_click(); } catch(e){}"
+                    "    }"
+                    "  };"
+                    "  const menu = document.getElementById('pet-menu');"
+                    "  if (menu) menu.addEventListener('click', () => {"
+                    "    if (window.pywebview && window.pywebview.api && window.pywebview.api.close) {"
+                    "      try { window.pywebview.api.close(); } catch(e){}"
+                    "    }"
+                    "  });"
+                    "})();"
+                )
+                try:
+                    window.evaluate_js(home_js)
+                except Exception:
+                    pass
+
                 for _ in range(30):
                     time.sleep(0.25)
                     if window.evaluate_js("document.title") == "KURISU_READY":
@@ -347,7 +388,18 @@ def renderer_process(connection: Connection) -> None:
                     connection.send(("error", "Live2D model did not become ready"))
                     return
 
-                script = "window.__amadeus.app.renderer.extract.canvas(window.__amadeus.app.stage).toDataURL('image/png')"
+                # 调 JS 端的 __amadeusComposite()：手机壳 + Live2D 一体合成
+                # （返回 PNG dataURL；304×690；手机 UI 完全在 Web 端用 Canvas 2D 绘制）
+                script = (
+                    "(function(){"
+                    "  return typeof window.__amadeusComposite === 'function'"
+                    "    ? window.__amadeusComposite()"
+                    "    : (window.__amadeus && window.__amadeus.app"
+                    "       ? window.__amadeus.app.renderer.extract.canvas("
+                    "         window.__amadeus.app.stage).toDataURL('image/png')"
+                    "       : null);"
+                    "})()"
+                )
                 while True:
                     # 接收 overlay→renderer 命令（非阻塞，drain 队列）
                     while connection.poll():
@@ -360,6 +412,9 @@ def renderer_process(connection: Connection) -> None:
                             if js:
                                 window.evaluate_js(js)
                     data_url = window.evaluate_js(script)
+                    if not data_url:
+                        time.sleep(1 / 15)
+                        continue
                     frame = base64.b64decode(data_url.split(",", 1)[1])
                     connection.send(("frame", frame))
                     time.sleep(1 / 15)
@@ -625,11 +680,16 @@ _TERMINAL_PROMPT = "guest@wired:~$"
 # ============================================================
 def _render_markdown(text: str) -> str:
     """把 LLM 回复渲染成 HTML（markdown 支持）。markdown 库缺失时退化为纯文本。"""
+    safe_text = html.escape(text)
     try:
         import markdown
-        rendered = markdown.markdown(text, extensions=["fenced_code", "tables", "nl2br"], output_format="html5")
+        rendered = markdown.markdown(
+            safe_text,
+            extensions=["fenced_code", "tables", "nl2br"],
+            output_format="html5",
+        )
     except ImportError:
-        return html.escape(text).replace("\n", "<br>")
+        return safe_text.replace("\n", "<br>")
     # 单段落时去掉 <p> 包装，保持与 kurisu> 前缀同行
     if rendered.startswith("<p>") and rendered.endswith("</p>") and rendered.count("<p>") == 1:
         rendered = rendered[3:-4]
@@ -673,6 +733,12 @@ def _build_terminal_line_html(kind: str, text: str, extra: dict | None = None) -
         return (
             f"<div style='margin:2px 0'><span style='color:{_TERMINAL_ROSE}'>⟳</span> "
             f"<span style='color:{_TERMINAL_DIM}'>{safe}</span></div>"
+        )
+    if kind == "result":
+        return (
+            f"<pre style='margin:3px 0 5px 16px;color:{_TERMINAL_CREAM};"
+            "white-space:pre-wrap;font-family:Consolas,Microsoft YaHei'>"
+            f"{html.escape(text)}</pre>"
         )
     if kind == "diff":
         extra = extra or {}
@@ -741,6 +807,10 @@ def _editor_diff_extra(args: dict) -> dict:
         return {"path": path, "old": None, "new": args.get("file_text", "")}
     if command == "str_replace":
         return {"path": path, "old": args.get("old_str"), "new": args.get("new_str")}
+    if command == "insert":
+        line = args.get("insert_line")
+        label = f"{path}:{line}" if line is not None else path
+        return {"path": label, "old": "", "new": args.get("new_str", "")}
     return {"path": path, "old": None, "new": None}
 
 
@@ -762,6 +832,66 @@ def _tool_args_summary(args: dict) -> str:
             s = s[:40] + "…"
         parts.append(f"{key}={s}")
     return " ".join(parts)
+
+
+def _terminal_token_start(text: str) -> int:
+    """返回终端输入中最后一个未闭合参数的起始位置。"""
+    token_start = 0
+    quote = ""
+    for index, character in enumerate(text):
+        if quote:
+            if character == quote:
+                quote = ""
+        elif character in ("'", '"'):
+            quote = character
+        elif character.isspace():
+            token_start = index + 1
+    return token_start
+
+
+def _complete_terminal_input(
+    text: str,
+    history: list[str],
+    cwd: str | os.PathLike[str] | None = None,
+) -> str | None:
+    """按整行历史优先、当前参数文件路径次之补全终端输入。"""
+    if not text:
+        return None
+    history_matches = [item for item in reversed(history) if item.startswith(text) and item != text]
+    if history_matches:
+        common = os.path.commonprefix(history_matches)
+        if len(common) > len(text):
+            return common
+
+    token_start = _terminal_token_start(text)
+    token = text[token_start:]
+    if not token:
+        return None
+    quote = token[0] if token[0] in ("'", '"') else ""
+    raw_token = token[1:] if quote else token
+    expanded = os.path.expanduser(raw_token)
+    base = Path(cwd) if cwd is not None else Path.cwd()
+    candidate_path = Path(expanded)
+    search_path = candidate_path if candidate_path.is_absolute() else base / candidate_path
+
+    import glob
+    matches = glob.glob(str(search_path) + "*")
+    if not matches:
+        return None
+    displays: list[str] = []
+    for match in sorted(matches, key=str.casefold):
+        matched_path = Path(match)
+        if candidate_path.is_absolute():
+            display = str(matched_path)
+        else:
+            display = os.path.relpath(matched_path, base)
+        if matched_path.is_dir():
+            display += os.sep
+        displays.append(quote + display)
+    completed_token = os.path.commonprefix(displays)
+    if len(completed_token) <= len(token):
+        return None
+    return text[:token_start] + completed_token
 
 
 # ============================================================
@@ -839,6 +969,7 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
     from core.tts_client import SpeechPlayer
     from ui.settings_dialog import SettingsDialog
     from ui.widgets.crt_overlay import CrtOverlay
+    from ui.widgets.crt_title_bar import CrtTitleBar
 
     character = get_character_by_id("kurisu")
 
@@ -1459,41 +1590,24 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             self._line_cache: dict = {}  # 行级 HTML 缓存，避免每 delta 全量 markdown 重渲染
             self._rendered_count: int = 0  # 已渲染进 QTextBrowser 的行数（增量刷新基准）
             self._needs_rebuild: bool = True  # 行列表被整体更换（任务切换）时强制全量重建
+            self._line_starts: list[int] = []  # 每个逻辑行在 QTextDocument 中的起始位置
+            self._dirty_from: int | None = None
             self._history: list[str] = []
             self._history_index: int = -1
+            self._pending_approval: dict | None = None
             layout = QVBoxLayout(self)
-            layout.setContentsMargins(16, 14, 16, 14)
-            layout.setSpacing(8)
+            layout.setContentsMargins(10, 10, 10, 10)
+            layout.setSpacing(10)
 
-            # 标题栏：⌈⌉ 角括号 + rose 辉光（wiredB 动画的静态近似）+ 关闭按钮
-            title_row = QHBoxLayout()
-            title_row.setSpacing(8)
-            title_row.addStretch()
-            self.title = GlitchLabel("⌈ Ａｍａｄｅｕｓ　Ｔｅｒｍｉｎａｌ ⌋", self)
-            glow = QGraphicsDropShadowEffect(self)
-            glow.setColor(QColor(210, 115, 138, 200))
-            glow.setBlurRadius(12)
-            glow.setOffset(1, 4)  # 对应 CSS text-shadow #d2738a 1px 4px 5px
-            self.title.setGraphicsEffect(glow)
-            title_row.addWidget(self.title)
-            title_row.addStretch()
-            self.close_btn = QPushButton("×", self)
-            self.close_btn.setFixedSize(24, 24)
-            self.close_btn.setCursor(Qt.PointingHandCursor)
-            self.close_btn.setStyleSheet(
-                f"QPushButton{{background:#171114;color:{_TERMINAL_ROSE};"
-                f"border:1px solid {_TERMINAL_ROSE};padding:0;"
-                "font:18px 'Consolas','Microsoft YaHei'}}"
-                f"QPushButton:hover{{background:{_TERMINAL_ROSE};color:#171114}}"
+            self.title_bar = CrtTitleBar(
+                "⌈ Ａｍａｄｅｕｓ Ｔｅｒｍｉｎａｌ ⌋",
+                "wire ESTABLISHED · ch 1",
+                self,
+                self.close,
             )
-            self.close_btn.clicked.connect(self.close)
-            # 关键修复：QDialog 内唯一按钮默认为 autoDefault 按钮，输入框回车后
-            # Enter 键事件未被消费，会继续传给对话框并触发该 default 按钮 →
-            # 误触发 self.close()，导致终端发送后立即关闭。显式关掉 autoDefault/default。
-            self.close_btn.setAutoDefault(False)
-            self.close_btn.setDefault(False)
-            title_row.addWidget(self.close_btn)
-            layout.addLayout(title_row)
+            self.title = self.title_bar.title_label
+            self.close_btn = self.title_bar.close_button
+            layout.addWidget(self.title_bar)
 
             # 日志区（主体）
             self.log = QTextBrowser(self)
@@ -1512,6 +1626,37 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             self.log.setOpenLinks(False)
             self.log.anchorClicked.connect(self._open_external_link)
             layout.addWidget(self.log, 1)
+
+            # 审批条：危险工具请求直接在终端内确认，不打断 CRT 工作流
+            self.approval_panel = QWidget(self)
+            self.approval_panel.setStyleSheet(
+                "QWidget{background:rgba(23,17,20,220);border:1px solid #d2738a;}"
+                "QLabel{color:#c1b492;border:0;background:transparent;}"
+                "QPushButton{color:#d2738a;background:#171114;border:1px solid #d2738a;"
+                "padding:4px 8px;font:12px 'Consolas','Microsoft YaHei';}"
+                "QPushButton:hover{color:#171114;background:#d2738a;}"
+            )
+            approval_layout = QVBoxLayout(self.approval_panel)
+            approval_layout.setContentsMargins(8, 6, 8, 6)
+            approval_layout.setSpacing(6)
+            self.approval_label = QLabel(self.approval_panel)
+            self.approval_label.setWordWrap(True)
+            approval_layout.addWidget(self.approval_label)
+            approval_buttons = QHBoxLayout()
+            for label, choice in (
+                ("仅本次", "once"),
+                ("本次会话", "session"),
+                ("始终允许", "always"),
+                ("拒绝", "deny"),
+            ):
+                button = QPushButton(label, self.approval_panel)
+                button.setAutoDefault(False)
+                button.setDefault(False)
+                button.clicked.connect(lambda _checked=False, value=choice: self._resolve_approval(value))
+                approval_buttons.addWidget(button)
+            approval_layout.addLayout(approval_buttons)
+            self.approval_panel.hide()
+            layout.addWidget(self.approval_panel)
 
             # 输入行：rose 提示符 + 输入框 + 闪烁块光标（下边框式）
             input_row = QHBoxLayout()
@@ -1883,32 +2028,11 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
         # 返回值：无（None）
         # ============================================================
         def _tab_complete(self) -> None:
-            text = self.input.text()
-            if not text:
+            completed = _complete_terminal_input(self.input.text(), self._history)
+            if completed is None:
                 return
-            candidates = [h for h in reversed(self._history) if h.startswith(text) and h != text]
-            if not candidates:
-                candidates = self._file_complete(text)
-            if not candidates:
-                return
-            common = os.path.commonprefix(candidates)
-            if len(common) > len(text):
-                self.input.setText(common)
-                self.input.setCursorPosition(len(common))
-
-        # ============================================================
-        # 函数：_file_complete()
-        # 作用：文件路径补全：把当前输入当作通配符搜索文件
-        # 参数：
-        #   text str 当前输入文本
-        # 返回值：list[str] —— 匹配的文件路径列表（异常时返回空列表）
-        # ============================================================
-        def _file_complete(self, text: str) -> list[str]:
-            import glob
-            try:
-                return glob.glob(text + "*")
-            except Exception:
-                return []
+            self.input.setText(completed)
+            self.input.setCursorPosition(len(completed))
 
         # ============================================================
         # 函数：_interrupt()
@@ -1920,9 +2044,12 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             """Ctrl+C：中断当前正在运行的 harness 回合（仅 harness 模式生效）。"""
             try:
                 from core.harness_bridge import cancel_active_run
-                cancel_active_run()
+                requested = cancel_active_run()
             except Exception:
-                pass
+                requested = False
+            message = "^C — 已请求中断当前任务" if requested else "^C — 当前没有可中断的 Harness 任务"
+            self._lines.append(("sys", message))
+            self.render_lines(self._lines)
 
         # ============================================================
         # 函数：_submit()
@@ -1934,13 +2061,37 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
         def _submit(self) -> None:
             text = self.input.text().strip()
             if text:
-                if text not in self._history:
+                if not self._history or self._history[-1] != text:
                     self._history.append(text)
                     if len(self._history) > 200:
                         self._history.pop(0)
                 self._history_index = -1
                 self.submitted.emit(text)
                 self.input.clear()
+
+        def request_approval(self, request: dict) -> None:
+            """在终端内显示一个待处理的工具审批请求。"""
+            if self._pending_approval is not None:
+                self._resolve_approval("deny")
+            payload = request.get("payload") or {}
+            command = str(payload.get("command", "") or "tool")
+            description = str(payload.get("description", "") or command)
+            self._pending_approval = request
+            self.approval_label.setText(f"⚠ {command}\n{description}\n允许执行吗？")
+            self.approval_panel.show()
+
+        def _resolve_approval(self, choice: str) -> None:
+            request = self._pending_approval
+            if request is None:
+                return
+            self._pending_approval = None
+            self.approval_panel.hide()
+            request["choice"] = choice
+            request["event"].set()
+
+        def closeEvent(self, event) -> None:
+            self._resolve_approval("deny")
+            super().closeEvent(event)
 
         # ============================================================
         # 函数：render_lines()
@@ -2080,14 +2231,16 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool)
             self.setAttribute(Qt.WA_TranslucentBackground, True)
             self.setAttribute(Qt.WA_NoSystemBackground, True)
-            self.setFixedSize(400, 680)
+            # 尺寸对齐 phone_live2d_page.html 的合成画面：304×690
+            # （手机本体 280×560 —— 严格 2:1 比例）
+            self.setFixedSize(304, 690)
 
             screen = QApplication.primaryScreen().availableGeometry()
-            # 底部留 60px 余量，避免输入框（距窗口底 8px）被任务栏/屏幕底遮挡
             self.move(screen.right() - self.width() - 20, screen.bottom() - self.height() - 60)
 
             self.reply_bubble = QLabel(self)
-            self.reply_bubble.setGeometry((self.width() - 390) // 2, 8, 390, 96)
+            # 气泡：手机上方 8~104 之间，宽 288（窗口宽 304 - 8px 左右边距）
+            self.reply_bubble.setGeometry(8, 8, 288, 96)
             # v4：正文左对齐（富文本 line-height 1.5 由 _wrap_bubble_html 提供）
             self.reply_bubble.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
             self.reply_bubble.setWordWrap(True)
@@ -2145,11 +2298,12 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             self.status_line.hide()
             self.reply_bubble.installEventFilter(self)
 
-            # 输入面板（默认隐藏，点击💬展开）
-            panel_w = 365
-            panel_x = (self.width() - panel_w) // 2
+            # 输入面板（默认隐藏，点击💬展开；屏幕内底部槽位）
+            panel_w = 248
+            panel_x = 20 + (264 - panel_w) // 2   # 20 = 屏幕左，264 = 屏幕宽
+            panel_y = 118 + 496 - 64 - 2            # 屏幕底 - 64 Dock预留 - 2margin
             self.input_panel = QWidget(self)
-            self.input_panel.setGeometry(panel_x, self.height() - 70, panel_w, 52)
+            self.input_panel.setGeometry(panel_x, panel_y, panel_w, 52)
             self.input_panel.setStyleSheet(
                 "background-color:#171114;background-image:url(" + _dither_texture_url() + ");"
                 "border-left:1px solid #d2738a;border-right:1px solid #d2738a;"
@@ -2203,11 +2357,11 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             self.dock_bar.button("电话").clicked.connect(self._toggle_call)
             self.dock_bar.show()
 
-            # 通话态视图（默认隐藏）
+            # 通话态视图（默认隐藏，覆盖屏幕区域）
             from ui.widgets.call_view import CallView
             self._in_call = False
             self.call_view = CallView(self)
-            self.call_view.setGeometry(8, 8, self.width() - 16, self.height() - 16)
+            self.call_view.setGeometry(20, 118, 264, 496)
             self.call_view.hide()
             self.call_controller = None  # 通话时创建，避免闲置时持有 sounddevice stream
 
@@ -2222,9 +2376,12 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             # 收起动画挂起的 hide 定时器（防止淡出中途再次展开后被误隐藏）
             self._pending_panel_hide: QTimer | None = None
 
-            # 历史抽屉（右侧滑入，默认隐藏）
+            # 历史抽屉（屏幕内右侧滑入，默认隐藏）
             self.history_drawer = HistoryDrawer(self)
-            self.history_drawer.setGeometry(self.width() - 172, 8, 168, self.height() - 80)
+            # 屏幕 x=20..284, y=118..614；抽屉右对齐，留 4px 边距
+            drawer_w = 148
+            drawer_h = 420
+            self.history_drawer.setGeometry(284 - drawer_w - 4, 118 + 28 + 4, drawer_w, drawer_h)
             self.history_drawer.hide()
             # 滑出动画挂起的 hide 定时器（防止滑出中途再次展开后被误隐藏）
             self._pending_drawer_hide: QTimer | None = None
@@ -2342,9 +2499,9 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             """
             bubble_html = _wrap_bubble_html(text)
             self.reply_bubble.setText(bubble_html)
-            w, h = _bubble_size_hint(bubble_html, self.reply_bubble.font(), 340)
-            w = min(max(w, 80), 340)
-            h = min(max(h, 36), 240)
+            w, h = _bubble_size_hint(bubble_html, self.reply_bubble.font(), self.width() - 16)
+            w = min(max(w, 80), self.width() - 16)
+            h = min(max(h, 36), 100)
             x = (self.width() - w) // 2
             self.reply_bubble.setGeometry(x, 6, w, h)
             # 头部名牌/底部注脚/四角括号/状态行跟随气泡几何（fauux 稿⑤⑩④）。
@@ -3018,6 +3175,16 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
                     latest = payload
                 elif kind == "error":
                     print(f"[Amadeus] {payload}", file=sys.stderr)
+                elif kind == "home_click":
+                    # JS 端 Home 键点击 → 最小化到托盘（保留托盘）
+                    self._minimize_to_tray()
+                elif kind == "hide_window":
+                    # JS 端 Home 键双击 → 隐藏整个窗口，保留托盘
+                    self.hide()
+                    self._restore_win.show()
+                elif kind == "close":
+                    # JS 端 × 菜单 → 主动退出（等同于托盘菜单的退出）
+                    QApplication.instance().quit()
             if latest is not None:
                 image = QImage.fromData(latest, "PNG")
                 if not image.isNull():
@@ -3038,19 +3205,21 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
                 return
             painter = QPainter(self)
             painter.setRenderHint(QPainter.SmoothPixmapTransform)
-            # 全身显示，按 _zoom 缩放，水平居中，底部对齐
-            base_h = 520
-            target_h = int(base_h * self._zoom)
-            target_w = int(target_h * self._frame.width() / self._frame.height())
-            scaled = self._frame.scaled(
-                target_w, target_h, Qt.KeepAspectRatio, Qt.SmoothTransformation
-            )
-            target = QRect(
-                (self.width() - scaled.width()) // 2,
-                self.height() - scaled.height() - 60,
-                scaled.width(), scaled.height(),
-            )
-            painter.drawImage(target, scaled)
+            # 合成帧尺寸 = 304×690（手机壳 + Live2D 一体，PyWeb 端已画完）
+            # 直接按 1:1 贴到窗口，保持透明背景
+            target = QRect(0, 0, self.width(), self.height())
+            if self._frame.width() == self.width() and self._frame.height() == self.height():
+                painter.drawImage(target, self._frame)
+            else:
+                scaled = self._frame.scaled(
+                    self.width(), self.height(),
+                    Qt.KeepAspectRatio, Qt.SmoothTransformation
+                )
+                painter.drawImage(
+                    (self.width() - scaled.width()) // 2,
+                    (self.height() - scaled.height()) // 2,
+                    scaled,
+                )
 
         def wheelEvent(self, event) -> None:
             if self._pinned:
@@ -3074,16 +3243,28 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             return super().eventFilter(obj, event)
 
         def _relayout(self) -> None:
-            """根据当前窗口尺寸重新定位所有组件。"""
-            w, h = self.width(), self.height()
-            # Dock：底部居中悬浮
+            """根据手机屏幕布局重新定位所有组件。
+            手机屏幕区域（与 phone_live2d_page.html 对齐）：
+              手机框  x=12 y=110 w=280 h=560 （2:1 比例）
+              屏幕    x=20 y=118 w=264 h=496 （内缩 8px，底部留 56px Home 键）
+            """
+            # Dock：屏幕内底部槽位（居中）——角色合成帧已留 64px Dock 预留，不重叠
             dock_w = self.dock_bar.sizeHint().width()
-            self.dock_bar.setGeometry((w - dock_w) // 2, h - 64, dock_w, 56)
-            # 输入面板：底部居中（与 Dock 同位，互斥显示）
-            panel_w = 320
-            self.input_panel.setGeometry((w - panel_w) // 2, h - 56, panel_w, 48)
-            # 历史抽屉：右侧
-            self.history_drawer.setGeometry(w - 172, 8, 168, h - 80)
+            dock_w = min(dock_w, 250)
+            dock_x = 20 + (264 - dock_w) // 2
+            dock_y = 118 + 496 - 64
+            self.dock_bar.setGeometry(dock_x, dock_y, dock_w, 56)
+            # 输入面板：同位互斥
+            panel_w = 248
+            panel_x = 20 + (264 - panel_w) // 2
+            panel_y = dock_y + 2
+            self.input_panel.setGeometry(panel_x, panel_y, panel_w, 52)
+            # CRT overlay 跟随 input_panel
+            if hasattr(self, '_panel_crt') and self._panel_crt is not None:
+                self._panel_crt.setGeometry(self.input_panel.rect())
+            # 历史抽屉：屏幕内右侧（保持 __init__ 初始位置）
+            # 通话视图：覆盖整个屏幕区域
+            self.call_view.setGeometry(20, 118, 264, 496)
 
         def resizeEvent(self, event) -> None:
             self._relayout()

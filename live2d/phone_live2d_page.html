@@ -1,0 +1,857 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>Amadeus Phone Live2D</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body {
+    width: 100%; height: 100%;
+    overflow: hidden;
+    background: transparent;
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", sans-serif;
+  }
+
+  /* —— 布局：顶层透明容器承载"气泡区 + 手机" —— */
+  #app {
+    position: fixed; inset: 0;
+    display: flex; flex-direction: column;
+    align-items: center;
+    padding-top: 110px;           /* 顶部气泡预留区：主进程画气泡 */
+  }
+
+  /* —— 手机本体：阳极氧化红铝机身（严格 2:1 长比） —— */
+  .phone {
+    position: relative;
+    width: 280px;                 /* 2:1 —— 280 × 560 */
+    height: 560px;
+    border-radius: 20px;
+    background: linear-gradient(155deg,
+        #ff7a7a 0%,  #e0343f 10%, #c01e2b 34%,
+        #7d0f1a 62%, #9e121f 80%, #e0343f 92%, #ff8a8a 100%);
+    overflow: hidden;
+    box-shadow:
+      inset 0 0 0 1px rgba(255, 228, 228, 0.12),
+      0 12px 28px rgba(125, 15, 26, 0.38);
+    isolation: isolate;
+  }
+  /* 金属斜向高光（fauux 拉丝质感） */
+  .phone::before {
+    content: "";
+    position: absolute; inset: 4px;
+    border-radius: 16px;
+    background:
+      linear-gradient(145deg,
+        transparent 18%, rgba(255,255,255,0.14) 23%, transparent 30%),
+      linear-gradient(145deg,
+        transparent 62%, rgba(255,255,255,0.10) 68%, transparent 74%);
+    pointer-events: none;
+  }
+  /* 顶部受光亮线 */
+  .phone::after {
+    content: "";
+    position: absolute; top: 3px; left: 30px; right: 30px; height: 2px;
+    background: linear-gradient(90deg,
+        transparent, rgba(255, 217, 217, 0.90), transparent);
+    pointer-events: none;
+  }
+
+  /* —— 屏幕：深色壁纸 + 玫瑰辉光（机身内缩 8px，底部留 56px Home 区） —— */
+  .screen {
+    position: absolute;
+    top: 8px; left: 8px; right: 8px; bottom: calc(8px + 56px);
+    border-radius: 14px;
+    overflow: hidden;
+    background: #171114;
+    box-shadow: inset 0 0 0 2px rgba(0, 0, 0, 0.78);
+  }
+  .screen::before {
+    content: "";
+    position: absolute; inset: 0;
+    background:
+      url("../resources/bg.png") center/cover no-repeat,
+      #171114;
+    opacity: 1;
+  }
+  /* 屏幕底部玫瑰辉光 */
+  .screen::after {
+    content: "";
+    position: absolute;
+    left: 0; right: 0; bottom: -30px; height: 240px;
+    background: radial-gradient(closest-side,
+        rgba(210, 115, 138, 0.22) 0%,
+        rgba(210, 115, 138, 0.00) 70%);
+    pointer-events: none;
+  }
+
+  /* —— Live2D 舞台区：画布填充，角色从底部向上生长（留 Dock 64px） —— */
+  .stage {
+    position: absolute; inset: 0;
+    padding-bottom: 64px;
+  }
+  .stage::after {
+    content: "";
+    position: absolute;
+    left: 0; right: 0; top: -20px; height: 200px;
+    background: radial-gradient(closest-side,
+        rgba(210, 115, 138, 0.10) 0%,
+        rgba(210, 115, 138, 0.00) 70%);
+    pointer-events: none;
+  }
+  #canvas {
+    display: block;
+    width: 100%;
+    height: 100%;
+  }
+
+  /* —— 听筒（黑色传感器条） —— */
+  .speaker {
+    position: absolute;
+    top: 13px; left: 50%; transform: translateX(-50%);
+    width: 80px; height: 20px;
+    background: #050405;
+    border-radius: 10px;
+    z-index: 3;
+  }
+  .speaker::before {
+    content: "";
+    position: absolute; top: 7px; left: 8px;
+    width: 18px; height: 5px;
+    background: #3a3a3a;
+    border-radius: 2px;
+  }
+
+  /* —— Home 键：红色金属纹理（拉丝 + 斜高光 + 细颗粒） —— */
+  .home-btn {
+    position: absolute;
+    left: 50%; transform: translateX(-50%);
+    bottom: 13px;
+    width: 36px; height: 36px;
+    border-radius: 50%;
+    box-shadow:
+      inset 0 0 0 1px rgba(255, 255, 255, 0.18),
+      inset 0 1px 2px rgba(255, 200, 200, 0.20),
+      0 0 0 1px rgba(120, 18, 22, 0.55),
+      0 0 4px rgba(220, 40, 50, 0.18);
+    z-index: 3;
+  }
+  .home-btn::before {
+    content: "";
+    position: absolute; inset: 4px;
+    border-radius: 50%;
+    overflow: hidden;
+    background:
+      /* ① 主体红色金属渐变（基底） */
+      linear-gradient(155deg,
+        #ff7a7a 0%, #e0343f 12%, #c01e2b 38%,
+        #7d0f1a 66%, #9e121f 82%, #e0343f 95%, #ff8a8a 100%),
+      /* ② 底部暗红 */
+      radial-gradient(ellipse 70% 60% at 50% 100%,
+        rgba(90, 10, 14, 0.45) 0%,
+        rgba(90, 10, 14, 0) 65%),
+      /* ③ 顶部亮部 */
+      radial-gradient(ellipse 60% 30% at 50% 28%,
+        rgba(255, 235, 235, 0.40) 0%,
+        rgba(255, 235, 235, 0) 70%);
+  }
+  .home-btn::after {
+    content: "";
+    position: absolute; inset: 4px;
+    border-radius: 50%;
+    overflow: hidden;
+    pointer-events: none;
+    background:
+      /* ④ 斜向高光（金属反光带 118° / 115°） */
+      linear-gradient(118deg,
+        transparent 18%, rgba(255, 255, 255, 0.12) 23%, transparent 30%),
+      linear-gradient(115deg,
+        transparent 62%, rgba(255, 255, 255, 0.08) 68%, transparent 74%),
+      /* ⑤ 阳极拉丝横纹（90°） */
+      repeating-linear-gradient(90deg,
+        transparent 0 2px, rgba(255, 255, 255, 0.04) 2px 3px,
+        transparent 3px 7px, rgba(0, 0, 0, 0.08) 7px 9px,
+        transparent 9px 12px),
+      /* ⑥ 细颗粒噪点（金属粉质感） */
+      repeating-linear-gradient(0deg,
+        rgba(255, 255, 255, 0.02) 0 1px, transparent 1px 3px,
+        rgba(0, 0, 0, 0.025) 3px 4px, transparent 4px 6px);
+    box-shadow:
+      inset 0 2px 3px rgba(255, 255, 255, 0.30),
+      inset 0 -2px 4px rgba(60, 0, 0, 0.30);
+  }
+
+  /* —— 侧键：同色系金属凸起（音量 ± / 电源） —— */
+  .side {
+    position: absolute;
+    width: 4px;
+    background: linear-gradient(180deg, #e0343f 0%, #7d0f1a 100%);
+    border-radius: 3px;
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.25);
+    z-index: 2;
+  }
+  .side.left-1  { left: -3px; top: 148px; height: 64px; }
+  .side.left-2  { left: -3px; top: 222px; height: 64px; }
+  .side.right-1 { right: -1px; top: 196px; height: 88px; }
+
+  #status {
+    position: fixed; top: 4px; left: 4px;
+    font: 10px monospace; color: #888;
+    pointer-events: none;
+    z-index: 99;
+  }
+  #pet-menu {
+    position: fixed; top: 10px; right: 10px; z-index: 99;
+    width: 30px; height: 30px; border: 0; border-radius: 5px;
+    color: rgba(255,255,255,.65); background: rgba(10,10,16,.22);
+    font: 18px sans-serif; cursor: pointer;
+  }
+  #pet-menu:hover { color: white; background: rgba(209,139,36,.75); }
+
+  #enter-flash {
+    position: fixed; inset: 0; z-index: 100; background: #fff; opacity: 0;
+    pointer-events: none; animation: dissolve 3.6s steps(12) 1;
+  }
+  @keyframes dissolve {
+    0% { opacity: 1; } 4% { opacity: .1; } 8% { opacity: .8; }
+    12% { opacity: .05; } 16% { opacity: .6; } 22% { opacity: 0; } 100% { opacity: 0; }
+  }
+</style>
+</head>
+<body>
+<div id="status">Loading...</div>
+<button id="pet-menu" title="关闭桌宠">×</button>
+<div id="enter-flash"></div>
+
+<div id="app">
+  <div class="phone">
+    <div class="screen">
+      <div class="stage">
+        <canvas id="canvas"></canvas>
+      </div>
+    </div>
+    <div class="speaker"></div>
+    <div class="home-btn" id="homeBtn" title="最小化到托盘"></div>
+    <div class="side left-1"></div>
+    <div class="side left-2"></div>
+    <div class="side right-1"></div>
+  </div>
+</div>
+
+<script src="../resources/live2dcubismcore.min.js"></script>
+<script src="../resources/pixi.min.js"></script>
+<script src="../resources/cubism4.min.js"></script>
+
+<script>
+(async () => {
+  const statusEl = document.getElementById('status');
+
+  // fauux ⑧：加载期间多语言短语轮换
+  const PHRASES = ['[synchronizing mind]', '[思维同步中]', '[心を同期中]', '[make me sad]'];
+  let phraseIdx = 0;
+  const phraseTimer = setInterval(() => {
+    phraseIdx = (phraseIdx + 1) % PHRASES.length;
+    statusEl.textContent = PHRASES[phraseIdx];
+  }, 1200);
+
+  document.getElementById('pet-menu').addEventListener('click', () => {
+    if (window.pywebview?.api?.close) window.pywebview.api.close();
+    else window.close();
+  });
+
+  // Home 键 → 单击: 最小化到托盘；双击: 隐藏整个窗口
+  // 用延时区分单击与双击，避免双击时误触发单击
+  let homeClickTimer = null;
+  document.getElementById('homeBtn').addEventListener('click', () => {
+    homeClickTimer = setTimeout(() => {
+      homeClickTimer = null;
+      if (window.__amadeusHomeClick) window.__amadeusHomeClick();
+    }, 260);
+  });
+  document.getElementById('homeBtn').addEventListener('dblclick', (e) => {
+    if (homeClickTimer) {
+      clearTimeout(homeClickTimer);
+      homeClickTimer = null;
+    }
+    e.preventDefault();
+    if (window.pywebview && window.pywebview.api && window.pywebview.api.hide_window) {
+      try { window.pywebview.api.hide_window(); } catch(e2){}
+    }
+  });
+
+  // 从 query string 读取模型绝对路径
+  const params = new URLSearchParams(location.search);
+  const injectedModelUrl = "__MODEL_URL__";
+  let modelUrl = params.get('model') || injectedModelUrl;
+  if (!modelUrl) {
+    statusEl.textContent = 'ERROR: model path not specified in query string';
+    throw new Error('model path not specified');
+  }
+
+  // 检查依赖
+  if (typeof PIXI === 'undefined') {
+    statusEl.textContent = 'ERROR: pixi.js 未加载（网络问题？）';
+    throw new Error('PIXI undefined');
+  }
+  if (typeof PIXI.live2d === 'undefined') {
+    statusEl.textContent = 'ERROR: pixi-live2d-display 未加载（网络问题？）';
+    throw new Error('pixi-live2d-display undefined');
+  }
+
+  const stageEl = document.querySelector('.stage');
+
+  const app = new PIXI.Application({
+    view: document.getElementById('canvas'),
+    resizeTo: stageEl,       // 舞台尺寸随 ".stage" 容器
+    backgroundAlpha: 0,      // 透明背景
+    antialias: true,
+    preserveDrawingBuffer: true,
+  });
+
+  try {
+    const model = await PIXI.live2d.Live2DModel.from(modelUrl);
+    app.stage.addChild(model);
+
+    // 居中并按舞台大小缩放（角色底部对齐，全身可见）
+    function fitModel() {
+      const s = Math.min(
+        stageEl.clientWidth / model.width,
+        stageEl.clientHeight / model.height
+      ) * 1.05;
+      model.scale.set(s);
+      model.anchor.set(0.5, 1.0);              // 0.5 x, 1.0 y → 底部居中锚点
+      model.x = stageEl.clientWidth / 2;
+      model.y = stageEl.clientHeight;          // 底部贴齐（留出 padding-bottom 64px）
+    }
+    fitModel();
+    window.addEventListener('resize', fitModel);
+
+    const state = { angry: 0, blush: 0, smile: 0, sad: 0 };
+    const target = { angry: 0, blush: 0, smile: 0, sad: 0 };
+    let speaking = false;
+    let mouthTarget = 0;
+    let mouthState = 0;
+    let lastMouthAt = 0;
+    let blinkAt = performance.now() + 1800;
+    let pointerX = 0;
+    let pointerY = 0;
+
+    // —— 动作系统（保持与原版一致）——
+    const activeMotions = [];
+    const MOTION_DURATIONS = {
+      neutral: 1500, smile: 1200, blush: 1700, angry: 1100, sad: 1900, thinking: 1600,
+      hands_on_hips: 1800, arms_crossed: 1800, facepalm: 1600, shrug: 1400, chin_rest: 2000,
+    };
+    const MOTIONS = {
+      neutral: (core, t) => {
+        const w = Math.sin(t * Math.PI);
+        core.setParameterValueById('ParamAngleZ', 6 * w);
+        core.setParameterValueById('ParamAngleX', -2 * w);
+      },
+      smile: (core, t) => {
+        const w = Math.sin(t * Math.PI);
+        core.setParameterValueById('ParamAngleX', 4 * w);
+        core.setParameterValueById('ParamBodyAngleX', 2 * w);
+      },
+      blush: (core, t) => {
+        const w = Math.sin(t * Math.PI);
+        core.setParameterValueById('ParamAngleY', -13 * w);
+        core.setParameterValueById('ParamAngleX', -4 * w);
+        core.setParameterValueById('ParamAngleZ', -4 * w);
+      },
+      angry: (core, t) => {
+        const w = Math.sin(t * Math.PI);
+        core.setParameterValueById('ParamAngleX', 8 * w);
+        core.setParameterValueById('ParamBodyAngleX', 4 * w);
+        core.setParameterValueById('ParamAngleZ', 2.5 * Math.sin(t * Math.PI * 7) * (1 - t));
+      },
+      sad: (core, t) => {
+        const w = Math.sin(t * Math.PI);
+        core.setParameterValueById('ParamAngleX', -9 * w);
+        core.setParameterValueById('ParamBodyAngleX', -3 * w);
+      },
+      thinking: (core, t) => {
+        core.setParameterValueById('ParamAngleZ', 10 * Math.sin(t * Math.PI * 2));
+        core.setParameterValueById('ParamEyeBallX', 0.6 * Math.sin(t * Math.PI * 2));
+      },
+      hands_on_hips: (core, t) => {
+        const w = Math.sin(t * Math.PI);
+        core.setParameterValueById('Param6', 24 * w);
+        core.setParameterValueById('Param7', 22 * w);
+        core.setParameterValueById('ParamBodyAngleZ', 4 * w);
+        core.setParameterValueById('ParamAngleX', 2 * w);
+      },
+      arms_crossed: (core, t) => {
+        const w = Math.sin(t * Math.PI);
+        core.setParameterValueById('Param6', -20 * w);
+        core.setParameterValueById('Param7', -26 * w);
+        core.setParameterValueById('ParamAngleX', -3 * w);
+        core.setParameterValueById('ParamBodyAngleX', -2 * w);
+      },
+      facepalm: (core, t) => {
+        const w = Math.sin(t * Math.PI);
+        core.setParameterValueById('Param4', -24 * w);
+        core.setParameterValueById('Param6', 14 * w);
+        core.setParameterValueById('ParamAngleX', -7 * w);
+        core.setParameterValueById('ParamAngleZ', 3 * w);
+      },
+      shrug: (core, t) => {
+        const w = Math.sin(t * Math.PI);
+        const j = Math.sin(t * Math.PI * 6) * 0.5;
+        core.setParameterValueById('Param7', 18 * w + 4 * j);
+        core.setParameterValueById('Param6', 12 * w);
+        core.setParameterValueById('ParamAngleZ', -5 * w);
+      },
+      chin_rest: (core, t) => {
+        const w = Math.sin(t * Math.PI);
+        core.setParameterValueById('Param6', -16 * w);
+        core.setParameterValueById('Param4', 20 * w);
+        core.setParameterValueById('ParamAngleZ', 8 * w);
+        core.setParameterValueById('ParamAngleX', -4 * w);
+        core.setParameterValueById('ParamEyeBallY', -0.5 * w);
+      },
+    };
+
+    function playMotion(name) {
+      const apply = MOTIONS[name];
+      if (!apply) return;
+      const duration = MOTION_DURATIONS[name] || 1500;
+      for (let i = activeMotions.length - 1; i >= 0; i--) {
+        if (activeMotions[i].name === name) activeMotions.splice(i, 1);
+      }
+      activeMotions.push({ name, start: performance.now(), duration, apply });
+    }
+
+    app.ticker.add(() => {
+      Object.keys(state).forEach(key => state[key] += (target[key] - state[key]) * 0.12);
+      const core = model.internalModel.coreModel;
+      const now = performance.now();
+
+      const blinkDistance = Math.abs(now - blinkAt);
+      const eyeOpen = blinkDistance < 90 ? Math.max(0, blinkDistance / 90) : 1;
+      if (now > blinkAt + 90) blinkAt = now + 2200 + Math.random() * 2600;
+
+      core.setParameterValueById('Param8', state.angry);
+      core.setParameterValueById('Param9', state.blush);
+      core.setParameterValueById('ParamEyeRSmile', state.smile);
+      core.setParameterValueById('ParamEyeROpen', Math.min(eyeOpen, 1 - state.smile * 0.55 - state.sad * 0.35));
+      core.setParameterValueById('ParamEyeLOpen', Math.min(eyeOpen, 1 - state.smile * 0.55 - state.sad * 0.35));
+
+      core.setParameterValueById('ParamAngleX', pointerX * 18);
+      core.setParameterValueById('ParamAngleY', pointerY * 12);
+      core.setParameterValueById('ParamEyeBallX', pointerX);
+      core.setParameterValueById('ParamEyeBallY', pointerY);
+
+      const breath = Math.sin(now / 2200 * Math.PI * 2);
+      core.setParameterValueById('ParamBodyAngleX', breath * 1.5);
+      core.setParameterValueById('ParamBodyAngleZ', Math.cos(now / 2600 * Math.PI * 2) * 1.0);
+
+      for (let i = activeMotions.length - 1; i >= 0; i--) {
+        const m = activeMotions[i];
+        const t = (now - m.start) / m.duration;
+        if (t >= 1) { activeMotions.splice(i, 1); continue; }
+        m.apply(core, t);
+      }
+
+      if (speaking) {
+        if (now - lastMouthAt > 400) {
+          const rhythm = 0.5 + 0.5 * Math.sin(now / 240 * Math.PI * 2);
+          mouthTarget = Math.max(0.25, 0.2 + 0.5 * rhythm + Math.random() * 0.15);
+        }
+      } else {
+        mouthTarget = 0;
+      }
+      mouthState += (mouthTarget - mouthState) * 0.28;
+      core.setParameterValueById('ParamMouthOpenY', 0.06 + mouthState * 0.65);
+    });
+
+    // 鼠标范围限制到屏幕区域内（避免 pointerX/Y 跟踪过界）
+    const screenEl = document.querySelector('.screen');
+    window.addEventListener('mousemove', event => {
+      const rect = screenEl.getBoundingClientRect();
+      const x = event.clientX - rect.left;
+      const y = event.clientY - rect.top;
+      pointerX = Math.max(-1, Math.min(1, x / rect.width * 2 - 1));
+      pointerY = Math.max(-1, Math.min(1, y / rect.height * 2 - 1));
+    });
+
+    window.__amadeus = {
+      model, app,
+      setEmotion(emotion) {
+        Object.keys(target).forEach(key => target[key] = 0);
+        if (emotion in target) target[emotion] = emotion === 'smile' ? 0.75 : 0.85;
+        playMotion(emotion);
+      },
+      setSpeaking(value) {
+        speaking = Boolean(value);
+        if (!speaking) mouthTarget = 0;
+      },
+      setMouth(intensity) {
+        mouthTarget = Math.max(0, Math.min(1, Number(intensity) || 0));
+        lastMouthAt = performance.now();
+      },
+      playMotion,
+    };
+
+    // ============================================================
+    // 函数：composeFrame()
+    // 作用：把"手机壳（Canvas 2D 绘制）+ Live2D 角色帧（WebGL PIXI）"
+    //       合成到 #composite canvas（304×690，透明背景），并返回 dataURL。
+    //       这就是 renderer_process 每 15fps 截取的画面。
+    //       手机壳 UI 完全由 JS Canvas 绘制（即 PyWeb 绘制，非 Qt），
+    //       尺寸严格 2:1（手机本体 280×560）。
+    // 参数：无
+    // 返回值：str —— PNG dataURL（手机+角色 合成帧）
+    // ============================================================
+    const COMPOSITE_W = 304;   // #app 宽 = 280 手机 + 24px 边距（12+12）
+    const COMPOSITE_H = 690;   // #app 高 = 110 气泡预留 + 560 手机 + 20 底余
+    const PHONE_X = 12;        // 手机在 #app 内水平居中（(304-280)/2）
+    const PHONE_Y = 110;       // 手机在 #app 顶部 y=110（气泡预留区高度）
+    const PHONE_W = 280;
+    const PHONE_H = 560;
+    const BORDER = 8;          // 屏幕内缩
+    const BOTTOM = 56;         // 底部 Home 区高度
+
+    const compCanvas = document.createElement('canvas');
+    compCanvas.width = COMPOSITE_W;
+    compCanvas.height = COMPOSITE_H;
+    compCanvas.style.display = 'none';
+    document.body.appendChild(compCanvas);
+    const compCtx = compCanvas.getContext('2d');
+
+    // 预加载屏幕壁纸（bg.png）——失败时回退纯深色
+    const bgPromise = (async () => {
+      try {
+        const img = new Image();
+        img.crossOrigin = 'anonymous';
+        await new Promise((res, rej) => {
+          img.onload = res; img.onerror = rej;
+          img.src = '../resources/bg.png';
+        });
+        return img;
+      } catch (_) {
+        return null;
+      }
+    })();
+
+    // —— 辅助：画圆角矩形路径（Canvas 2D 原生 roundRect 兼容兜底） ——
+    function roundRect(ctx, x, y, w, h, r) {
+      const rr = Math.min(r, w / 2, h / 2);
+      ctx.beginPath();
+      ctx.moveTo(x + rr, y);
+      ctx.lineTo(x + w - rr, y);
+      ctx.quadraticCurveTo(x + w, y, x + w, y + rr);
+      ctx.lineTo(x + w, y + h - rr);
+      ctx.quadraticCurveTo(x + w, y + h, x + w - rr, y + h);
+      ctx.lineTo(x + rr, y + h);
+      ctx.quadraticCurveTo(x, y + h, x, y + h - rr);
+      ctx.lineTo(x, y + rr);
+      ctx.quadraticCurveTo(x, y, x + rr, y);
+      ctx.closePath();
+    }
+
+    // —— 画手机外壳（对应 phone_mockup.html .phone 渐变） ——
+    function drawPhoneShell(ctx, px, py, pw, ph) {
+      // 主体 155deg 渐变
+      const grad = ctx.createLinearGradient(px, py, px + pw, py + ph);
+      grad.addColorStop(0.00, '#ff7a7a');
+      grad.addColorStop(0.10, '#e0343f');
+      grad.addColorStop(0.34, '#c01e2b');
+      grad.addColorStop(0.62, '#7d0f1a');
+      grad.addColorStop(0.80, '#9e121f');
+      grad.addColorStop(0.92, '#e0343f');
+      grad.addColorStop(1.00, '#ff8a8a');
+      roundRect(ctx, px, py, pw, ph, 20);
+      ctx.fillStyle = grad;
+      ctx.fill();
+
+      // 斜向高光 1（145deg 从左上）
+      const innerX = px + 4, innerY = py + 4, innerW = pw - 8, innerH = ph - 8;
+      const h1 = ctx.createLinearGradient(innerX, innerY, innerX + innerW, innerY + innerH);
+      h1.addColorStop(0.18, 'rgba(255,255,255,0)');
+      h1.addColorStop(0.23, 'rgba(255,255,255,0.14)');
+      h1.addColorStop(0.30, 'rgba(255,255,255,0)');
+      roundRect(ctx, innerX, innerY, innerW, innerH, 16);
+      ctx.fillStyle = h1;
+      ctx.fill();
+      // 斜向高光 2
+      const h2 = ctx.createLinearGradient(innerX, innerY, innerX + innerW, innerY + innerH);
+      h2.addColorStop(0.62, 'rgba(255,255,255,0)');
+      h2.addColorStop(0.68, 'rgba(255,255,255,0.10)');
+      h2.addColorStop(0.74, 'rgba(255,255,255,0)');
+      roundRect(ctx, innerX, innerY, innerW, innerH, 16);
+      ctx.fillStyle = h2;
+      ctx.fill();
+
+      // 顶部受光亮线
+      const tl = ctx.createLinearGradient(px + 30, 0, px + pw - 30, 0);
+      tl.addColorStop(0.0, 'rgba(255, 217, 217, 0)');
+      tl.addColorStop(0.5, 'rgba(255, 217, 217, 0.90)');
+      tl.addColorStop(1.0, 'rgba(255, 217, 217, 0)');
+      ctx.fillStyle = tl;
+      ctx.fillRect(px + 30, py + 3, pw - 60, 2);
+    }
+
+    // —— 听筒 ——
+    function drawSpeaker(ctx, px, py, pw) {
+      const sw = 80, sh = 20;
+      const sx = px + pw / 2 - sw / 2;
+      const sy = py + 13;
+      roundRect(ctx, sx, sy, sw, sh, 10);
+      ctx.fillStyle = '#050405';
+      ctx.fill();
+      // 传感器
+      roundRect(ctx, sx + 8, sy + (sh - 5) / 2, 18, 5, 2);
+      ctx.fillStyle = '#3a3a3a';
+      ctx.fill();
+    }
+
+    // —— Home 键（红色金属纹理版：拉丝 + 斜高光 + 颗粒） ——
+    function drawHomeBtn(ctx, px, py, pw, ph) {
+      const d = 36;
+      const hx = px + pw / 2 - d / 2;
+      const hy = py + ph - 13 - d;
+      const cx = hx + d / 2, cy = hy + d / 2;
+
+      ctx.save();
+
+      // 外圈深暗红金属环
+      const outerGrad = ctx.createRadialGradient(cx, cy - 6, 2, cx, cy, d / 2 + 1);
+      outerGrad.addColorStop(0.0, '#f07070');
+      outerGrad.addColorStop(0.5, '#b83030');
+      outerGrad.addColorStop(1.0, '#701010');
+      ctx.beginPath();
+      ctx.arc(cx, cy, d / 2 + 1, 0, Math.PI * 2);
+      ctx.fillStyle = outerGrad;
+      ctx.fill();
+
+      // 外轮廓暗边
+      ctx.beginPath();
+      ctx.arc(cx, cy, d / 2 + 1, 0, Math.PI * 2);
+      ctx.strokeStyle = 'rgba(120, 18, 22, 0.55)';
+      ctx.lineWidth = 1;
+      ctx.stroke();
+
+      // 裁剪到内圆，后续纹理不溢出
+      const id = d - 8, ix = cx - id / 2, iy = cy - id / 2;
+      ctx.beginPath();
+      ctx.arc(cx, cy, id / 2, 0, Math.PI * 2);
+      ctx.clip();
+
+      // ① 主体金属基底（155° 七档渐变，与手机壳一致）
+      const redMetal = ctx.createLinearGradient(cx - id / 2, cy - id / 2, cx + id / 2, cy + id / 2);
+      redMetal.addColorStop(0.00, '#ff7a7a');
+      redMetal.addColorStop(0.12, '#e0343f');
+      redMetal.addColorStop(0.38, '#c01e2b');
+      redMetal.addColorStop(0.66, '#7d0f1a');
+      redMetal.addColorStop(0.82, '#9e121f');
+      redMetal.addColorStop(0.95, '#e0343f');
+      redMetal.addColorStop(1.00, '#ff8a8a');
+      ctx.fillStyle = redMetal;
+      ctx.fillRect(ix, iy, id, id);
+
+      // ② 底部暗红
+      const bottomShade = ctx.createRadialGradient(cx, cy + id * 0.3, 1, cx, cy + id * 0.5, id * 0.7);
+      bottomShade.addColorStop(0.0, 'rgba(90, 10, 14, 0.45)');
+      bottomShade.addColorStop(1.0, 'rgba(90, 10, 14, 0)');
+      ctx.fillStyle = bottomShade;
+      ctx.fillRect(ix, iy, id, id);
+
+      // ③ 顶部亮部
+      const topHi = ctx.createRadialGradient(cx, cy - id * 0.28, 1, cx, cy - id * 0.2, id * 0.55);
+      topHi.addColorStop(0.0, 'rgba(255, 235, 235, 0.40)');
+      topHi.addColorStop(1.0, 'rgba(255, 235, 235, 0)');
+      ctx.fillStyle = topHi;
+      ctx.fillRect(ix, iy, id, id);
+
+      // ④ 斜向高光带 118°
+      const hi1 = ctx.createLinearGradient(
+        ix + id * 0.18, iy + id * 0.22,
+        ix + id * 0.30, iy + id * 0.28
+      );
+      hi1.addColorStop(0.0, 'rgba(255,255,255,0)');
+      hi1.addColorStop(0.5, 'rgba(255,255,255,0.12)');
+      hi1.addColorStop(1.0, 'rgba(255,255,255,0)');
+      ctx.fillStyle = hi1;
+      ctx.fillRect(ix, iy, id, id);
+
+      // ④ 斜向高光带 115°
+      const hi2 = ctx.createLinearGradient(
+        ix + id * 0.62, iy + id * 0.66,
+        ix + id * 0.74, iy + id * 0.72
+      );
+      hi2.addColorStop(0.0, 'rgba(255,255,255,0)');
+      hi2.addColorStop(0.5, 'rgba(255,255,255,0.08)');
+      hi2.addColorStop(1.0, 'rgba(255,255,255,0)');
+      ctx.fillStyle = hi2;
+      ctx.fillRect(ix, iy, id, id);
+
+      // ⑤ 阳极拉丝横纹（90° repeating）
+      const lines = [
+        { x1: 0, x2: 2, color: 'rgba(255,255,255,0.04)' },
+        { x1: 3, x2: 7, color: 'transparent' },
+        { x1: 7, x2: 9, color: 'rgba(0,0,0,0.08)' },
+        { x1: 9, x2: 12, color: 'transparent' },
+      ];
+      const period = 12;
+      for (let off = -period; off < id + period; off += period) {
+        for (const seg of lines) {
+          const sx = ix + off + seg.x1;
+          const ex = ix + off + seg.x2;
+          if (ex < ix || sx > ix + id) continue;
+          const sx2 = Math.max(sx, ix);
+          const ex2 = Math.min(ex, ix + id);
+          if (ex2 > sx2) {
+            ctx.fillStyle = seg.color;
+            ctx.fillRect(sx2, iy, ex2 - sx2, id);
+          }
+        }
+      }
+
+      // ⑥ 细颗粒噪点（金属粉质感）
+      for (let gy = iy; gy < iy + id; gy += 6) {
+        ctx.fillStyle = 'rgba(255,255,255,0.02)';
+        ctx.fillRect(ix, gy, id, 1);
+        ctx.fillStyle = 'rgba(0,0,0,0.025)';
+        ctx.fillRect(ix, gy + 3, id, 1);
+      }
+
+      // 取消裁剪
+      ctx.restore();
+
+      // 内圈细边（金属环）
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(cx, cy, id / 2 - 0.5, 0, Math.PI * 2);
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.18)';
+      ctx.lineWidth = 0.8;
+      ctx.stroke();
+
+      // 外圈发光
+      ctx.beginPath();
+      ctx.arc(cx, cy, d / 2 + 2, 0, Math.PI * 2);
+      ctx.strokeStyle = 'rgba(220, 40, 50, 0.12)';
+      ctx.lineWidth = 1;
+      ctx.stroke();
+
+      // 顶部受光亮线（与手机机身顶部光条同风格）
+      ctx.beginPath();
+      ctx.moveTo(cx - id * 0.28, cy - id / 2 + 1);
+      ctx.lineTo(cx + id * 0.28, cy - id / 2 + 1);
+      ctx.strokeStyle = 'rgba(255, 220, 220, 0.45)';
+      ctx.lineWidth = 1.2;
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    // —— 侧键 ——
+    function drawSideKeys(ctx, px, py) {
+      const sg = ctx.createLinearGradient(0, py, 0, py + 300);
+      sg.addColorStop(0, '#e0343f');
+      sg.addColorStop(1, '#7d0f1a');
+      ctx.fillStyle = sg;
+      ctx.strokeStyle = 'rgba(255,255,255,0.25)';
+      ctx.lineWidth = 1;
+      // 音量 +
+      roundRect(ctx, px - 3, py + 148, 4, 64, 3); ctx.fill(); ctx.stroke();
+      // 音量 -
+      roundRect(ctx, px - 3, py + 222, 4, 64, 3); ctx.fill(); ctx.stroke();
+      // 电源（右）
+      roundRect(ctx, px + 280 - 1, py + 196, 4, 88, 3); ctx.fill(); ctx.stroke();
+    }
+
+    // —— 主合成函数（同步：pywebview evaluate_js 只支持同步返回） ——
+    //   bgImg 加载完成前只画纯色背景（不阻塞），之后自动使用壁纸。
+    let _cachedBg = null;
+    bgPromise.then(img => { _cachedBg = img; });
+
+    function drawScreenSync(ctx, px, py, pw, ph, pixiCanvas) {
+      const sx = px + BORDER;
+      const sy = py + BORDER;
+      const sw = pw - BORDER * 2;
+      const sh = ph - BORDER - BOTTOM;
+
+      ctx.save();
+      roundRect(ctx, sx, sy, sw, sh, 14);
+      ctx.clip();
+
+      ctx.fillStyle = '#171114';
+      ctx.fillRect(sx, sy, sw, sh);
+
+      if (_cachedBg) {
+        const bw = _cachedBg.naturalWidth, bh = _cachedBg.naturalHeight;
+        const scale = Math.max(sw / bw, sh / bh);
+        const dw = bw * scale, dh = bh * scale;
+        const dx = sx + (sw - dw) / 2;
+        const dy = sy + (sh - dh) / 2;
+        ctx.drawImage(_cachedBg, dx, dy, dw, dh);
+      }
+
+      const bg1 = ctx.createRadialGradient(
+        sx + sw / 2, sy + sh + 30, 120,
+        sx + sw / 2, sy + sh, 120
+      );
+      bg1.addColorStop(0, 'rgba(210, 115, 138, 0.22)');
+      bg1.addColorStop(1, 'rgba(210, 115, 138, 0)');
+      ctx.fillStyle = bg1;
+      ctx.fillRect(sx, sy, sw, sh);
+
+      const bg2 = ctx.createRadialGradient(
+        sx + sw / 2, sy - 20, 100,
+        sx + sw / 2, sy, 100
+      );
+      bg2.addColorStop(0, 'rgba(210, 115, 138, 0.10)');
+      bg2.addColorStop(1, 'rgba(210, 115, 138, 0)');
+      ctx.fillStyle = bg2;
+      ctx.fillRect(sx, sy, sw, sh);
+
+      // Live2D 角色（按 HTML 舞台规则贴到屏幕：底部对齐，留 56 Dock 槽位）
+      if (pixiCanvas) {
+        const pw2 = pixiCanvas.width, ph2 = pixiCanvas.height;
+        if (pw2 > 0 && ph2 > 0) {
+          const ratio = Math.min(sw / pw2, (sh - 56) / ph2) * 1.05;
+          const dw2 = pw2 * ratio;
+          const dh2 = ph2 * ratio;
+          const dx = sx + (sw - dw2) / 2;
+          const dy = sy + sh - dh2;
+          ctx.drawImage(pixiCanvas, dx, dy, dw2, dh2);
+        }
+      }
+
+      ctx.restore();
+
+      ctx.save();
+      ctx.strokeStyle = 'rgba(0,0,0,0.78)';
+      ctx.lineWidth = 2;
+      roundRect(ctx, sx, sy, sw, sh, 14);
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    window.__amadeusComposite = function composeFrameSync() {
+      compCtx.clearRect(0, 0, COMPOSITE_W, COMPOSITE_H);
+      const pixiCanvas = (window.__amadeus && window.__amadeus.app)
+        ? window.__amadeus.app.view
+        : null;
+
+      drawPhoneShell(compCtx, PHONE_X, PHONE_Y, PHONE_W, PHONE_H);
+      drawScreenSync(compCtx, PHONE_X, PHONE_Y, PHONE_W, PHONE_H, pixiCanvas);
+      drawSpeaker(compCtx, PHONE_X, PHONE_Y, PHONE_W);
+      drawHomeBtn(compCtx, PHONE_X, PHONE_Y, PHONE_W, PHONE_H);
+      drawSideKeys(compCtx, PHONE_X, PHONE_Y);
+
+      return compCanvas.toDataURL('image/png');
+    };
+
+    statusEl.textContent = 'OK';
+    clearInterval(phraseTimer);
+    document.title = 'KURISU_READY';
+    setTimeout(() => statusEl.style.display = 'none', 1500);
+  } catch (e) {
+    clearInterval(phraseTimer);
+    statusEl.textContent = 'ERROR: 模型加载失败 ' + e.message;
+    console.error(e);
+  }
+})();
+</script>
+</body>
+</html>

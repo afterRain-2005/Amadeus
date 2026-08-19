@@ -44,21 +44,24 @@ _active_harness: DeepSeekHarness | None = None
 
 
 def cancel_active_run() -> bool:
-    """从任意线程中断当前正在运行的 harness turn。
+    """异步中断当前正在运行的 harness turn。
 
-    工作线程阻塞在 harness.run() 的 notification 循环期间，UI 主线程调用本函数；
-    客户端 transport 的写侧有独立锁，因此与 run 循环并发安全。返回是否确实发起中断。
+    UI 主线程只负责发起请求，不同步等待运行时响应，避免异常运行时让窗口卡死。
+    返回值表示当前是否存在可中断的 harness 回合。
     """
     with _active_lock:
         session_id = _active_session_id
         harness = _active_harness
     if session_id is None or harness is None:
         return False
-    try:
-        harness.cancel(session_id)
-        return True
-    except Exception:
-        return False
+    def _cancel() -> None:
+        try:
+            harness.cancel(session_id)
+        except Exception:
+            pass
+
+    threading.Thread(target=_cancel, name="amadeus-harness-cancel", daemon=True).start()
+    return True
 
 
 def _wrap_harness_approval(on_approval: Callable[[dict], str]) -> Callable[[dict], str]:
@@ -160,16 +163,150 @@ def _resolve_harness_path(value: str | None, fallback_name: str) -> Path:
 
 
 def _extract_tool_content(content: object) -> str:
-    """从 tool/result 的 content 块中提取纯文本（text 块拼接）。"""
+    """从 tool/result 的 content 块中递归提取纯文本。"""
     if not isinstance(content, list):
         return str(content) if content else ""
     parts: list[str] = []
     for block in content:
-        if isinstance(block, dict) and block.get("type") == "text":
+        if not isinstance(block, dict):
+            continue
+        if block.get("type") == "text":
             text = block.get("text")
             if isinstance(text, str) and text:
                 parts.append(text)
+        elif block.get("type") == "tool-result":
+            nested = _extract_tool_content(block.get("content"))
+            if nested:
+                parts.append(nested)
     return "\n".join(parts)
+
+
+class _HarnessEventAdapter:
+    """把 Harness 的 durable session events 转成 Amadeus UI 回调。"""
+
+    def __init__(
+        self,
+        *,
+        on_delta: Callable[[str], None],
+        on_status: Callable[[str], None],
+        on_tool_event: Callable[[dict], None],
+    ) -> None:
+        self.on_delta = on_delta
+        self.on_status = on_status
+        self.on_tool_event = on_tool_event
+        self.call_names: dict[str, str] = {}
+        self.call_arguments: dict[str, dict] = {}
+        self.streamed_steps: set[tuple[object, object]] = set()
+
+    def __call__(self, notification: Notification) -> None:
+        if notification.method != "session.event":
+            return
+        event = notification.payload.get("event")
+        if not isinstance(event, dict):
+            return
+        data = event.get("data")
+        data = data if isinstance(data, dict) else {}
+        event_type = str(event.get("type", ""))
+
+        if event_type == "assistant/chunk":
+            chunk = data.get("chunk")
+            if not isinstance(chunk, dict) or chunk.get("type") != "text-delta":
+                return
+            text = chunk.get("text")
+            if isinstance(text, str) and text:
+                self.streamed_steps.add((data.get("turn"), data.get("step")))
+                self.on_delta(text)
+            return
+
+        if event_type == "assistant/message":
+            if (data.get("turn"), data.get("step")) in self.streamed_steps:
+                return
+            message = data.get("message")
+            content = message.get("content") if isinstance(message, dict) else data.get("content")
+            if isinstance(content, list):
+                for block in content:
+                    if isinstance(block, dict) and block.get("type") == "text":
+                        text = block.get("text")
+                        if isinstance(text, str) and text:
+                            self.on_delta(text)
+            return
+
+        if event_type in ("tool/start", "tool/call"):
+            self._tool_call(data)
+            return
+
+        if event_type in ("tool/end", "tool/result"):
+            self._tool_result(data)
+
+    def _tool_call(self, data: dict) -> None:
+        name = str(data.get("name") or data.get("tool") or "tool")
+        call_id = str(data.get("callId", ""))
+        args_raw = data.get("arguments")
+        args_dict: dict = {}
+        if isinstance(args_raw, str):
+            try:
+                parsed = json.loads(args_raw)
+                if isinstance(parsed, dict):
+                    args_dict = parsed
+            except (TypeError, ValueError):
+                pass
+        elif isinstance(args_raw, dict):
+            args_dict = args_raw
+        if call_id:
+            self.call_names[call_id] = name
+            self.call_arguments[call_id] = args_dict
+        self.on_status(f"正在执行 {name}…")
+        self.on_tool_event({
+            "kind": "tool_call",
+            "callId": call_id,
+            "name": name,
+            "arguments": args_dict,
+            "argumentsRaw": args_raw,
+        })
+
+    def _tool_result(self, data: dict) -> None:
+        message = data.get("message")
+        message = message if isinstance(message, dict) else {}
+        source = message.get("source")
+        source = source if isinstance(source, dict) else {}
+        call_id = str(data.get("callId") or source.get("callId") or "")
+        content_source: object = data.get("content")
+        is_error = bool(data.get("isError", False) or data.get("error"))
+
+        message_content = message.get("content")
+        if isinstance(message_content, list):
+            content_source = message_content
+            for block in message_content:
+                if not isinstance(block, dict) or block.get("type") != "tool-result":
+                    continue
+                call_id = str(block.get("toolCallId") or call_id)
+                content_source = block.get("content")
+                is_error = bool(block.get("isError", False) or data.get("error"))
+                break
+        elif message:
+            content_source = message.get("content", content_source)
+            is_error = bool(message.get("isError", is_error) or data.get("error"))
+
+        name = self.call_names.pop(
+            call_id,
+            str(data.get("name") or data.get("tool") or "tool"),
+        )
+        arguments = self.call_arguments.pop(call_id, {})
+        content_text = _extract_tool_content(content_source)
+        error = data.get("error")
+        if is_error and not content_text and isinstance(error, dict):
+            content_text = ": ".join(
+                part for part in (str(error.get("name", "")), str(error.get("code", ""))) if part
+            )
+        self.on_status("工具执行失败" if is_error else "工具执行完成")
+        self.on_tool_event({
+            "kind": "tool_result",
+            "callId": call_id,
+            "name": name,
+            "arguments": arguments,
+            "content": content_text,
+            "isError": is_error,
+        })
 
 
 def run_harness_turn(
@@ -312,66 +449,11 @@ def _run_via_sdk(
         request_timeout_seconds=float(request_timeout_seconds or 180),
     )
 
-    call_names: dict[str, str] = {}
-
-    def handle_notification(notification: Notification) -> None:
-        method = notification.method
-        payload = notification.payload
-        if method != "session.event":
-            return
-        event = payload.get("event")
-        if not isinstance(event, dict):
-            return
-        event_type = event.get("type", "")
-        data = event.get("data")
-        data = data if isinstance(data, dict) else {}
-
-        if event_type == "assistant/message":
-            message = data.get("message")
-            content = message.get("content") if isinstance(message, dict) else data.get("content")
-            if isinstance(content, list):
-                for block in content:
-                    if isinstance(block, dict) and block.get("type") == "text":
-                        text = str(block.get("text", ""))
-                        if text:
-                            on_delta(text)
-        elif event_type in ("tool/start", "tool/call"):
-            name = str(data.get("name") or data.get("tool") or "tool")
-            call_id = str(data.get("callId", ""))
-            args_raw = data.get("arguments")
-            args_dict: dict = {}
-            if isinstance(args_raw, str):
-                try:
-                    parsed = json.loads(args_raw)
-                    if isinstance(parsed, dict):
-                        args_dict = parsed
-                except Exception:
-                    args_dict = {}
-            elif isinstance(args_raw, dict):
-                args_dict = args_raw
-            if call_id:
-                call_names[call_id] = name
-            on_status(f"正在执行 {name}…")
-            on_tool_event({
-                "kind": "tool_call",
-                "callId": call_id,
-                "name": name,
-                "arguments": args_dict,
-                "argumentsRaw": args_raw,
-            })
-        elif event_type in ("tool/end", "tool/result"):
-            call_id = str(data.get("callId", ""))
-            name = call_names.get(call_id, str(data.get("name") or data.get("tool") or "tool"))
-            is_error = bool(data.get("isError", False))
-            content_text = _extract_tool_content(data.get("content"))
-            on_status("工具执行完成")
-            on_tool_event({
-                "kind": "tool_result",
-                "callId": call_id,
-                "name": name,
-                "content": content_text,
-                "isError": is_error,
-            })
+    handle_notification = _HarnessEventAdapter(
+        on_delta=on_delta,
+        on_status=on_status,
+        on_tool_event=on_tool_event,
+    )
 
     approval_handler = _wrap_harness_approval(on_approval)
     session_id = f"amadeus-{uuid.uuid4().hex}"

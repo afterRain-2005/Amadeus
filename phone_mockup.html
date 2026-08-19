@@ -594,6 +594,19 @@ setInterval(function(){
   if(del && ci === 0){ del = false; ti = (ti + 1) % texts.length; }
 }, 90);
 
+/* 双击气泡区隐藏/显示（.chat 包含名牌+气泡+状态行） */
+var chatArea = document.querySelector('.chat');
+chatArea.addEventListener('dblclick', function(){
+  chatArea.style.transition = 'opacity .25s';
+  if (chatArea.style.opacity === '0') {
+    chatArea.style.opacity = '1';
+    chatArea.style.pointerEvents = 'auto';
+  } else {
+    chatArea.style.opacity = '0';
+    chatArea.style.pointerEvents = 'none';
+  }
+});
+
 /* 底部槽位互斥切换（复刻 desktop_pet._toggle_input_panel：200ms 交叉淡入淡出） */
 var dockbar = document.getElementById('dockbar');
 var chatbar = document.getElementById('chatbar');

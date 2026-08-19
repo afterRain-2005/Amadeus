@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
 )
 
 from core.storage import load_config, save_config
+from ui.widgets.crt_title_bar import CrtTitleBar
 
 from pathlib import Path
 _DITHER_URL = str(
@@ -23,11 +24,6 @@ _ABOUT_BG_URL = str(
 
 _QSS_TMPL = """
 QDialog#settingsDialog { background-color: #171114; color: #c1b492; border: 1px solid #d2738a; background-image: url(__DITHER__); }
-QWidget#settingsTitleBar { background-color: #21171b; border: 1px solid #d2738a; border-left: 8px solid #d2738a; }
-QLabel#settingsTitle { color: #d2738a; font: 700 13px "Times New Roman", "Microsoft YaHei"; }
-QLabel#settingsSignature { color: #8a7f63; font: 10px "Consolas", "Microsoft YaHei"; }
-QPushButton#settingsClose { background: #171114; color: #d2738a; border: 1px solid #d2738a; min-width: 24px; max-width: 24px; min-height: 22px; max-height: 22px; padding: 0; font: 700 14px "Consolas", "Microsoft YaHei"; }
-QPushButton#settingsClose:hover { background: #d2738a; color: #171114; }
 QTabWidget::pane { border: 1px solid #d2738a; background-color: #08031a; background-image: url(ABOUT_BG); background-repeat: no-repeat; background-position: left top; top: -1px; }
 QTabBar::tab { background: #21171b; color: #8a7f63; border: 1px solid #8a7f63; border-bottom: 0; padding: 7px 12px; min-width: 72px; font: 12px "Consolas", "Microsoft YaHei"; }
 QTabBar::tab:selected { background: #d2738a; color: #171114; border-color: #d2738a; }
@@ -506,20 +502,12 @@ class SettingsDialog(QDialog):
         buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
         buttons.accepted.connect(self._save)
         buttons.rejected.connect(self.reject)
-        title_bar = QWidget(self)
-        title_bar.setObjectName("settingsTitleBar")
-        title_layout = QHBoxLayout(title_bar)
-        title_layout.setContentsMargins(10, 4, 6, 4)
-        title_layout.setSpacing(8)
-        title = QLabel("⌈ Ａｍａｄｅｕｓ Ｓｅｔｔｉｎｇｓ ⌋", title_bar)
-        title.setObjectName("settingsTitle")
-        title_glow = QGraphicsDropShadowEffect(title)
-        title_glow.setColor(QColor(210, 115, 138, 180))
-        title_glow.setBlurRadius(14)
-        title_glow.setOffset(1, 3)
-        title.setGraphicsEffect(title_glow)
-        signature = QLabel("tait-crt-interface-skill", title_bar)
-        signature.setObjectName("settingsSignature")
+        self.title_bar = CrtTitleBar(
+            "⌈ Ａｍａｄｅｕｓ Ｓｅｔｔｉｎｇｓ ⌋",
+            "tait-crt-interface-skill",
+            self,
+            self.reject,
+        )
         # 相位签名短语轮换（fauux ⑧⑬：多语言短语交替）
         self._sig_phrases = (
             "tait-crt-interface-skill", "私の声、聞こえる？",
@@ -530,19 +518,10 @@ class SettingsDialog(QDialog):
         self._sig_timer.setInterval(1200)
         self._sig_timer.timeout.connect(self._cycle_signature)
         self._sig_timer.start()
-        close_btn = QPushButton("X", title_bar)
-        close_btn.setObjectName("settingsClose")
-        close_btn.setToolTip("关闭")
-        close_btn.clicked.connect(self.reject)
-        title_layout.addWidget(title)
-        title_layout.addWidget(signature)
-        title_layout.addStretch()
-        title_layout.addWidget(close_btn)
-
         layout = QVBoxLayout(self)
         layout.setContentsMargins(10, 10, 10, 10)
         layout.setSpacing(10)
-        layout.addWidget(title_bar)
+        layout.addWidget(self.title_bar)
         layout.addWidget(tabs)
 
         # 底部左侧滚动台词（fauux 长句 marquee）：与 Save/Cancel 同一行，
@@ -585,9 +564,7 @@ class SettingsDialog(QDialog):
     def _cycle_signature(self) -> None:
         """轮换标题栏右侧的相位签名短语（fauux [make me sad] 交互）。"""
         self._sig_index = (self._sig_index + 1) % len(self._sig_phrases)
-        sig = self.findChild(QLabel, "settingsSignature")
-        if sig is not None:
-            sig.setText(self._sig_phrases[self._sig_index])
+        self.title_bar.set_signature(self._sig_phrases[self._sig_index])
 
     def _tick_ticker(self) -> None:
         """底部左侧滚动台词推进：文本自右向左缓慢滚动，出屏后从头进入。"""
@@ -977,5 +954,4 @@ class SettingsDialog(QDialog):
             self._tunnel = None
         save_config(config)
         self.accept()
-
 
