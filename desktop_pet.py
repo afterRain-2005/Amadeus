@@ -2103,7 +2103,12 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
         #   full  bool  是否强制全量重建（默认 False）
         # 返回值：无（None）
         # ============================================================
-        def render_lines(self, lines: list, full: bool = False) -> None:
+        def render_lines(
+            self,
+            lines: list,
+            full: bool = False,
+            dirty_from: int | None = None,
+        ) -> None:
             """标记待渲染并启动节流定时器；实际刷新在 _flush_render 中合并执行。
 
             full=True 表示行列表被整体更换（新任务/重开终端），需全量重建；
@@ -2112,39 +2117,76 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             self._lines = lines
             if full:
                 self._needs_rebuild = True
+            if dirty_from is not None:
+                dirty_from = max(0, dirty_from)
+                self._dirty_from = (
+                    dirty_from
+                    if self._dirty_from is None
+                    else min(self._dirty_from, dirty_from)
+                )
             if not self._render_timer.isActive():
                 self._render_timer.start()
 
         def _flush_render(self) -> None:
-            """增量刷新日志区：追加新行 / 替换流式末行，避免每次全量 setHtml 清空重建。"""
+            """从首个脏逻辑行重绘后缀，保留前缀且不丢多块 HTML。"""
             lines = self._lines
             if self._needs_rebuild or len(lines) < self._rendered_count:
                 self._rebuild_all(lines)
                 return
-            for i in range(self._rendered_count, len(lines) - 1):
-                self._append_line(self._line_html(i))
-            if lines:
-                self._replace_last_line(self._line_html(len(lines) - 1))
+            if not lines:
+                self._dirty_from = None
+                return
+            if self._rendered_count == 0 or not self._line_starts:
+                self._rebuild_all(lines)
+                return
+            if self._dirty_from is not None:
+                start_index = min(self._dirty_from, self._rendered_count - 1)
+            elif len(lines) > self._rendered_count:
+                start_index = self._rendered_count - 1
+            else:
+                start_index = len(lines) - 1
+            self._replace_suffix(start_index)
             self._rendered_count = len(lines)
+            self._dirty_from = None
             QTimer.singleShot(0, self._scroll_to_bottom)
 
         def _rebuild_all(self, lines: list) -> None:
-            """全量重建（首次渲染 / 任务切换 / 行数回退）：整体 setHtml 并重置增量基准。"""
+            """全量重建并记录每个逻辑行的文档位置。"""
+            from PySide6.QtGui import QTextCursor
+
             self._needs_rebuild = False
             self._rendered_count = len(lines)
-            parts = [
+            self._dirty_from = None
+            self._line_starts = []
+            header = "".join([
                 f"<div style='color:{_TERMINAL_DIM};font-size:9px'>║▒░ amadeus shell — wired session</div>",
                 f"<div style='border-top:1px solid {_TERMINAL_ROSE};margin:2px 0 6px 0'></div>",
-            ]
-            for i, item in enumerate(lines):
-                parts.append(self._line_html(i))
-            self.log.setHtml(
-                "<html><body style='margin:0;background:transparent'>"
-                + "".join(parts)
-                + "</body></html>"
-            )
-            # setHtml 后滚动条最大值尚未更新，需在事件循环空闲后再滚到底部
+            ])
+            self.log.clear()
+            cursor = QTextCursor(self.log.document())
+            cursor.insertHtml(header)
+            for index in range(len(lines)):
+                self._line_starts.append(cursor.position())
+                cursor.insertHtml(self._line_html(index))
+            self.log.setTextCursor(cursor)
             QTimer.singleShot(0, self._scroll_to_bottom)
+
+        def _replace_suffix(self, start_index: int) -> None:
+            """删除 start_index 起的文档后缀，再按当前逻辑行重插。"""
+            from PySide6.QtGui import QTextCursor
+
+            if start_index >= len(self._line_starts):
+                self._rebuild_all(self._lines)
+                return
+            cursor = QTextCursor(self.log.document())
+            cursor.setPosition(self._line_starts[start_index])
+            cursor.movePosition(QTextCursor.MoveOperation.End, QTextCursor.MoveMode.KeepAnchor)
+            cursor.removeSelectedText()
+            del self._line_starts[start_index:]
+            for index in range(start_index, len(self._lines)):
+                self._line_starts.append(cursor.position())
+                cursor.insertHtml(self._line_html(index))
+            self.log.setTextCursor(cursor)
 
         def _line_html(self, index: int) -> str:
             """构建第 index 行 HTML：末行不缓存（流式中间态），历史行按 key 缓存。"""
@@ -2161,25 +2203,6 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
                 line_html = _build_terminal_line_html(kind, text, extra)
                 self._line_cache[key] = line_html
             return line_html
-
-        def _append_line(self, html: str) -> None:
-            """在日志区末尾追加一个新块（不触碰已有内容）。"""
-            from PySide6.QtGui import QTextCursor
-            cursor = self.log.textCursor()
-            cursor.movePosition(QTextCursor.MoveOperation.End)
-            self.log.setTextCursor(cursor)
-            self.log.append(html)
-
-        def _replace_last_line(self, html: str) -> None:
-            """就地替换文档最后一块（流式末行更新），其余内容不动。"""
-            from PySide6.QtGui import QTextCursor
-            cursor = self.log.textCursor()
-            cursor.movePosition(QTextCursor.MoveOperation.End)
-            cursor.movePosition(
-                QTextCursor.MoveOperation.StartOfBlock, QTextCursor.MoveMode.KeepAnchor
-            )
-            cursor.removeSelectedText()
-            cursor.insertHtml(html)
 
         def _scroll_to_bottom(self) -> None:
             sb = self.log.verticalScrollBar()
