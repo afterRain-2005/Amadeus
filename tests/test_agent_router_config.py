@@ -6,7 +6,13 @@ from config import AGENT_ROUTER_DEFAULTS
 def test_defaults_shape():
     # 默认走本地直连（chat），harness 作为快速开关按需启用
     assert AGENT_ROUTER_DEFAULTS["mode"] == "chat"
-    assert set(AGENT_ROUTER_DEFAULTS) == {"mode", "codex", "deepseek", "harness"}
+    assert set(AGENT_ROUTER_DEFAULTS) == {
+        "mode", "chat_max_tokens", "auto_route", "auto_targets", "ollama",
+        "codex", "deepseek", "harness",
+    }
+    assert AGENT_ROUTER_DEFAULTS["auto_route"] is False
+    assert isinstance(AGENT_ROUTER_DEFAULTS["auto_targets"], list)
+    assert isinstance(AGENT_ROUTER_DEFAULTS["ollama"], dict)
 
 
 def test_codex_defaults():

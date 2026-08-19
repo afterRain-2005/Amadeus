@@ -60,3 +60,19 @@ def test_ensure_gateway_timeout(monkeypatch):
     monkeypatch.setattr(hermes_launcher.time, "sleep", lambda s: None)
     ok = ensure_gateway(base_url="http://x", probe=probe, popen=popen, wait_timeout=3)
     assert ok is False
+
+
+def test_ensure_gateway_popen_error_returns_false(tmp_path):
+    probe = MagicMock(return_value=False)
+
+    def boom(*args, **kwargs):
+        raise OSError("permission denied")
+
+    ok = ensure_gateway(
+        base_url="http://x",
+        probe=probe,
+        popen=boom,
+        log_path=tmp_path / "hermes.log",
+        wait_timeout=3,
+    )
+    assert ok is False

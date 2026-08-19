@@ -7,7 +7,7 @@ import re
 
 import httpx
 
-from config import AGENT_ROUTER_DEFAULTS, KURISU_OUTPUT_FORMAT, OPENCLAW_DEFAULTS
+from config import AGENT_ROUTER_DEFAULTS, KURISU_OUTPUT_FORMAT, MEMORY_DEFAULTS, OPENCLAW_DEFAULTS
 
 GUI_PATTERN = re.compile(r"打开|启动|关闭|点击|截个屏|截图|屏幕|窗口|鼠标|键盘|记事本")
 AGENT_PATTERN = re.compile(r"搜索|查找|帮我搜|帮我写|整理|运行|执行|读.{0,8}文件|列出|下载|运行动命令|脚本|查一下|百度|google|联网|查天气|查新闻")
@@ -132,6 +132,7 @@ def route_and_send(
     system_role: str = "user",
     skip_history: bool = False,
     inject_system_prompt: str | None = None,
+    response_max_tokens: int | None = 700,
 ) -> tuple[str, str]:
     global _codex_session_started
     from core.agent_client import run_local_run
@@ -139,10 +140,23 @@ def route_and_send(
     from core.deepseek_client import run_deepseek_turn
     from core.harness_bridge import run_harness_turn
     from core.hermes_launcher import ensure_gateway, read_profile_api_key
+    from core.memory import merge_memories, recall, remember_turn
     from core.storage import APP_DIR
 
     router = {**AGENT_ROUTER_DEFAULTS, **(config.get("agent_router") or {})}
     mode = str(router.get("mode", "chat"))
+    memory_cfg = {**MEMORY_DEFAULTS, **(config.get("memory") if isinstance(config.get("memory"), dict) else {})}
+    memory_enabled = bool(memory_cfg.get("enabled", True))
+    memory_scope = str(memory_cfg.get("scope", "global") or "global")
+    if memory_enabled:
+        recalled_memories = recall(
+            query=input_text,
+            limit=int(memory_cfg.get("recall_limit", 8) or 8),
+            scope=memory_scope,
+        )
+        route_memories = merge_memories(memories, recalled_memories)
+    else:
+        route_memories = memories or []
 
     openclaw_cfg = dict(OPENCLAW_DEFAULTS)
     if isinstance(config.get("openclaw"), dict):
@@ -190,17 +204,24 @@ def route_and_send(
         if ensure_gateway(base_url=base_url, api_key=api_key, profile=str(hermes_cfg.get("profile"))):
             try:
                 from core.agent_client import run_hermes_run
+                instructions = KURISU_OUTPUT_FORMAT
+                if route_memories:
+                    memory_text = "\n".join(str(item.get("content", "")) for item in route_memories[-8:])
+                    if memory_text.strip():
+                        instructions += f"\n\nMemory:\n{memory_text}"
                 reply = run_hermes_run(
                     base_url=base_url,
                     api_key=api_key,
                     input_text=input_text,
-                    instructions=KURISU_OUTPUT_FORMAT,
+                    instructions=instructions,
                     conversation_history=conversation_history,
                     session_id=str(hermes_cfg.get("session_id")),
                     on_delta=on_delta,
                     on_status=on_status,
                     on_approval=on_approval,
                 )
+                if memory_enabled:
+                    remember_turn(user_text=input_text, assistant_text=reply, source="hermes", scope=memory_scope)
                 return reply, "hermes"
             except RuntimeError:
                 on_status("Hermes fallback failed; using local chat（本地直连）")
@@ -209,6 +230,9 @@ def route_and_send(
 
     elif route == "harness":
         harness_cfg = {**AGENT_ROUTER_DEFAULTS.get("harness", {}), **(config.get("harness") or {})}
+        instructions = KURISU_OUTPUT_FORMAT
+        if inject_system_prompt:
+            instructions = f"{inject_system_prompt}\n\n{KURISU_OUTPUT_FORMAT}"
         try:
             reply = run_harness_turn(
                 endpoint=str(harness_cfg.get("base_url", "") or config.get("endpoint", "")),
@@ -221,15 +245,17 @@ def route_and_send(
                 session_root=str(harness_cfg.get("session_root", "") or ""),
                 request_timeout_seconds=float(harness_cfg.get("request_timeout_seconds", 180)),
                 soul_md=soul_md,
-                instructions=KURISU_OUTPUT_FORMAT,
+                instructions=instructions,
                 input_text=input_text,
                 conversation_history=conversation_history,
-                memories=memories,
+                memories=route_memories,
                 on_delta=on_delta,
                 on_status=on_status,
                 on_tool_event=on_tool_event,
                 on_approval=on_approval,
             )
+            if memory_enabled:
+                remember_turn(user_text=input_text, assistant_text=reply, source="harness", scope=memory_scope)
             return reply, "harness"
         except RuntimeError as exc:
             on_status(f"Harness failed: {exc}")
@@ -245,11 +271,13 @@ def route_and_send(
                 instructions=KURISU_OUTPUT_FORMAT,
                 input_text=input_text,
                 conversation_history=conversation_history,
-                memories=memories,
+                memories=route_memories,
                 on_delta=on_delta,
                 on_status=on_status,
                 on_approval=on_approval,
             )
+            if memory_enabled:
+                remember_turn(user_text=input_text, assistant_text=reply, source="deepseek", scope=memory_scope)
             return reply, "deepseek"
         except RuntimeError as exc:
             on_status(f"DeepSeek harness failed: {exc}")
@@ -264,7 +292,7 @@ def route_and_send(
             input_text=input_text,
             workspace=workspace,
             conversation_history=conversation_history,
-            memories=memories,
+            memories=route_memories,
             resume=_codex_session_started,
             sandbox=str(codex_cfg.get("sandbox", "read-only")),
             timeout=float(codex_cfg.get("timeout", 120)),
@@ -272,6 +300,8 @@ def route_and_send(
             on_status=on_status,
         )
         _codex_session_started = True
+        if memory_enabled:
+            remember_turn(user_text=input_text, assistant_text=reply, source="codex", scope=memory_scope)
         return reply, "codex"
 
     text = input_text if route != "gui" else input_text + "\n" + GUI_NUDGE
@@ -288,9 +318,13 @@ def route_and_send(
         instructions=instructions,
         input_text=text,
         conversation_history=conversation_history,
-        memories=memories,
+        memories=route_memories,
         on_status=on_status,
         on_delta=on_delta,
+        on_tool_event=on_tool_event,
         on_approval=on_approval,
+        max_tokens=response_max_tokens,
     )
+    if memory_enabled:
+        remember_turn(user_text=input_text, assistant_text=reply, source=("gui" if route == "gui" else "chat"), scope=memory_scope)
     return reply, ("gui" if route == "gui" else "chat")

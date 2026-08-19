@@ -334,6 +334,9 @@
     let blinkAt = performance.now() + 1800;
     let pointerX = 0;
     let pointerY = 0;
+    // 身体跟随鼠标的平滑状态（比头部/眼睛慢，制造"身体滞后于视线"的自然感）
+    let bodyPointerX = 0;
+    let bodyPointerY = 0;
 
     // —— 动作系统（保持与原版一致）——
     const activeMotions = [];
@@ -436,14 +439,17 @@
       core.setParameterValueById('ParamEyeROpen', Math.min(eyeOpen, 1 - state.smile * 0.55 - state.sad * 0.35));
       core.setParameterValueById('ParamEyeLOpen', Math.min(eyeOpen, 1 - state.smile * 0.55 - state.sad * 0.35));
 
-      core.setParameterValueById('ParamAngleX', pointerX * 18);
-      core.setParameterValueById('ParamAngleY', pointerY * 12);
-      core.setParameterValueById('ParamEyeBallX', pointerX);
-      core.setParameterValueById('ParamEyeBallY', pointerY);
+      core.setParameterValueById('ParamAngleX', pointerX * 30);
+      core.setParameterValueById('ParamAngleY', pointerY * 20);
+      core.setParameterValueById('ParamEyeBallX', pointerX * 1.5);
+      core.setParameterValueById('ParamEyeBallY', pointerY * 1.5);
 
+      // 身体跟随鼠标：平滑滞后（lerp 0.1），叠加呼吸
+      bodyPointerX += (pointerX - bodyPointerX) * 0.1;
+      bodyPointerY += (pointerY - bodyPointerY) * 0.1;
       const breath = Math.sin(now / 2200 * Math.PI * 2);
-      core.setParameterValueById('ParamBodyAngleX', breath * 1.5);
-      core.setParameterValueById('ParamBodyAngleZ', Math.cos(now / 2600 * Math.PI * 2) * 1.0);
+      core.setParameterValueById('ParamBodyAngleX', bodyPointerY * 12 + breath * 1.5);
+      core.setParameterValueById('ParamBodyAngleZ', bodyPointerX * 10 + Math.cos(now / 2600 * Math.PI * 2) * 1.0);
 
       for (let i = activeMotions.length - 1; i >= 0; i--) {
         const m = activeMotions[i];
@@ -488,6 +494,10 @@
       setMouth(intensity) {
         mouthTarget = Math.max(0, Math.min(1, Number(intensity) || 0));
         lastMouthAt = performance.now();
+      },
+      setPointer(x, y) {
+        pointerX = Math.max(-1, Math.min(1, Number(x) || 0));
+        pointerY = Math.max(-1, Math.min(1, Number(y) || 0));
       },
       playMotion,
     };

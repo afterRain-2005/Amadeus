@@ -69,6 +69,7 @@ OPENCLAW_DEFAULTS: dict[str, object] = {
 # 运行时被 data/config.json 的 agent_router 键覆盖（{**DEFAULTS, **config["agent_router"]}）。
 AGENT_ROUTER_DEFAULTS: dict[str, object] = {
     "mode": "chat",
+    "chat_max_tokens": 700,
     # 自动分流（独立开关，优先于 mode）：auto_targets 为勾选参与分流的模式；ollama 为本地小模型配置
     "auto_route": False,
     "auto_targets": ["local", "harness"],
@@ -94,6 +95,16 @@ AGENT_ROUTER_DEFAULTS: dict[str, object] = {
         "provider": "deepseek-official",
         "runtime_bin": "",
     },
+}
+
+# === Hermes 长期记忆默认配置（多模式共有）===
+# 所有对话模式（chat/gui/harness/hermes/deepseek/codex）共享同一份 SQLite 记忆库
+# （data/memory.db），每轮：recall 召回相关记忆注入 prompt → remember_turn 提取事实/回合摘要写回。
+# 运行时被 data/config.json 的 memory 键覆盖（{**MEMORY_DEFAULTS, **config["memory"]}）。
+MEMORY_DEFAULTS: dict[str, object] = {
+    "enabled": True,               # 总开关：False 时不做 recall / remember_turn
+    "scope": "global",             # 记忆作用域：global（全局共享）或指定角色/会话 id
+    "recall_limit": 8,             # 每轮召回注入 prompt 的最大记忆条数
 }
 
 # === DeepSeek Harness 完整配置默认值 ===
@@ -154,6 +165,9 @@ PHONE_DEFAULTS: dict[str, object] = {
     "gpt_sovits_url": "http://127.0.0.1:9880",          # GPT-SoVITS api_v2.py 默认端口
     "screen_share_default": True,                       # 进入通话时默认开屏幕共享
     "capture_interval_ms": 2500,                        # mss 截帧间隔（2.5s 一次，仅缓存最新帧）
+    "asr_endpoint": "https://api.xiaomimimo.com/v1",    # 小米 mimo ASR 端点（OpenAI 兼容 /chat/completions + input_audio）
+    "asr_api_key": "",                                  # 小米 mimo ASR key（独立于对话 key）
+    "asr_model": "mimo-audio-v1",                       # ASR 模型：音频理解模型，配合 input_audio 多模态格式
 }
 
 # === GPT-SoVITS 运行模式（本地启动 / SSH 隧道 / 自动） ===
@@ -214,7 +228,7 @@ VAD_PARAMS: dict[str, int | float] = {
 # === 审批策略（类似 Trae 的权限配置） ===
 # 工具分为三档：
 #   auto_allow_tools:   永远自动放行（只读/低风险操作）
-#   auto_allow_commands: run_command 的安全命令前缀（命令开头匹配即放行）
+#   auto_allow_commands: run_command 的安全命令名（精确匹配首个 token，拒绝复合命令）
 #   其余:                需要用户 4 选 1 确认（once/session/always/deny）
 APPROVAL_POLICY: dict[str, list[str]] = {
     # 只读 / 低风险工具，永远不弹窗
@@ -229,7 +243,7 @@ APPROVAL_POLICY: dict[str, list[str]] = {
         "list_dir",           # 列目录（只读）
         "read_file",          # 读文件（只读）
     ],
-    # run_command 的安全命令前缀列表（命令 strip 后 startswith 任一前缀即放行）
+    # run_command 的安全命令名列表（精确匹配首个 token，含 ; | & > < 等复合语法不自动放行）
     "auto_allow_commands": [
         "dir", "ls", "echo", "type", "cat", "Get-ChildItem", "gci",
         "Get-Process", "gps",

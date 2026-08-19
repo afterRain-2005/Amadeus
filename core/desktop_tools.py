@@ -5,6 +5,7 @@ import base64
 from io import BytesIO
 import os
 from pathlib import Path
+import shlex
 import subprocess
 import webbrowser
 import re
@@ -103,6 +104,24 @@ TOOL_DEFINITIONS = [
 ]
 
 CONFIRMATION_REQUIRED = {"open_target", "type_text", "press_keys", "click", "run_command", "write_file", "operate_gui"}
+
+_POWERSHELL_CONTROL_TOKENS = (";", "|", "&", "`", "$(", ">", "<", "\n", "\r")
+
+
+def is_auto_approved_command(command: str, safe_commands: list[str] | tuple[str, ...]) -> bool:
+    """仅允许单条安全命令自动放行，禁止 PowerShell 复合/重定向语法。"""
+    text = str(command or "").strip()
+    if not text or any(token in text for token in _POWERSHELL_CONTROL_TOKENS):
+        return False
+    try:
+        parts = shlex.split(text, posix=False)
+    except ValueError:
+        return False
+    if not parts:
+        return False
+    command_name = parts[0].strip("\"'")
+    safe = {str(item).casefold() for item in safe_commands}
+    return command_name.casefold() in safe
 
 
 def execute_tool(name: str, arguments: dict) -> dict:

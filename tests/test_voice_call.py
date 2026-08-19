@@ -63,8 +63,22 @@ def test_utterance_end_attaches_screen_frame():
          patch.object(ctrl._tts, "speak_with_options"):
         ctrl._handle_utterance(b"audio bytes")
     mock_vis.assert_called_once()
+    assert mock_vis.call_args.args[0] is fake_frame
     # LLM user 消息应含屏幕描述
     assert "VS Code" in ctrl._last_user_message
+
+
+def test_handle_utterance_uses_actual_mic_sample_rate():
+    """设备 fallback 到默认采样率时，WAV header 应使用真实采样率。"""
+    ctrl = _make_controller()
+    ctrl._mic_sample_rate = 48000
+    with patch("core.voice_call.encode_wav") as mock_encode, \
+         patch.object(ctrl, "_transcribe", return_value="你好"), \
+         patch.object(ctrl, "_stream_llm", return_value="こんにちは"), \
+         patch.object(ctrl._tts, "speak_with_options"):
+        ctrl._handle_utterance(b"audio")
+    mock_encode.assert_called_once()
+    assert mock_encode.call_args.args[1] == 48000
 
 
 def test_screen_share_off_skips_vision():

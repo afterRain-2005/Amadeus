@@ -72,6 +72,14 @@ class SpeechPlayer(QObject):
         self._merge_buffer = ""
         # 首句标记：True 时按 _MERGE_THRESHOLD 送（保首句延迟），False 后按 _MERGE_UPPER 送
         self._merge_first = True
+        # 会话代次：每次新 speak 递增，旧 worker 凭代次判断自己是否已过期。
+        # 修复语音重叠：旧会话线程在 _stop_event 被新会话 clear 后仍继续播放，
+        # 用代次彻底作废旧 worker（详见 speak_with_options / speak_streaming_start）。
+        self._session_id = 0
+
+    def _alive(self, session_id: int) -> bool:
+        """当前 worker 是否仍属于最新会话且未被 stop。"""
+        return session_id == self._session_id and not self._stop_event.is_set()
 
     def set_rate(self, rate: int) -> None:
         self.rate = rate
@@ -93,11 +101,12 @@ class SpeechPlayer(QObject):
             return
         self.stop()
         self._stop_event.clear()
+        session_id = self._session_id
         self._emotion = emotion or "neutral"
         self._speed = emotion_speed(self._emotion)
         threading.Thread(
             target=self._speak_worker,
-            args=(text, text_lang, prompt_text, prompt_lang, allow_fallback),
+            args=(text, text_lang, prompt_text, prompt_lang, allow_fallback, session_id),
             daemon=True,
         ).start()
 
@@ -110,6 +119,7 @@ class SpeechPlayer(QObject):
         """
         self.stop()
         self._stop_event.clear()
+        session_id = self._session_id
         self._stream_buffer = ""
         self._merge_buffer = ""
         self._merge_first = True
@@ -123,7 +133,7 @@ class SpeechPlayer(QObject):
                 break
         self._stream_lang = text_lang
         self._stream_thread = threading.Thread(
-            target=self._stream_consumer, daemon=True
+            target=self._stream_consumer, args=(session_id,), daemon=True
         )
         self._stream_thread.start()
 
@@ -184,7 +194,7 @@ class SpeechPlayer(QObject):
         self._flush_merge_buffer()
         self._stream_queue.put(None)  # 结束信号
 
-    def _stream_consumer(self) -> None:
+    def _stream_consumer(self, session_id: int) -> None:
         """流式合成消费线程：合成与播放完全解耦，用 _playback_queue 连接。
 
         架构（双缓冲预取）：
@@ -202,6 +212,8 @@ class SpeechPlayer(QObject):
         关键：用逗号连接让 cut5 切分后段长相似，split_bucket 分到同桶，batch 并行生效。
         （之前撤销的方案用句号连接，段长差异大分到不同桶，batch 失效串行 14.31s。）
         """
+        if not self._alive(session_id):
+            return
         self.speaking_changed.emit(True)
         try:
             provider = self._get_tts_provider()
@@ -222,14 +234,14 @@ class SpeechPlayer(QObject):
 
             # 启动播放 worker（独立线程，从 _playback_queue 取 wav 按顺序播放）
             playback_thread = threading.Thread(
-                target=self._playback_worker, daemon=True
+                target=self._playback_worker, args=(session_id,), daemon=True
             )
             playback_thread.start()
 
             # 合成循环：取句 → 合成 → 入播放队列
             # GPT-SoVITS 首句用 cut1；云端 provider 忽略 is_first。
             is_first_sentence = True
-            while not self._stop_event.is_set():
+            while self._alive(session_id):
                 try:
                     item = self._stream_queue.get(timeout=0.5)
                 except queue.Empty:
@@ -239,20 +251,21 @@ class SpeechPlayer(QObject):
                     self._playback_queue.put(None)
                     break
                 sentence, text_lang = item
-                if self._stop_event.is_set():
+                if not self._alive(session_id):
                     break
                 # 合成并入队（与播放并行）
-                self._synthesize_and_enqueue(sentence, text_lang, is_first=is_first_sentence)
+                self._synthesize_and_enqueue(sentence, text_lang, is_first=is_first_sentence, session_id=session_id)
                 is_first_sentence = False
             # 兜底：会话被 stop 打断时也要通知播放 worker 结束
             self._playback_queue.put(None)
             # 等播放 worker 结束（最多 30s，防止卡死）
             playback_thread.join(timeout=30.0)
         finally:
-            self.speaking_changed.emit(False)
+            if session_id == self._session_id:
+                self.speaking_changed.emit(False)
 
     def _synthesize_and_enqueue(
-        self, sentence: str, text_lang: str | None, is_first: bool = False
+        self, sentence: str, text_lang: str | None, is_first: bool = False, session_id: int | None = None
     ) -> None:
         """合成一句并放入 _playback_queue（供播放 worker 取走播放）。
 
@@ -264,12 +277,14 @@ class SpeechPlayer(QObject):
         塞给 _playback_worker 调 _play_wav_stream 边收边播（与 amadeus <audio src=url> 流式播放等价）。
         gpt_sovits 路径走非流式：合成完整 wav bytes 直接塞队列。
         """
-        if self._stop_event.is_set() or not sentence:
+        if session_id is None:
+            session_id = self._session_id
+        if not self._alive(session_id) or not sentence:
             return
         provider = self._get_tts_provider()
         if provider == "aliyun":
             # 流式路径：把生成器塞队列，_playback_worker 取出后调 _play_wav_stream 迭代播放
-            stream_iter = self._synthesize_aliyun_stream(sentence, text_lang=text_lang)
+            stream_iter = self._synthesize_aliyun_stream(sentence, text_lang=text_lang, session_id=session_id)
             self._playback_queue.put(("stream", stream_iter))
         else:
             ok, wav_bytes = self._synthesize_kurisu(
@@ -278,13 +293,14 @@ class SpeechPlayer(QObject):
                 prompt_text=None,
                 prompt_lang="ja",
                 is_first=is_first,
+                session_id=session_id,
             )
             if not ok or not wav_bytes:
                 print(f"[SpeechPlayer] streaming sentence failed: {sentence[:30]}")
                 return
             self._playback_queue.put(("wav", wav_bytes))
 
-    def _playback_worker(self) -> None:
+    def _playback_worker(self, session_id: int) -> None:
         """播放 worker：从 _playback_queue 取 wav/stream 按顺序播放。
 
         独立线程，与合成循环并行。队列元素：
@@ -296,19 +312,19 @@ class SpeechPlayer(QObject):
         双缓冲预取：合成线程把流式 iter/wav 塞队列后立即去合成下一句，
         本线程顺序取出播放。合成快时预取多句堆队列，播放快时合成已就绪。
         """
-        while not self._stop_event.is_set():
+        while self._alive(session_id):
             try:
                 item = self._playback_queue.get(timeout=0.5)
             except queue.Empty:
                 continue
             if item is None:
                 break
-            if self._stop_event.is_set():
+            if not self._alive(session_id):
                 break
             # 兼容旧调用（直接 bytes）：当作完整 wav 处理
             if isinstance(item, bytes):
                 self.playback_started.emit(self._wav_duration_seconds(item))
-                self._play_wav(item)
+                self._play_wav(item, session_id)
                 continue
             if not isinstance(item, tuple) or len(item) != 2:
                 continue
@@ -316,12 +332,14 @@ class SpeechPlayer(QObject):
             if kind == "stream":
                 # 流式播放：迭代生成器，按 ("pcm", chunk) / ("wav", bytes) 元组分发
                 self.playback_started.emit(0.0)  # 流式路径无法预算时长
-                self._play_wav_stream(payload)
+                self._play_wav_stream(payload, session_id)
             else:  # "wav"
                 self.playback_started.emit(self._wav_duration_seconds(payload))
-                self._play_wav(payload)
+                self._play_wav(payload, session_id)
 
     def stop(self) -> None:
+        # 代次递增：立即作废所有旧会话 worker，防止其在新会话 clear _stop_event 后复活
+        self._session_id += 1
         self._stop_event.set()
         # 唤醒可能阻塞在 queue.get 的合成循环
         try:
@@ -385,7 +403,10 @@ class SpeechPlayer(QObject):
         prompt_text: str | None = None,
         prompt_lang: str | None = None,
         allow_fallback: bool = False,
+        session_id: int | None = None,
     ) -> None:
+        if session_id is None:
+            session_id = self._session_id
         self.speaking_changed.emit(True)
         try:
             provider = self._get_tts_provider()
@@ -395,26 +416,28 @@ class SpeechPlayer(QObject):
             spoke = False
             if self._kurisu_available:
                 if provider == "aliyun":
-                    spoke = self._speak_aliyun(text, text_lang=text_lang)
+                    spoke = self._speak_aliyun(text, text_lang=text_lang, session_id=session_id)
                 else:
                     spoke = self._speak_kurisu(
                         text,
                         text_lang=text_lang,
                         prompt_text=prompt_text,
                         prompt_lang=prompt_lang,
+                        session_id=session_id,
                     )
-                if not spoke and not self._stop_event.is_set():
+                if not spoke and self._alive(session_id):
                     # 真实失败（非用户打断）：翻转缓存，等待 TTL 重查自愈
                     self._kurisu_available = False
                     self._available_checked_at = time.monotonic()
-            if not spoke and not self._stop_event.is_set():
+            if not spoke and self._alive(session_id):
                 if allow_fallback:
-                    self._speak_sapi_blocking(text)
+                    self._speak_sapi_blocking(text, session_id=session_id)
                 else:
                     self.tts_offline.emit()
                     print(f"[SpeechPlayer] {provider} offline, no fallback allowed")
         finally:
-            self.speaking_changed.emit(False)
+            if session_id == self._session_id:
+                self.speaking_changed.emit(False)
 
     def _speak_kurisu(
         self,
@@ -423,29 +446,40 @@ class SpeechPlayer(QObject):
         text_lang: str | None = None,
         prompt_text: str | None = None,
         prompt_lang: str | None = None,
+        session_id: int | None = None,
     ) -> bool:
         """合成并播放（阻塞直到播放完成）。用于非流式 speak_with_options。"""
+        if session_id is None:
+            session_id = self._session_id
         try:
             ok, wav_bytes = self._synthesize_kurisu(
-                text, text_lang=text_lang, prompt_text=prompt_text, prompt_lang=prompt_lang
+                text,
+                text_lang=text_lang,
+                prompt_text=prompt_text,
+                prompt_lang=prompt_lang,
+                session_id=session_id,
             )
-            if not ok or not wav_bytes or self._stop_event.is_set():
+            if not ok or not wav_bytes or not self._alive(session_id):
                 return False
             self.playback_started.emit(self._wav_duration_seconds(wav_bytes))
-            self._play_wav(wav_bytes)
+            self._play_wav(wav_bytes, session_id)
             return True
         except Exception as exc:
             print(f"[SpeechPlayer] GPT-SoVITS failed: {exc}")
             return False
 
-    def _speak_aliyun(self, text: str, *, text_lang: str | None = None) -> bool:
+    def _speak_aliyun(
+        self, text: str, *, text_lang: str | None = None, session_id: int | None = None
+    ) -> bool:
         """合成并播放阿里云 TTS（阻塞直到播放完成）。"""
+        if session_id is None:
+            session_id = self._session_id
         try:
-            ok, wav_bytes = self._synthesize_aliyun(text, text_lang=text_lang)
-            if not ok or not wav_bytes or self._stop_event.is_set():
+            ok, wav_bytes = self._synthesize_aliyun(text, text_lang=text_lang, session_id=session_id)
+            if not ok or not wav_bytes or not self._alive(session_id):
                 return False
             self.playback_started.emit(self._wav_duration_seconds(wav_bytes))
-            self._play_wav(wav_bytes)
+            self._play_wav(wav_bytes, session_id)
             return True
         except Exception as exc:
             print(f"[SpeechPlayer] Aliyun TTS failed: {exc}")
@@ -459,11 +493,14 @@ class SpeechPlayer(QObject):
         prompt_text: str | None = None,
         prompt_lang: str | None = None,
         is_first: bool = False,
+        session_id: int | None = None,
     ) -> tuple[bool, bytes | None]:
         """只合成不播放，返回 (success, wav_bytes)。供流式合成使用。
 
         is_first=True 时传 text_split_method='cut1'（不切分整段推理）。
         """
+        if session_id is None:
+            session_id = self._session_id
         try:
             from core.gpt_sovits_client import KurisuTTS
 
@@ -477,7 +514,7 @@ class SpeechPlayer(QObject):
                 prompt_lang=prompt_lang,
                 text_split_method="cut1" if is_first else None,
             )
-            if not wav_bytes or self._stop_event.is_set():
+            if not wav_bytes or not self._alive(session_id):
                 return False, None
             return True, wav_bytes
         except Exception as exc:
@@ -521,6 +558,7 @@ class SpeechPlayer(QObject):
         text: str,
         *,
         text_lang: str | None = None,
+        session_id: int | None = None,
     ) -> tuple[bool, bytes | None]:
         """阿里云 TTS 合成（非流式），返回 (success, wav_bytes)。
 
@@ -531,6 +569,8 @@ class SpeechPlayer(QObject):
         流式路径（CosyVoice 边下边播）走 _synthesize_aliyun_stream。
         所有路径都先调 _clean_tts_text 修复 CosyVoice 末尾拖音。
         """
+        if session_id is None:
+            session_id = self._session_id
         try:
             from config import ALIYUN_TTS_DEFAULTS
             from core.aliyun_tts_client import AliyunTTS
@@ -561,20 +601,20 @@ class SpeechPlayer(QObject):
                 # CosyVoice 路径（非流式回退）：调 SpeechSynthesizer，返回 OSS URL → 下载完整 mp3
                 # 流式路径走 _synthesize_aliyun_stream（OSS URL 透传给播放层边下边播）
                 url = tts.synthesize_cosyvoice(clean_text, voice_id, engine=engine)
-                if not url or self._stop_event.is_set():
+                if not url or not self._alive(session_id):
                     return False, None
                 mp3_bytes = tts._get_bytes(url)
-            if not mp3_bytes or self._stop_event.is_set():
+            if not mp3_bytes or not self._alive(session_id):
                 return False, None
             wav_bytes = decode_mp3_to_wav(mp3_bytes)
-            if not wav_bytes or self._stop_event.is_set():
+            if not wav_bytes or not self._alive(session_id):
                 return False, None
             return True, wav_bytes
         except Exception as exc:
             print(f"[SpeechPlayer] Aliyun TTS synthesize failed: {exc}")
             return False, None
 
-    def _synthesize_aliyun_stream(self, text: str, text_lang: str | None = None):
+    def _synthesize_aliyun_stream(self, text: str, text_lang: str | None = None, session_id: int | None = None):
         """阿里云 CosyVoice 流式合成生成器，yield PCM int16 bytes chunks。
 
         与 amadeus src/app/api/tts/route.ts:288-291 OSS URL 透传策略一致：
@@ -588,6 +628,8 @@ class SpeechPlayer(QObject):
         数学本质：三段管道并行（HTTP 下载 → 解码 → 播放），总时延 ≈ max(下载, 解码) + 单 chunk 播放时间，
         相比串行省 min(下载, 解码) 时间，与 amadeus 浏览器 <audio src=url> 流式播放等价。
         """
+        if session_id is None:
+            session_id = self._session_id
         try:
             from config import ALIYUN_TTS_DEFAULTS
             from core.aliyun_tts_client import AliyunTTS
@@ -604,7 +646,7 @@ class SpeechPlayer(QObject):
             if engine == "qwen3-tts-vc":
                 # Qwen3-TTS-VC 不支持流式：回退到非流式（一次性 yield 完整 wav bytes）
                 # _play_wav_stream 通过 wave header 识别 wav bytes
-                ok, wav_bytes = self._synthesize_aliyun(text, text_lang=text_lang)
+                ok, wav_bytes = self._synthesize_aliyun(text, text_lang=text_lang, session_id=session_id)
                 if ok and wav_bytes:
                     yield ("wav", wav_bytes)  # 标记是 wav bytes，_play_wav_stream 用 _play_wav 播放
                 return
@@ -617,7 +659,7 @@ class SpeechPlayer(QObject):
                 return
             # 流式解码 OSS URL → PCM int16 chunks（标记 "pcm"）
             for chunk in decode_mp3_stream(url, sample_rate=24000, timeout=timeout):
-                if self._stop_event.is_set():
+                if not self._alive(session_id):
                     return
                 yield ("pcm", chunk)
         except Exception as exc:
@@ -629,7 +671,9 @@ class SpeechPlayer(QObject):
             framerate = wav.getframerate() or 1
             return frames / float(framerate)
 
-    def _play_wav(self, wav_bytes: bytes) -> None:
+    def _play_wav(self, wav_bytes: bytes, session_id: int | None = None) -> None:
+        if session_id is None:
+            session_id = self._session_id
         import numpy as np
         import sounddevice as sd
 
@@ -656,7 +700,7 @@ class SpeechPlayer(QObject):
         chunk_size = max(1, int(sr * 0.05))
         with sd.OutputStream(samplerate=sr, channels=1, dtype="float32") as stream:
             for idx in range(0, len(audio), chunk_size):
-                if self._stop_event.is_set():
+                if not self._alive(session_id):
                     break
                 chunk = audio[idx : idx + chunk_size]
                 stream.write(chunk.reshape(-1, 1))
@@ -665,7 +709,7 @@ class SpeechPlayer(QObject):
                 self.mouth_intensity.emit(min(1.0, rms * 4.0))
         self.mouth_intensity.emit(0.0)
 
-    def _play_wav_stream(self, stream_iter) -> None:
+    def _play_wav_stream(self, stream_iter, session_id: int | None = None) -> None:
         """流式播放生成器，按 ("pcm", chunk) / ("wav", bytes) 元组分发。
 
         与 _play_wav 区别：不需要预先有完整 wav，边收 PCM 边喂 sounddevice OutputStream。
@@ -678,18 +722,20 @@ class SpeechPlayer(QObject):
         总时延 ≈ max(下载, 解码) + 单 chunk 播放时间。形象理解：水管模型，
         水龙头（HTTP）→ 过滤器（解码）→ 水杯（播放），三段同时工作不互相等待。
         """
+        if session_id is None:
+            session_id = self._session_id
         import numpy as np
         import sounddevice as sd
 
         stream = None
         try:
             for kind, payload in stream_iter:
-                if self._stop_event.is_set():
+                if not self._alive(session_id):
                     break
                 if kind == "wav":
                     # 完整 wav bytes（Qwen3-TTS-VC 回退路径）：用 _play_wav 播放
                     self.playback_started.emit(self._wav_duration_seconds(payload))
-                    self._play_wav(payload)
+                    self._play_wav(payload, session_id)
                     continue
                 # kind == "pcm"：PCM int16 chunks，边收边喂 sounddevice
                 if stream is None:
@@ -717,8 +763,10 @@ class SpeechPlayer(QObject):
                 except Exception:
                     pass
 
-    def _speak_sapi_blocking(self, text: str) -> None:
-        if self._stop_event.is_set():
+    def _speak_sapi_blocking(self, text: str, session_id: int | None = None) -> None:
+        if session_id is None:
+            session_id = self._session_id
+        if not self._alive(session_id):
             return
         import win32com.client
 

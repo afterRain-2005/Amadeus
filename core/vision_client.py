@@ -13,15 +13,16 @@ import httpx
 from PIL import Image
 
 
-def frame_to_data_url(image_bytes: bytes) -> str:
-    """mss 截帧 bytes → base64 PNG data URL。
+def frame_to_data_url(image_bytes: bytes, size: tuple[int, int] | None = None) -> str:
+    """mss 截帧 BGRA bytes → base64 PNG data URL。
 
     best-effort：BGRA → PNG 转换失败时降级为直接 base64 编码原始 bytes
     （调用方 GPT-4o 对格式宽容，且 describe_screen 的 try/except 兜底）。
     """
     # mss 截帧是 BGRA，转 PNG
     try:
-        img = Image.frombytes("RGBA", _bgra_to_rgba_size(image_bytes), image_bytes)
+        width, height = size or _bgra_to_rgba_size(image_bytes)
+        img = Image.frombytes("RGBA", (width, height), image_bytes, "raw", "BGRA")
         buf = BytesIO()
         img.save(buf, format="PNG")
         b64 = base64.b64encode(buf.getvalue()).decode("ascii")
@@ -42,8 +43,17 @@ def _bgra_to_rgba_size(image_bytes: bytes) -> tuple[int, int]:
     return (1, len(image_bytes) // 4) if image_bytes else (1, 1)
 
 
+def frame_object_to_data_url(frame) -> str:
+    """mss ScreenShot/bytes → PNG data URL，优先使用帧对象的真实宽高。"""
+    if hasattr(frame, "bgra") and hasattr(frame, "width") and hasattr(frame, "height"):
+        return frame_to_data_url(bytes(frame.bgra), (int(frame.width), int(frame.height)))
+    if isinstance(frame, (bytes, bytearray)):
+        return frame_to_data_url(bytes(frame))
+    return frame_to_data_url(bytes(frame))
+
+
 def describe_screen(
-    image_bytes: bytes,
+    image_bytes: bytes | object,
     endpoint: str,
     api_key: str,
     model: str,
@@ -53,7 +63,7 @@ def describe_screen(
     """屏幕帧 → 简短屏幕描述。失败/未配 key 返回空字符串。"""
     if not api_key or not image_bytes:
         return ""
-    data_url = frame_to_data_url(image_bytes)
+    data_url = frame_object_to_data_url(image_bytes)
     payload = {
         "model": model,
         "messages": [{"role": "user", "content": [

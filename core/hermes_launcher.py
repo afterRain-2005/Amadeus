@@ -2,7 +2,7 @@
 
 设计依据 docs/superpowers/specs/2026-08-15-agent-mode-design.md §4.2：
 - GET /health（Bearer）探活，2s 超时
-- 不通 → Popen("hermes -p <profile> gateway") 分离进程，日志落 data/hermes_gateway.log
+- 不通 → Popen("hermes -p <profile> gateway") 分离进程，日志落 APP_DIR/hermes_gateway.log
 - 轮询探活最多 30s；仍失败由调用方（backend_router）降级本地直连
 - 桌宠退出不杀网关（常驻，同 GPT-SoVITS 惯例）
 probe/popen 参数为依赖注入，供测试 mock。
@@ -15,6 +15,8 @@ import subprocess
 import time
 
 import httpx
+
+from core.storage import APP_DIR
 
 
 def read_profile_api_key(profile: str = "kurisu") -> str | None:
@@ -46,7 +48,7 @@ def ensure_gateway(
     base_url: str,
     api_key: str = "",
     profile: str = "kurisu",
-    log_path: str | Path = "data/hermes_gateway.log",
+    log_path: str | Path | None = None,
     wait_timeout: float = 30.0,
     probe=None,
     popen=subprocess.Popen,
@@ -55,17 +57,20 @@ def ensure_gateway(
     probe = probe or probe_health
     if probe(base_url, api_key):
         return True
-    log_file = Path(log_path)
-    log_file.parent.mkdir(parents=True, exist_ok=True)
+    log_file = Path(log_path) if log_path is not None else APP_DIR / "hermes_gateway.log"
     flags = 0
     if os.name == "nt":
         flags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
-    with log_file.open("ab") as fh:
-        popen(
-            ["hermes", "-p", profile, "gateway"],
-            stdout=fh, stderr=fh, creationflags=flags,
-            stdin=subprocess.DEVNULL,
-        )
+    try:
+        log_file.parent.mkdir(parents=True, exist_ok=True)
+        with log_file.open("ab") as fh:
+            popen(
+                ["hermes", "-p", profile, "gateway"],
+                stdout=fh, stderr=fh, creationflags=flags,
+                stdin=subprocess.DEVNULL,
+            )
+    except OSError:
+        return False
     deadline = time.monotonic() + wait_timeout
     while time.monotonic() < deadline:
         time.sleep(1.0)

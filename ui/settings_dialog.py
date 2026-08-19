@@ -149,7 +149,7 @@ class SettingsDialog(QDialog):
         self.asr_endpoint = QLineEdit(config.get("asr_endpoint", "https://api.xiaomimimo.com/v1"))
         self.asr_key = QLineEdit(config.get("asr_api_key", ""))
         self.asr_key.setEchoMode(QLineEdit.Password)
-        self.asr_model = QLineEdit(config.get("asr_model", "mimo-v2.5-asr"))
+        self.asr_model = QLineEdit(config.get("asr_model", "mimo-audio-v1"))
         asr_form.addRow("ASR Endpoint", self.asr_endpoint)
         asr_form.addRow("ASR API Key", self.asr_key)
         asr_form.addRow("ASR 模型", self.asr_model)

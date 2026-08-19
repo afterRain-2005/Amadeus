@@ -62,6 +62,7 @@ class VoiceCallController(QObject):
             interval_ms=int(PHONE_DEFAULTS.get("capture_interval_ms", 2500))
         )
         self._stream = None            # sounddevice InputStream
+        self._mic_sample_rate = 16000
         self._recording_buf: list[np.ndarray] = []
         self._vad_paused = False       # 半双工：speaking/processing 态暂停 VAD
         self._muted = False
@@ -187,6 +188,7 @@ class VoiceCallController(QObject):
                 blocksize=1024, callback=self._audio_callback,
                 device=default_in,
             )
+            self._mic_sample_rate = sr
             self._stream.start()
             print(f"[VoiceCall] 麦克风已启动 sr={sr} device={default_in}")
         except Exception as exc:
@@ -242,7 +244,7 @@ class VoiceCallController(QObject):
            - 否则兜底整段合成（用 parse_reply 提取日语/中文）
         """
         try:
-            wav_bytes = encode_wav(audio, 16000)
+            wav_bytes = encode_wav(audio, self._mic_sample_rate)
             text = self._transcribe(wav_bytes)
             if not text:
                 self.subtitle.emit("没听清，再说一次？")
@@ -256,7 +258,7 @@ class VoiceCallController(QObject):
                 frame = self._capturer.latest_frame
                 if frame is not None:
                     screen_desc = describe_screen(
-                        _frame_to_bytes(frame),
+                        frame,
                         self._config.get("vision_endpoint") or self._config.get("endpoint", ""),
                         self._config["vision_api_key"],
                         self._config.get("vision_model", "gpt-4o"),
@@ -310,9 +312,9 @@ class VoiceCallController(QObject):
     def _transcribe(self, wav_bytes: bytes) -> str:
         return transcribe(
             wav_bytes,
-            endpoint=self._config.get("asr_endpoint") or self._config.get("endpoint", ""),
-            api_key=self._config.get("asr_api_key") or self._config.get("api_key", ""),
-            model=self._config.get("asr_model", "mimo-audio-v1"),
+            endpoint=self._config.get("asr_endpoint") or PHONE_DEFAULTS["asr_endpoint"],
+            api_key=self._config.get("asr_api_key") or PHONE_DEFAULTS["asr_api_key"],
+            model=self._config.get("asr_model") or PHONE_DEFAULTS["asr_model"],
         )
 
     def _stream_llm(self, user_text: str) -> str:

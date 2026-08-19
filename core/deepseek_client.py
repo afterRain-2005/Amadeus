@@ -10,7 +10,12 @@ import json
 
 import httpx
 
-from core.desktop_tools import CONFIRMATION_REQUIRED, TOOL_DEFINITIONS, execute_tool
+from core.desktop_tools import (
+    CONFIRMATION_REQUIRED,
+    TOOL_DEFINITIONS,
+    execute_tool,
+    is_auto_approved_command,
+)
 from config import APPROVAL_POLICY
 
 APPROVAL_CHOICES = ("once", "session", "always", "deny")
@@ -158,7 +163,7 @@ def run_deepseek_turn(
             elif name == "run_command":
                 cmd_text = arguments.get("command", "").strip()
                 pre_approved = (
-                    any(cmd_text.startswith(prefix) for prefix in auto_allow_commands)
+                    is_auto_approved_command(cmd_text, auto_allow_commands)
                     or pattern_key in _session_allowed
                     or pattern_key in always_allowed
                 )

@@ -26,4 +26,7 @@ def apply_command_js(payload: dict) -> str:
     if "speaking" in payload:
         value = "true" if payload["speaking"] else "false"
         lines.append(f"window.__amadeus.setSpeaking({value})")
+    if "pointer" in payload:
+        px, py = payload["pointer"]
+        lines.append(f"window.__amadeus.setPointer({float(px)},{float(py)})")
     return "\n".join(lines)

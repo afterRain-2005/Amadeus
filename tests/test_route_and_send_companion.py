@@ -16,7 +16,8 @@ def test_route_and_send_companion_skips_classify_and_history():
 
     def fake_run_local_run(*, endpoint, api_key, model, soul_md, instructions,
                             input_text, conversation_history, memories,
-                            on_status, on_delta, on_approval):
+                            on_status, on_delta, on_approval, on_tool_event=None,
+                            max_tokens=None):
         captured["conversation_history"] = conversation_history
         captured["input_text"] = input_text
         captured["instructions"] = instructions

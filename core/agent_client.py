@@ -33,7 +33,12 @@ import sys
 
 import httpx
 
-from core.desktop_tools import CONFIRMATION_REQUIRED, TOOL_DEFINITIONS, execute_tool
+from core.desktop_tools import (
+    CONFIRMATION_REQUIRED,
+    TOOL_DEFINITIONS,
+    execute_tool,
+    is_auto_approved_command,
+)
 from config import APPROVAL_POLICY
 
 
@@ -52,13 +57,23 @@ After tools finish, answer using the character's required bilingual emotion form
 """
 
 
-def _stream_turn_direct(url: str, headers: dict, model: str, messages: list[dict], on_delta) -> tuple[str, list[dict]]:
+def _stream_turn_direct(
+    url: str,
+    headers: dict,
+    model: str,
+    messages: list[dict],
+    on_delta,
+    max_tokens: int | None = 700,
+) -> tuple[str, list[dict]]:
     content = ""
     calls: dict[int, dict] = {}
-    with httpx.stream("POST", url, headers=headers, json={
+    payload = {
         "model": model, "messages": messages, "tools": TOOL_DEFINITIONS,
-        "tool_choice": "auto", "temperature": 0.7, "max_tokens": 700, "stream": True,
-    }, timeout=90) as response:
+        "tool_choice": "auto", "temperature": 0.7, "stream": True,
+    }
+    if max_tokens is not None:
+        payload["max_tokens"] = max_tokens
+    with httpx.stream("POST", url, headers=headers, json=payload, timeout=90) as response:
         if response.is_error:
             error_body = response.read().decode("utf-8", errors="replace")
             raise RuntimeError(f"Model API HTTP {response.status_code}: {error_body[:800]}")
@@ -136,7 +151,9 @@ def run_local_run(
     memories: list[dict] | None = None,
     on_delta: Callable[[str], None] = lambda _: None,
     on_status: Callable[[str], None] = lambda _: None,
+    on_tool_event: Callable[[dict], None] = lambda _: None,
     on_approval: Callable[[dict], str] = lambda _: "deny",
+    max_tokens: int | None = 700,
     profile: str = "kurisu",
 ) -> str:
     """本地 Hermes-like agent runner。
@@ -176,7 +193,7 @@ def run_local_run(
     auto_allow_commands = policy.get("auto_allow_commands", [])
 
     for _ in range(10):
-        content, tool_calls = _stream_turn_direct(url, headers, model, messages, on_delta)
+        content, tool_calls = _stream_turn_direct(url, headers, model, messages, on_delta, max_tokens=max_tokens)
         if not tool_calls:
             return content.strip()
 
@@ -188,6 +205,12 @@ def run_local_run(
                 arguments = json.loads(call["function"].get("arguments") or "{}")
             except json.JSONDecodeError:
                 arguments = {}
+            on_tool_event({
+                "kind": "tool_call",
+                "callId": call.get("id", ""),
+                "name": name,
+                "arguments": arguments,
+            })
 
             pattern_key = name
 
@@ -199,7 +222,7 @@ def run_local_run(
             elif name == "run_command":
                 cmd_text = arguments.get("command", "").strip()
                 pre_approved = (
-                    any(cmd_text.startswith(prefix) for prefix in auto_allow_commands)
+                    is_auto_approved_command(cmd_text, auto_allow_commands)
                     or pattern_key in _session_allowed
                     or pattern_key in always_allowed
                 )
@@ -229,7 +252,7 @@ def run_local_run(
                     choice = "deny"
 
                 if choice == "deny":
-                    result = {"text": "User denied this operation."}
+                    result = {"text": "User denied this operation.", "isError": True}
                 else:
                     # 记录 approval
                     if choice == "session":
@@ -244,6 +267,14 @@ def run_local_run(
                 on_status(_status_text(name, arguments))
                 result = _execute_tool_safe(name, arguments, vision_capable)
 
+            on_tool_event({
+                "kind": "tool_result",
+                "callId": call.get("id", ""),
+                "name": name,
+                "arguments": arguments,
+                "content": result.get("text", ""),
+                "isError": bool(result.get("isError", False)),
+            })
             messages.append({"role": "tool", "tool_call_id": call["id"], "content": result["text"]})
             if result.get("image_url") and vision_capable:
                 messages.append({"role": "user", "content": [
@@ -261,7 +292,7 @@ def _execute_tool_safe(name: str, arguments: dict, vision_capable: bool) -> dict
     try:
         return execute_tool(name, arguments)
     except Exception as exc:
-        return {"text": f"Tool failed: {exc}"}
+        return {"text": f"Tool failed: {exc}", "isError": True}
 
 
 def run_hermes_run(

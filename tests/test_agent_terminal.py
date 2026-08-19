@@ -52,3 +52,51 @@ def test_full_html_has_fauux_header():
     assert "║▒░" in html                      # fauux 分隔符装饰
     assert "border-top:1px solid #d2738a" in html  # hr rose
     assert "guest@wired:~$" in html
+
+
+def test_assistant_markdown_escapes_raw_html():
+    from desktop_pet import _build_terminal_line_html
+
+    html = _build_terminal_line_html("out", "<script>alert(1)</script> **安全**")
+    assert "<script>" not in html
+    assert "&lt;script&gt;" in html
+
+
+def test_tool_result_has_no_assistant_prefix():
+    from desktop_pet import _build_terminal_line_html
+
+    html = _build_terminal_line_html("result", "第一行\n第二行")
+    assert "kurisu&gt;" not in html
+    assert "<pre" in html
+    assert "第一行\n第二行" in html
+
+
+def test_insert_editor_diff_is_rendered_as_addition():
+    from desktop_pet import _build_terminal_line_html, _editor_diff_extra
+
+    extra = _editor_diff_extra({
+        "command": "insert",
+        "path": "demo.py",
+        "insert_line": 3,
+        "new_str": "print('ok')",
+    })
+    html = _build_terminal_line_html("diff", "", extra)
+    assert "demo.py:3" in html
+    assert "+ print(&#x27;ok&#x27;)" in html
+
+
+def test_completion_prefers_command_history():
+    from desktop_pet import _complete_terminal_input
+
+    assert _complete_terminal_input("git st", ["git status", "git stash"]) == "git sta"
+
+
+def test_completion_completes_quoted_path_argument(tmp_path):
+    from desktop_pet import _complete_terminal_input
+
+    folder = tmp_path / "folder with space"
+    folder.mkdir()
+    (folder / "alpha.txt").write_text("ok", encoding="utf-8")
+
+    completed = _complete_terminal_input('type "folder with space\\al', [], cwd=tmp_path)
+    assert completed == 'type "folder with space\\alpha.txt'

@@ -3,19 +3,21 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from PySide6.QtCore import QPoint, Qt
+from PySide6.QtCore import QEvent, QPoint, Qt
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QGraphicsDropShadowEffect,
     QHBoxLayout,
     QLabel,
     QPushButton,
+    QVBoxLayout,
     QWidget,
 )
 
 
 CRT_TITLE_BAR_QSS = """
-QWidget#crtTitleBar { background-color: #21171b; border: 1px solid #d2738a; border-left: 8px solid #d2738a; }
+QWidget#crtTitleBar { background: transparent; border: 0; }
+QWidget#crtTitleFrame { background-color: #21171b; border: 1px solid #d2738a; border-left: 8px solid #d2738a; }
 QLabel#crtTitle { color: #d2738a; font: 700 13px "Times New Roman", "Microsoft YaHei"; }
 QLabel#crtSignature { color: #8a7f63; font: 10px "Consolas", "Microsoft YaHei"; }
 QPushButton#crtClose { background: #171114; color: #d2738a; border: 1px solid #d2738a; min-width: 24px; max-width: 24px; min-height: 22px; max-height: 22px; padding: 0; font: 700 14px "Consolas", "Microsoft YaHei"; }
@@ -36,11 +38,20 @@ class CrtTitleBar(QWidget):
         self.setStyleSheet(CRT_TITLE_BAR_QSS)
         self._drag_offset: QPoint | None = None
 
-        layout = QHBoxLayout(self)
+        shell_layout = QVBoxLayout(self)
+        shell_layout.setContentsMargins(0, 0, 0, 0)
+        shell_layout.setSpacing(0)
+
+        self.frame = QWidget(self)
+        self.frame.setObjectName("crtTitleFrame")
+        self.frame.installEventFilter(self)
+        shell_layout.addWidget(self.frame)
+
+        layout = QHBoxLayout(self.frame)
         layout.setContentsMargins(10, 4, 6, 4)
         layout.setSpacing(8)
 
-        self.title_label = QLabel(title, self)
+        self.title_label = QLabel(title, self.frame)
         self.title_label.setObjectName("crtTitle")
         self.title_label.setAttribute(Qt.WA_TransparentForMouseEvents)
         glow = QGraphicsDropShadowEffect(self.title_label)
@@ -49,11 +60,11 @@ class CrtTitleBar(QWidget):
         glow.setOffset(1, 3)
         self.title_label.setGraphicsEffect(glow)
 
-        self.signature_label = QLabel(signature, self)
+        self.signature_label = QLabel(signature, self.frame)
         self.signature_label.setObjectName("crtSignature")
         self.signature_label.setAttribute(Qt.WA_TransparentForMouseEvents)
 
-        self.close_button = QPushButton("X", self)
+        self.close_button = QPushButton("X", self.frame)
         self.close_button.setObjectName("crtClose")
         self.close_button.setToolTip("关闭")
         self.close_button.setAutoDefault(False)
@@ -68,6 +79,19 @@ class CrtTitleBar(QWidget):
 
     def set_signature(self, text: str) -> None:
         self.signature_label.setText(text)
+
+    def eventFilter(self, watched, event) -> bool:
+        if watched is self.frame:
+            if event.type() == QEvent.MouseButtonPress:
+                self.mousePressEvent(event)
+                return event.isAccepted()
+            if event.type() == QEvent.MouseMove:
+                self.mouseMoveEvent(event)
+                return event.isAccepted()
+            if event.type() == QEvent.MouseButtonRelease:
+                self.mouseReleaseEvent(event)
+                return event.isAccepted()
+        return super().eventFilter(watched, event)
 
     def mousePressEvent(self, event) -> None:
         if event.button() == Qt.LeftButton:

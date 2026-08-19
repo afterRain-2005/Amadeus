@@ -1,5 +1,10 @@
 # tests/test_vision_client.py
+import base64
+from io import BytesIO
 from unittest.mock import patch, MagicMock
+
+from PIL import Image
+
 from core.vision_client import describe_screen, frame_to_data_url
 
 def test_describe_screen_returns_text():
@@ -29,6 +34,18 @@ def test_frame_to_data_url_encodes_png():
     """mss 截帧 bytes → base64 data URL。"""
     url = frame_to_data_url(b"\x89PNG fake bytes")
     assert url.startswith("data:image/png;base64,")
+
+
+def test_frame_to_data_url_uses_real_bgra_size():
+    """mss BGRA bytes 应按真实宽高转成正常 PNG，而不是 1xN 长条。"""
+    bgra = bytes([
+        0, 0, 255, 255,
+        0, 255, 0, 255,
+    ])
+    url = frame_to_data_url(bgra, (2, 1))
+    payload = base64.b64decode(url.split(",", 1)[1])
+    image = Image.open(BytesIO(payload))
+    assert image.size == (2, 1)
 
 def test_describe_screen_empty_key_returns_empty():
     """未配 key 直接返回空（降级关闭屏幕共享）。"""
