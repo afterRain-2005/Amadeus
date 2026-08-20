@@ -8,7 +8,7 @@ from __future__ import annotations
 import urllib.request
 from typing import Optional
 
-__version__ = "0.7.4"
+__version__ = "0.8.0"
 
 
 def parse_version(text: str) -> tuple[int, int, int]:
