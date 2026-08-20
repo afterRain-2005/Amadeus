@@ -2430,7 +2430,7 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             icon_pixmap = QPixmap(str(ROOT / "amadeus-logo-TM.png"))
             if icon_pixmap.isNull():
                 icon_pixmap = QPixmap(24, 24)
-                icon_pixmap.fill(QColor(224, 82, 82))
+                icon_pixmap.fill(QColor(210, 115, 138))
             else:
                 icon_pixmap = icon_pixmap.scaled(
                     24, 24, Qt.KeepAspectRatio, Qt.SmoothTransformation
