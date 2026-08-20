@@ -1483,7 +1483,7 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             self.setStyleSheet(
                 "QDialog#agentTerminal{background-color:#171114;"
                 "background-image:url(" + _dither_texture_url() + ");"
-                "border:1px solid #d2738a;}"
+                "border:2px solid #d2738a;}"
             )
             self.setMinimumSize(560, 390)
             self.resize(720, 520)
@@ -1516,7 +1516,7 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
                 "QTextBrowser{background-color:transparent;"
                 f"color:{_TERMINAL_CREAM};border:1px solid {_TERMINAL_ROSE};"
                 "border-radius:0px;padding:12px;font:14px 'Consolas','Microsoft YaHei'}"
-                "QTextBrowser{selection-background-color:#d2738a;selection-color:#171114}"
+                f"QTextBrowser{{selection-background-color:{_TERMINAL_ROSE};selection-color:#171114}}"
                 f"QScrollBar:vertical{{background:rgba(210,115,138,0.15);width:6px;margin:4px}}"
                 f"QScrollBar::handle:vertical{{background:{_TERMINAL_ROSE};border-radius:0px;min-height:30px}}"
                 "QScrollBar::add-line:vertical,QScrollBar::sub-line:vertical{height:0}"

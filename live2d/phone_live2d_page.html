@@ -27,7 +27,7 @@
     height: 560px;
     border-radius: 20px;
     background: linear-gradient(155deg,
-        #ff7a7a 0%,  #e0343f 10%, #c01e2b 34%,
+        #ff7a7a 0%,  #e0343f 10%, #d2738a 34%,
         #7d0f1a 62%, #9e121f 80%, #e0343f 92%, #ff8a8a 100%);
     overflow: hidden;
     box-shadow:
@@ -143,7 +143,7 @@
     background:
       /* ① 主体红色金属渐变（基底） */
       linear-gradient(155deg,
-        #ff7a7a 0%, #e0343f 12%, #c01e2b 38%,
+        #ff7a7a 0%, #e0343f 12%, #d2738a 38%,
         #7d0f1a 66%, #9e121f 82%, #e0343f 95%, #ff8a8a 100%),
       /* ② 底部暗红 */
       radial-gradient(ellipse 70% 60% at 50% 100%,
@@ -338,79 +338,79 @@
     let bodyPointerX = 0;
     let bodyPointerY = 0;
 
-    // —— 动作系统（保持与原版一致）——
+    // —— 动作系统（叠加到鼠标跟随之上）——
     const activeMotions = [];
     const MOTION_DURATIONS = {
       neutral: 1500, smile: 1200, blush: 1700, angry: 1100, sad: 1900, thinking: 1600,
       hands_on_hips: 1800, arms_crossed: 1800, facepalm: 1600, shrug: 1400, chin_rest: 2000,
     };
     const MOTIONS = {
-      neutral: (core, t) => {
+      neutral: (core, t, d) => {
         const w = Math.sin(t * Math.PI);
-        core.setParameterValueById('ParamAngleZ', 6 * w);
-        core.setParameterValueById('ParamAngleX', -2 * w);
+        d.angleZ += 6 * w;
+        d.angleX += -2 * w;
       },
-      smile: (core, t) => {
+      smile: (core, t, d) => {
         const w = Math.sin(t * Math.PI);
-        core.setParameterValueById('ParamAngleX', 4 * w);
-        core.setParameterValueById('ParamBodyAngleX', 2 * w);
+        d.angleX += 4 * w;
+        d.bodyAngleX += 2 * w;
       },
-      blush: (core, t) => {
+      blush: (core, t, d) => {
         const w = Math.sin(t * Math.PI);
-        core.setParameterValueById('ParamAngleY', -13 * w);
-        core.setParameterValueById('ParamAngleX', -4 * w);
-        core.setParameterValueById('ParamAngleZ', -4 * w);
+        d.angleY += -13 * w;
+        d.angleX += -4 * w;
+        d.angleZ += -4 * w;
       },
-      angry: (core, t) => {
+      angry: (core, t, d) => {
         const w = Math.sin(t * Math.PI);
-        core.setParameterValueById('ParamAngleX', 8 * w);
-        core.setParameterValueById('ParamBodyAngleX', 4 * w);
-        core.setParameterValueById('ParamAngleZ', 2.5 * Math.sin(t * Math.PI * 7) * (1 - t));
+        d.angleX += 8 * w;
+        d.bodyAngleX += 4 * w;
+        d.angleZ += 2.5 * Math.sin(t * Math.PI * 7) * (1 - t);
       },
-      sad: (core, t) => {
+      sad: (core, t, d) => {
         const w = Math.sin(t * Math.PI);
-        core.setParameterValueById('ParamAngleX', -9 * w);
-        core.setParameterValueById('ParamBodyAngleX', -3 * w);
+        d.angleX += -9 * w;
+        d.bodyAngleX += -3 * w;
       },
-      thinking: (core, t) => {
-        core.setParameterValueById('ParamAngleZ', 10 * Math.sin(t * Math.PI * 2));
-        core.setParameterValueById('ParamEyeBallX', 0.6 * Math.sin(t * Math.PI * 2));
+      thinking: (core, t, d) => {
+        d.angleZ += 10 * Math.sin(t * Math.PI * 2);
+        d.eyeBallX += 0.6 * Math.sin(t * Math.PI * 2);
       },
-      hands_on_hips: (core, t) => {
+      hands_on_hips: (core, t, d) => {
         const w = Math.sin(t * Math.PI);
         core.setParameterValueById('Param6', 24 * w);
         core.setParameterValueById('Param7', 22 * w);
-        core.setParameterValueById('ParamBodyAngleZ', 4 * w);
-        core.setParameterValueById('ParamAngleX', 2 * w);
+        d.bodyAngleZ += 4 * w;
+        d.angleX += 2 * w;
       },
-      arms_crossed: (core, t) => {
+      arms_crossed: (core, t, d) => {
         const w = Math.sin(t * Math.PI);
         core.setParameterValueById('Param6', -20 * w);
         core.setParameterValueById('Param7', -26 * w);
-        core.setParameterValueById('ParamAngleX', -3 * w);
-        core.setParameterValueById('ParamBodyAngleX', -2 * w);
+        d.angleX += -3 * w;
+        d.bodyAngleX += -2 * w;
       },
-      facepalm: (core, t) => {
+      facepalm: (core, t, d) => {
         const w = Math.sin(t * Math.PI);
         core.setParameterValueById('Param4', -24 * w);
         core.setParameterValueById('Param6', 14 * w);
-        core.setParameterValueById('ParamAngleX', -7 * w);
-        core.setParameterValueById('ParamAngleZ', 3 * w);
+        d.angleX += -7 * w;
+        d.angleZ += 3 * w;
       },
-      shrug: (core, t) => {
+      shrug: (core, t, d) => {
         const w = Math.sin(t * Math.PI);
         const j = Math.sin(t * Math.PI * 6) * 0.5;
         core.setParameterValueById('Param7', 18 * w + 4 * j);
         core.setParameterValueById('Param6', 12 * w);
-        core.setParameterValueById('ParamAngleZ', -5 * w);
+        d.angleZ += -5 * w;
       },
-      chin_rest: (core, t) => {
+      chin_rest: (core, t, d) => {
         const w = Math.sin(t * Math.PI);
         core.setParameterValueById('Param6', -16 * w);
         core.setParameterValueById('Param4', 20 * w);
-        core.setParameterValueById('ParamAngleZ', 8 * w);
-        core.setParameterValueById('ParamAngleX', -4 * w);
-        core.setParameterValueById('ParamEyeBallY', -0.5 * w);
+        d.angleZ += 8 * w;
+        d.angleX += -4 * w;
+        d.eyeBallY += -0.5 * w;
       },
     };
 
@@ -439,24 +439,44 @@
       core.setParameterValueById('ParamEyeROpen', Math.min(eyeOpen, 1 - state.smile * 0.55 - state.sad * 0.35));
       core.setParameterValueById('ParamEyeLOpen', Math.min(eyeOpen, 1 - state.smile * 0.55 - state.sad * 0.35));
 
-      core.setParameterValueById('ParamAngleX', pointerX * 30);
-      core.setParameterValueById('ParamAngleY', pointerY * 20);
-      core.setParameterValueById('ParamEyeBallX', pointerX * 1.5);
-      core.setParameterValueById('ParamEyeBallY', pointerY * 1.5);
-
-      // 身体跟随鼠标：平滑滞后（lerp 0.1），叠加呼吸
+      // 鼠标跟踪：身体平滑滞后（ANISpace 设计：身体只跟水平，不跟垂直）
       bodyPointerX += (pointerX - bodyPointerX) * 0.1;
       bodyPointerY += (pointerY - bodyPointerY) * 0.1;
-      const breath = Math.sin(now / 2200 * Math.PI * 2);
-      core.setParameterValueById('ParamBodyAngleX', bodyPointerY * 12 + breath * 1.5);
-      core.setParameterValueById('ParamBodyAngleZ', bodyPointerX * 10 + Math.cos(now / 2600 * Math.PI * 2) * 1.0);
 
+      // 基础参数：鼠标跟随（权重 1.0）
+      let angleX = pointerX * 30;
+      let angleY = pointerY * 20;
+      let angleZ = pointerX * pointerY * -20;  // Z轴扭转（斜视效果）
+      let bodyAngleX = bodyPointerX * 10;       // 身体只跟水平（ANISpace 设计）
+      let bodyAngleZ = 0;
+      let eyeBallX = pointerX * 1.5;
+      let eyeBallY = pointerY * 1.5;
+
+      // 待机微动：不同频率正弦波，权重 0.5（低于鼠标跟随）
+      const idleT = now / 1000;
+      angleX += 8 * Math.sin(idleT / 6.5345) * 0.5;
+      angleY += 5 * Math.sin(idleT / 3.5345) * 0.5;
+      angleZ += 6 * Math.sin(idleT / 5.5345) * 0.5;
+      bodyAngleX += 3 * Math.sin(idleT / 15.5345) * 0.5;
+      const breath = Math.sin(idleT / 3.2345) * 0.5 + 0.5;
+
+      // 运动系统：叠加到基础上（而非覆盖）
+      const motionDeltas = { angleX: 0, angleY: 0, angleZ: 0, bodyAngleX: 0, bodyAngleZ: 0, eyeBallX: 0, eyeBallY: 0 };
       for (let i = activeMotions.length - 1; i >= 0; i--) {
         const m = activeMotions[i];
         const t = (now - m.start) / m.duration;
         if (t >= 1) { activeMotions.splice(i, 1); continue; }
-        m.apply(core, t);
+        m.apply(core, t, motionDeltas);
       }
+
+      // 最终设置参数：基础值 + 运动增量
+      core.setParameterValueById('ParamAngleX', angleX + motionDeltas.angleX);
+      core.setParameterValueById('ParamAngleY', angleY + motionDeltas.angleY);
+      core.setParameterValueById('ParamAngleZ', angleZ + motionDeltas.angleZ);
+      core.setParameterValueById('ParamBodyAngleX', bodyAngleX + motionDeltas.bodyAngleX + breath * 3);
+      core.setParameterValueById('ParamBodyAngleZ', bodyAngleZ + motionDeltas.bodyAngleZ);
+      core.setParameterValueById('ParamEyeBallX', eyeBallX + motionDeltas.eyeBallX);
+      core.setParameterValueById('ParamEyeBallY', eyeBallY + motionDeltas.eyeBallY);
 
       if (speaking) {
         if (now - lastMouthAt > 400) {
@@ -565,7 +585,7 @@
       const grad = ctx.createLinearGradient(px, py, px + pw, py + ph);
       grad.addColorStop(0.00, '#ff7a7a');
       grad.addColorStop(0.10, '#e0343f');
-      grad.addColorStop(0.34, '#c01e2b');
+      grad.addColorStop(0.34, '#d2738a');
       grad.addColorStop(0.62, '#7d0f1a');
       grad.addColorStop(0.80, '#9e121f');
       grad.addColorStop(0.92, '#e0343f');
@@ -651,7 +671,7 @@
       const redMetal = ctx.createLinearGradient(cx - id / 2, cy - id / 2, cx + id / 2, cy + id / 2);
       redMetal.addColorStop(0.00, '#ff7a7a');
       redMetal.addColorStop(0.12, '#e0343f');
-      redMetal.addColorStop(0.38, '#c01e2b');
+      redMetal.addColorStop(0.38, '#d2738a');
       redMetal.addColorStop(0.66, '#7d0f1a');
       redMetal.addColorStop(0.82, '#9e121f');
       redMetal.addColorStop(0.95, '#e0343f');
