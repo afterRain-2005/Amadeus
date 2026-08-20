@@ -33,6 +33,7 @@ data/config.json
 data/saved_logins.json
 data/characters/
 data/memory.db
+data/harness/
 data/harness/sessions/
 data/harness/workspace/
 .sessions/
@@ -62,3 +63,14 @@ Thumbs.db
 desktop.ini
 .vscode/
 .idea/
+
+# 开源清理：第三方镜像 / 内部文档 / 本地独立项目（保留磁盘，不入库）
+deepseek-harness-master/
+team-docs/
+lessons.md
+font_preview_v4.html
+.tools/
+backup/
+Kurisu-GPT-SoVITS v2ProPlus Model/
+ibm5100/
+resources/fonts/

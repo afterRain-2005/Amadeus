@@ -92,30 +92,7 @@
     pointer-events: none;
   }
 
-  /* —— 状态栏（时间 + 网络信号，终端风） —— */
-  .statusbar {
-    position: relative; z-index: 4;
-    display: flex; justify-content: space-between; align-items: center;
-    padding: 6px 14px 0; height: 26px;
-    font: 10px "Consolas", "Courier New", "Microsoft YaHei", monospace;
-    color: #8a7f63; letter-spacing: 1px;
-  }
-  .statusbar .st-l .p { color: #d2738a; }
-  .statusbar .st-l .cur {
-    display: inline-block; width: 6px; height: 11px;
-    background: #d2738a; vertical-align: -2px;
-    animation: car 1s steps(1) infinite;
-  }
-  @keyframes car { 50% { background: transparent; } }
-  .statusbar .st-r { display: flex; gap: 9px; align-items: center; }
-  .statusbar .st-r .dot {
-    color: #34c759; font-size: 10px;
-    animation: phc 2s steps(1) infinite;
-  }
-  @keyframes phc { 50% { opacity: 0.25; } }
-  .statusbar .st-r .sig { letter-spacing: -2px; color: #d2738a; }
-
-  /* —— Live2D 舞台区：画布填充，角色从底部向上生长（顶部留状态栏 26px，底部留 Dock 64px） —— */
+  /* —— Live2D 舞台区：画布填充，角色从底部向上生长（顶部留 Qt 状态栏 26px，底部留 Dock 64px） —— */
   .stage {
     position: absolute; left: 0; right: 0; top: 26px; bottom: 0;
     padding-bottom: 64px;
@@ -256,14 +233,6 @@
 <div id="app">
   <div class="phone">
     <div class="screen">
-      <div class="statusbar">
-        <span class="st-l"><span class="p">kurisu&gt;</span> <span id="clock">--:--</span><span class="cur"></span></span>
-        <span class="st-r">
-          <span class="dot">&#x25CF;</span>
-          <span>wire ch 1</span>
-          <span class="sig">&#x25B2;&#x25B2;&#x25B2;</span>
-        </span>
-      </div>
       <div class="stage">
         <canvas id="canvas"></canvas>
       </div>
@@ -279,6 +248,7 @@
 <script src="../resources/live2dcubismcore.min.js"></script>
 <script src="../resources/pixi.min.js"></script>
 <script src="../resources/cubism4.min.js"></script>
+<script src="../resources/html2canvas.min.js"></script>
 
 <script>
 (async () => {
@@ -292,14 +262,7 @@
     statusEl.textContent = PHRASES[phraseIdx];
   }, 1200);
 
-  // 状态栏时钟：每分钟更新
-  const clockEl = document.getElementById('clock');
-  function updateClock() {
-    const now = new Date();
-    clockEl.textContent = String(now.getHours()).padStart(2, '0') + ':' + String(now.getMinutes()).padStart(2, '0');
-  }
-  updateClock();
-  setInterval(updateClock, 30000);
+  // 状态栏时钟已移除：时间/信号显示改由 Qt 侧实现（desktop_pet.py StatusBar）
 
   document.getElementById('pet-menu').addEventListener('click', () => {
     if (window.pywebview?.api?.close) window.pywebview.api.close();
@@ -572,11 +535,11 @@
 
     // ============================================================
     // 函数：composeFrame()
-    // 作用：把"手机壳（Canvas 2D 绘制）+ Live2D 角色帧（WebGL PIXI）"
+    // 作用：把"手机 UI（html2canvas DOM 截图）+ Live2D 角色帧（WebGL PIXI）"
     //       合成到 #composite canvas（304×690，透明背景），并返回 dataURL。
     //       这就是 renderer_process 每 15fps 截取的画面。
-    //       手机壳 UI 完全由 JS Canvas 绘制（即 PyWeb 绘制，非 Qt），
-    //       尺寸严格 2:1（手机本体 280×560）。
+    //       手机 UI 由 CSS/DOM 渲染（html2canvas 截取，与浏览器预览一致），
+    //       Live2D 保持原生 WebGL 渲染，两层独立互不干扰。
     // 参数：无
     // 返回值：str —— PNG dataURL（手机+角色 合成帧）
     // ============================================================
@@ -596,314 +559,29 @@
     document.body.appendChild(compCanvas);
     const compCtx = compCanvas.getContext('2d');
 
-    // 预加载屏幕壁纸（bg.png）——失败时回退纯深色
-    const bgPromise = (async () => {
+    // ============================================================
+    // 手机 UI 层：html2canvas 直接截图 .phone DOM（CSS 渲染，
+    //             与浏览器预览完全一致），替代手绘 Canvas 2D。
+    // ============================================================
+    let _uiBase = null;   // 手机 UI 底图（html2canvas 输出 280×560）
+    async function captureUiBase() {
+      stageEl.style.display = 'none';      // 截图时隐藏 Live2D 舞台
       try {
-        const img = new Image();
-        img.crossOrigin = 'anonymous';
-        await new Promise((res, rej) => {
-          img.onload = res; img.onerror = rej;
-          img.src = '../resources/bg.png';
+        const canvas = await html2canvas(document.querySelector('.phone'), {
+          scale: 1,
+          backgroundColor: 'transparent',
+          useCORS: true,
+          logging: false,
         });
-        return img;
-      } catch (_) {
-        return null;
+        _uiBase = canvas;
+      } catch (e) {
+        console.error('html2canvas capture failed:', e);
+      } finally {
+        stageEl.style.display = '';
       }
-    })();
-
-    // —— 辅助：画圆角矩形路径（Canvas 2D 原生 roundRect 兼容兜底） ——
-    function roundRect(ctx, x, y, w, h, r) {
-      const rr = Math.min(r, w / 2, h / 2);
-      ctx.beginPath();
-      ctx.moveTo(x + rr, y);
-      ctx.lineTo(x + w - rr, y);
-      ctx.quadraticCurveTo(x + w, y, x + w, y + rr);
-      ctx.lineTo(x + w, y + h - rr);
-      ctx.quadraticCurveTo(x + w, y + h, x + w - rr, y + h);
-      ctx.lineTo(x + rr, y + h);
-      ctx.quadraticCurveTo(x, y + h, x, y + h - rr);
-      ctx.lineTo(x, y + rr);
-      ctx.quadraticCurveTo(x, y, x + rr, y);
-      ctx.closePath();
     }
-
-    // —— 画手机外壳（对应 phone_mockup.html .phone 渐变） ——
-    function drawPhoneShell(ctx, px, py, pw, ph) {
-      // 主体 155deg 渐变
-      const grad = ctx.createLinearGradient(px, py, px + pw, py + ph);
-      grad.addColorStop(0.00, '#ff7a7a');
-      grad.addColorStop(0.10, '#e0343f');
-      grad.addColorStop(0.34, '#d2738a');
-      grad.addColorStop(0.62, '#7d0f1a');
-      grad.addColorStop(0.80, '#9e121f');
-      grad.addColorStop(0.92, '#e0343f');
-      grad.addColorStop(1.00, '#ff8a8a');
-      roundRect(ctx, px, py, pw, ph, 20);
-      ctx.fillStyle = grad;
-      ctx.fill();
-
-      // 斜向高光 1（145deg 从左上）
-      const innerX = px + 4, innerY = py + 4, innerW = pw - 8, innerH = ph - 8;
-      const h1 = ctx.createLinearGradient(innerX, innerY, innerX + innerW, innerY + innerH);
-      h1.addColorStop(0.18, 'rgba(255,255,255,0)');
-      h1.addColorStop(0.23, 'rgba(255,255,255,0.14)');
-      h1.addColorStop(0.30, 'rgba(255,255,255,0)');
-      roundRect(ctx, innerX, innerY, innerW, innerH, 16);
-      ctx.fillStyle = h1;
-      ctx.fill();
-      // 斜向高光 2
-      const h2 = ctx.createLinearGradient(innerX, innerY, innerX + innerW, innerY + innerH);
-      h2.addColorStop(0.62, 'rgba(255,255,255,0)');
-      h2.addColorStop(0.68, 'rgba(255,255,255,0.10)');
-      h2.addColorStop(0.74, 'rgba(255,255,255,0)');
-      roundRect(ctx, innerX, innerY, innerW, innerH, 16);
-      ctx.fillStyle = h2;
-      ctx.fill();
-
-      // 顶部受光亮线
-      const tl = ctx.createLinearGradient(px + 30, 0, px + pw - 30, 0);
-      tl.addColorStop(0.0, 'rgba(255, 217, 217, 0)');
-      tl.addColorStop(0.5, 'rgba(255, 217, 217, 0.90)');
-      tl.addColorStop(1.0, 'rgba(255, 217, 217, 0)');
-      ctx.fillStyle = tl;
-      ctx.fillRect(px + 30, py + 3, pw - 60, 2);
-    }
-
-    // —— 听筒 ——
-    function drawSpeaker(ctx, px, py, pw) {
-      const sw = 80, sh = 20;
-      const sx = px + pw / 2 - sw / 2;
-      const sy = py + 13;
-      roundRect(ctx, sx, sy, sw, sh, 10);
-      ctx.fillStyle = '#050405';
-      ctx.fill();
-      // 传感器
-      roundRect(ctx, sx + 8, sy + (sh - 5) / 2, 18, 5, 2);
-      ctx.fillStyle = '#3a3a3a';
-      ctx.fill();
-    }
-
-    // —— Home 键（红色金属纹理版：拉丝 + 斜高光 + 颗粒） ——
-    function drawHomeBtn(ctx, px, py, pw, ph) {
-      const d = 36;
-      const hx = px + pw / 2 - d / 2;
-      const hy = py + ph - 13 - d;
-      const cx = hx + d / 2, cy = hy + d / 2;
-
-      ctx.save();
-
-      // 外圈深暗红金属环
-      const outerGrad = ctx.createRadialGradient(cx, cy - 6, 2, cx, cy, d / 2 + 1);
-      outerGrad.addColorStop(0.0, '#f07070');
-      outerGrad.addColorStop(0.5, '#b83030');
-      outerGrad.addColorStop(1.0, '#701010');
-      ctx.beginPath();
-      ctx.arc(cx, cy, d / 2 + 1, 0, Math.PI * 2);
-      ctx.fillStyle = outerGrad;
-      ctx.fill();
-
-      // 外轮廓暗边
-      ctx.beginPath();
-      ctx.arc(cx, cy, d / 2 + 1, 0, Math.PI * 2);
-      ctx.strokeStyle = 'rgba(120, 18, 22, 0.55)';
-      ctx.lineWidth = 1;
-      ctx.stroke();
-
-      // 裁剪到内圆，后续纹理不溢出
-      const id = d - 8, ix = cx - id / 2, iy = cy - id / 2;
-      ctx.beginPath();
-      ctx.arc(cx, cy, id / 2, 0, Math.PI * 2);
-      ctx.clip();
-
-      // ① 主体金属基底（155° 七档渐变，与手机壳一致）
-      const redMetal = ctx.createLinearGradient(cx - id / 2, cy - id / 2, cx + id / 2, cy + id / 2);
-      redMetal.addColorStop(0.00, '#ff7a7a');
-      redMetal.addColorStop(0.12, '#e0343f');
-      redMetal.addColorStop(0.38, '#d2738a');
-      redMetal.addColorStop(0.66, '#7d0f1a');
-      redMetal.addColorStop(0.82, '#9e121f');
-      redMetal.addColorStop(0.95, '#e0343f');
-      redMetal.addColorStop(1.00, '#ff8a8a');
-      ctx.fillStyle = redMetal;
-      ctx.fillRect(ix, iy, id, id);
-
-      // ② 底部暗红
-      const bottomShade = ctx.createRadialGradient(cx, cy + id * 0.3, 1, cx, cy + id * 0.5, id * 0.7);
-      bottomShade.addColorStop(0.0, 'rgba(90, 10, 14, 0.45)');
-      bottomShade.addColorStop(1.0, 'rgba(90, 10, 14, 0)');
-      ctx.fillStyle = bottomShade;
-      ctx.fillRect(ix, iy, id, id);
-
-      // ③ 顶部亮部
-      const topHi = ctx.createRadialGradient(cx, cy - id * 0.28, 1, cx, cy - id * 0.2, id * 0.55);
-      topHi.addColorStop(0.0, 'rgba(255, 235, 235, 0.40)');
-      topHi.addColorStop(1.0, 'rgba(255, 235, 235, 0)');
-      ctx.fillStyle = topHi;
-      ctx.fillRect(ix, iy, id, id);
-
-      // ④ 斜向高光带 118°
-      const hi1 = ctx.createLinearGradient(
-        ix + id * 0.18, iy + id * 0.22,
-        ix + id * 0.30, iy + id * 0.28
-      );
-      hi1.addColorStop(0.0, 'rgba(255,255,255,0)');
-      hi1.addColorStop(0.5, 'rgba(255,255,255,0.12)');
-      hi1.addColorStop(1.0, 'rgba(255,255,255,0)');
-      ctx.fillStyle = hi1;
-      ctx.fillRect(ix, iy, id, id);
-
-      // ④ 斜向高光带 115°
-      const hi2 = ctx.createLinearGradient(
-        ix + id * 0.62, iy + id * 0.66,
-        ix + id * 0.74, iy + id * 0.72
-      );
-      hi2.addColorStop(0.0, 'rgba(255,255,255,0)');
-      hi2.addColorStop(0.5, 'rgba(255,255,255,0.08)');
-      hi2.addColorStop(1.0, 'rgba(255,255,255,0)');
-      ctx.fillStyle = hi2;
-      ctx.fillRect(ix, iy, id, id);
-
-      // ⑤ 阳极拉丝横纹（90° repeating）
-      const lines = [
-        { x1: 0, x2: 2, color: 'rgba(255,255,255,0.04)' },
-        { x1: 3, x2: 7, color: 'transparent' },
-        { x1: 7, x2: 9, color: 'rgba(0,0,0,0.08)' },
-        { x1: 9, x2: 12, color: 'transparent' },
-      ];
-      const period = 12;
-      for (let off = -period; off < id + period; off += period) {
-        for (const seg of lines) {
-          const sx = ix + off + seg.x1;
-          const ex = ix + off + seg.x2;
-          if (ex < ix || sx > ix + id) continue;
-          const sx2 = Math.max(sx, ix);
-          const ex2 = Math.min(ex, ix + id);
-          if (ex2 > sx2) {
-            ctx.fillStyle = seg.color;
-            ctx.fillRect(sx2, iy, ex2 - sx2, id);
-          }
-        }
-      }
-
-      // ⑥ 细颗粒噪点（金属粉质感）
-      for (let gy = iy; gy < iy + id; gy += 6) {
-        ctx.fillStyle = 'rgba(255,255,255,0.02)';
-        ctx.fillRect(ix, gy, id, 1);
-        ctx.fillStyle = 'rgba(0,0,0,0.025)';
-        ctx.fillRect(ix, gy + 3, id, 1);
-      }
-
-      // 取消裁剪
-      ctx.restore();
-
-      // 内圈细边（金属环）
-      ctx.save();
-      ctx.beginPath();
-      ctx.arc(cx, cy, id / 2 - 0.5, 0, Math.PI * 2);
-      ctx.strokeStyle = 'rgba(255, 255, 255, 0.18)';
-      ctx.lineWidth = 0.8;
-      ctx.stroke();
-
-      // 外圈发光
-      ctx.beginPath();
-      ctx.arc(cx, cy, d / 2 + 2, 0, Math.PI * 2);
-      ctx.strokeStyle = 'rgba(220, 40, 50, 0.12)';
-      ctx.lineWidth = 1;
-      ctx.stroke();
-
-      // 顶部受光亮线（与手机机身顶部光条同风格）
-      ctx.beginPath();
-      ctx.moveTo(cx - id * 0.28, cy - id / 2 + 1);
-      ctx.lineTo(cx + id * 0.28, cy - id / 2 + 1);
-      ctx.strokeStyle = 'rgba(255, 220, 220, 0.45)';
-      ctx.lineWidth = 1.2;
-      ctx.stroke();
-      ctx.restore();
-    }
-
-    // —— 侧键 ——
-    function drawSideKeys(ctx, px, py) {
-      const sg = ctx.createLinearGradient(0, py, 0, py + 300);
-      sg.addColorStop(0, '#e0343f');
-      sg.addColorStop(1, '#7d0f1a');
-      ctx.fillStyle = sg;
-      ctx.strokeStyle = 'rgba(255,255,255,0.25)';
-      ctx.lineWidth = 1;
-      // 音量 +
-      roundRect(ctx, px - 3, py + 148, 4, 64, 3); ctx.fill(); ctx.stroke();
-      // 音量 -
-      roundRect(ctx, px - 3, py + 222, 4, 64, 3); ctx.fill(); ctx.stroke();
-      // 电源（右）
-      roundRect(ctx, px + 280 - 1, py + 196, 4, 88, 3); ctx.fill(); ctx.stroke();
-    }
-
-    // —— 主合成函数（同步：pywebview evaluate_js 只支持同步返回） ——
-    //   bgImg 加载完成前只画纯色背景（不阻塞），之后自动使用壁纸。
-    let _cachedBg = null;
-    bgPromise.then(img => { _cachedBg = img; });
-
-    function drawScreenSync(ctx, px, py, pw, ph, pixiCanvas) {
-      const sx = px + BORDER;
-      const sy = py + BORDER;
-      const sw = pw - BORDER * 2;
-      const sh = ph - BORDER - BOTTOM;
-
-      ctx.save();
-      roundRect(ctx, sx, sy, sw, sh, 14);
-      ctx.clip();
-
-      ctx.fillStyle = '#171114';
-      ctx.fillRect(sx, sy, sw, sh);
-
-      if (_cachedBg) {
-        const bw = _cachedBg.naturalWidth, bh = _cachedBg.naturalHeight;
-        const scale = Math.max(sw / bw, sh / bh);
-        const dw = bw * scale, dh = bh * scale;
-        const dx = sx + (sw - dw) / 2;
-        const dy = sy + (sh - dh) / 2;
-        ctx.drawImage(_cachedBg, dx, dy, dw, dh);
-      }
-
-      const bg1 = ctx.createRadialGradient(
-        sx + sw / 2, sy + sh + 30, 120,
-        sx + sw / 2, sy + sh, 120
-      );
-      bg1.addColorStop(0, 'rgba(210, 115, 138, 0.22)');
-      bg1.addColorStop(1, 'rgba(210, 115, 138, 0)');
-      ctx.fillStyle = bg1;
-      ctx.fillRect(sx, sy, sw, sh);
-
-      const bg2 = ctx.createRadialGradient(
-        sx + sw / 2, sy - 20, 100,
-        sx + sw / 2, sy, 100
-      );
-      bg2.addColorStop(0, 'rgba(210, 115, 138, 0.10)');
-      bg2.addColorStop(1, 'rgba(210, 115, 138, 0)');
-      ctx.fillStyle = bg2;
-      ctx.fillRect(sx, sy, sw, sh);
-
-      // Live2D 角色（按 HTML 舞台规则贴到屏幕：底部对齐，留 56 Dock 槽位）
-      if (pixiCanvas) {
-        const pw2 = pixiCanvas.width, ph2 = pixiCanvas.height;
-        if (pw2 > 0 && ph2 > 0) {
-          const ratio = Math.min(sw / pw2, (sh - 56) / ph2) * 1.05;
-          const dw2 = pw2 * ratio;
-          const dh2 = ph2 * ratio;
-          const dx = sx + (sw - dw2) / 2;
-          const dy = sy + sh - dh2;
-          ctx.drawImage(pixiCanvas, dx, dy, dw2, dh2);
-        }
-      }
-
-      ctx.restore();
-
-      ctx.save();
-      ctx.strokeStyle = 'rgba(0,0,0,0.78)';
-      ctx.lineWidth = 2;
-      roundRect(ctx, sx, sy, sw, sh, 14);
-      ctx.stroke();
-      ctx.restore();
-    }
+    captureUiBase();
+    window.__amadeusRecapture = captureUiBase;
 
     window.__amadeusComposite = function composeFrameSync() {
       compCtx.clearRect(0, 0, COMPOSITE_W, COMPOSITE_H);
@@ -911,11 +589,27 @@
         ? window.__amadeus.app.view
         : null;
 
-      drawPhoneShell(compCtx, PHONE_X, PHONE_Y, PHONE_W, PHONE_H);
-      drawScreenSync(compCtx, PHONE_X, PHONE_Y, PHONE_W, PHONE_H, pixiCanvas);
-      drawSpeaker(compCtx, PHONE_X, PHONE_Y, PHONE_W);
-      drawHomeBtn(compCtx, PHONE_X, PHONE_Y, PHONE_W, PHONE_H);
-      drawSideKeys(compCtx, PHONE_X, PHONE_Y);
+      // 第 1 层：手机 UI（html2canvas DOM 截图，CSS 渲染与浏览器一致）
+      if (_uiBase) {
+        compCtx.drawImage(_uiBase, PHONE_X, PHONE_Y, PHONE_W, PHONE_H);
+      }
+
+      // 第 2 层：Live2D 角色（贴到屏幕区域：底部对齐，留 56px Dock 槽位）
+      if (pixiCanvas) {
+        const sx = PHONE_X + BORDER;
+        const sy = PHONE_Y + BORDER;
+        const sw = PHONE_W - BORDER * 2;
+        const sh = PHONE_H - BORDER - BOTTOM;
+        const pw2 = pixiCanvas.width, ph2 = pixiCanvas.height;
+        if (pw2 > 0 && ph2 > 0) {
+          const ratio = Math.min(sw / pw2, (sh - 56) / ph2) * 1.05;
+          const dw2 = pw2 * ratio;
+          const dh2 = ph2 * ratio;
+          const dx = sx + (sw - dw2) / 2;
+          const dy = sy + sh - dh2;
+          compCtx.drawImage(pixiCanvas, dx, dy, dw2, dh2);
+        }
+      }
 
       return compCanvas.toDataURL('image/png');
     };

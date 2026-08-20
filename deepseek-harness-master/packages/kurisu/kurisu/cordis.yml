@@ -1,5 +1,0 @@
-# Kurisu 陪伴插件 overlay：`dsh web --patch ./cordis.yml` 即可加载
-# 也可把下行合并进 bundle 层，作为常驻插件挂载。
-- insert:
-    - id: kurisu
-      name: './src/index.ts'
