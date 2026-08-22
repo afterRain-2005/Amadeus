@@ -22,12 +22,15 @@ def encode_wav(samples: np.ndarray, sample_rate: int) -> bytes:
 
 
 def transcribe(wav_bytes: bytes, endpoint: str, api_key: str, model: str) -> str:
+    """OpenAI 兼容音频转写。只发 input_audio，不带 text 指令部分：
+    小米 mimo ASR 网关明确拒绝附带 text（400 "text prompt is injected by the
+    gateway"，转写提示词由网关注入），带上 text 的请求每句都 400 → 通话无声。
+    """
     audio = base64.b64encode(wav_bytes).decode("ascii")
     payload = {
         "model": model,
         "messages": [{"role": "user", "content": [
             {"type": "input_audio", "input_audio": {"data": audio, "format": "wav"}},
-            {"type": "text", "text": "请准确转写这段语音，只输出转写文字。"},
         ]}],
         "stream": False,
     }

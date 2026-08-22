@@ -16,8 +16,6 @@ import win32con
 import win32gui
 import httpx
 
-from config import OPENCLAW_DEFAULTS
-
 
 POWERSHELL = r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"
 DEFAULT_WORKDIR = str(Path(__file__).resolve().parents[4])
@@ -124,7 +122,7 @@ def is_auto_approved_command(command: str, safe_commands: list[str] | tuple[str,
     return command_name.casefold() in safe
 
 
-def execute_tool(name: str, arguments: dict) -> dict:
+def execute_tool(name: str, arguments: dict, on_status=None) -> dict:
     if name == "capture_screen":
         image = ImageGrab.grab(all_screens=True).convert("RGB")
         image.thumbnail((1440, 900))
@@ -268,46 +266,24 @@ def execute_tool(name: str, arguments: dict) -> dict:
             return {"text": f"Write failed: {exc}"}
         return {"text": f"Written {len(content)} chars to {p}."}
     if name == "operate_gui":
-        return _operate_gui(arguments)
+        return _operate_gui(arguments, on_status)
     if name == "run_command":
         return _run_powershell(arguments)
     raise ValueError(f"Unknown tool: {name}")
 
 
-def _operate_gui(arguments: dict) -> dict:
+def _operate_gui(arguments: dict, on_status=None) -> dict:
     """把 GUI 操作任务委托给本地 OpenClaw Gateway（CUA 后端）。
 
-    通过 POST /v1/chat/completions 把自然语言任务发给 openclaw/default 代理，
-    代理自动启用 CUA skill 操作真实桌面（鼠标/键盘）。Gateway 未启用或不可达时返回降级提示。
-    参考接口：https://docs.openclaw.ai/gateway（/v1/chat/completions 在主端口，OpenAI 兼容）。
+    配置经 openclaw_client.merge_config 合并 data/config.json 的 openclaw 运行时覆盖；
+    网关生命周期（探活/自动拉起）与降级文案统一在 core/openclaw_client.py 处理。
     """
     task = arguments.get("task", "").strip()
     if not task:
         return {"text": "Empty GUI task."}
-    if not OPENCLAW_DEFAULTS.get("enabled"):
-        return {"text": "OpenClaw CUA 后端未启用。请在 config.py 设置 OPENCLAW_DEFAULTS['enabled']=True，并部署 OpenClaw Gateway（openclaw gateway，默认 127.0.0.1:18789）。"}
-    base = str(OPENCLAW_DEFAULTS.get("base_url", "http://127.0.0.1:18789")).rstrip("/")
-    token = str(OPENCLAW_DEFAULTS.get("token", ""))
-    model = str(OPENCLAW_DEFAULTS.get("model", "openclaw/default"))
-    timeout = float(OPENCLAW_DEFAULTS.get("timeout", 120))
-    headers = {"Authorization": f"Bearer {token}"} if token else {}
-    try:
-        with httpx.Client(timeout=timeout) as client:
-            resp = client.post(
-                f"{base}/v1/chat/completions",
-                headers=headers,
-                json={"model": model, "messages": [{"role": "user", "content": task}]},
-            )
-        if resp.is_error:
-            return {"text": f"OpenClaw Gateway HTTP {resp.status_code}: {resp.text[:500]}"}
-        data = resp.json()
-        choices = data.get("choices") or []
-        content = choices[0].get("message", {}).get("content", "") if choices else ""
-        return {"text": content or "OpenClaw 返回空回复。"}
-    except httpx.HTTPError as exc:
-        return {"text": f"OpenClaw Gateway 不可达：{exc}。请确认 Gateway 已启动（openclaw gateway）。"}
-    except Exception as exc:
-        return {"text": f"operate_gui 失败：{exc}"}
+    from core.openclaw_client import merge_config, run_gui_task
+    cfg = merge_config()
+    return {"text": run_gui_task(cfg, task, on_status=on_status or (lambda _: None))}
 
 
 def _press_keys(keys: list[str]) -> None:

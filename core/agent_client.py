@@ -30,6 +30,7 @@ from __future__ import annotations
 from collections.abc import Callable
 import json
 import sys
+import threading
 
 import httpx
 
@@ -44,6 +45,32 @@ from config import APPROVAL_POLICY
 
 # approval.request 的合法 choice 值
 APPROVAL_CHOICES = ("once", "session", "always", "deny")
+
+
+# === 直连共享连接池 ===
+# 顶层 httpx.stream() 每次调用都新建 Client → 每轮对话/agent 工具循环的每一轮
+# 都重做 TCP+TLS 握手（云端直连 API 每轮多 ~100-300ms 首字延迟）。
+# 共享 Client 按主机复用连接（httpx.Client 线程安全），闲置 60s 回收，
+# 覆盖连续对话与工具循环轮次的典型间隔。
+_direct_client: httpx.Client | None = None
+_direct_client_lock = threading.Lock()
+# 闲置 60s 才回收 keepalive 连接（覆盖连续对话与工具循环轮次的典型间隔）
+_DIRECT_KEEPALIVE_EXPIRY = 60.0
+
+
+def _get_direct_client() -> httpx.Client:
+    """惰性创建共享 httpx.Client（keepalive 连接池）。"""
+    global _direct_client
+    with _direct_client_lock:
+        if _direct_client is None or _direct_client.is_closed:
+            _direct_client = httpx.Client(
+                timeout=90,
+                limits=httpx.Limits(
+                    max_keepalive_connections=4,
+                    keepalive_expiry=_DIRECT_KEEPALIVE_EXPIRY,
+                ),
+            )
+        return _direct_client
 
 
 # === 直连 fallback：旧 OpenAI 兼容 agent loop ===
@@ -64,6 +91,7 @@ def _stream_turn_direct(
     messages: list[dict],
     on_delta,
     max_tokens: int | None = 700,
+    cancel_event: threading.Event | None = None,
 ) -> tuple[str, list[dict]]:
     content = ""
     calls: dict[int, dict] = {}
@@ -73,11 +101,18 @@ def _stream_turn_direct(
     }
     if max_tokens is not None:
         payload["max_tokens"] = max_tokens
-    with httpx.stream("POST", url, headers=headers, json=payload, timeout=90) as response:
+    # 共享连接池：跨轮次复用 keepalive 连接，省去每轮握手（见 _get_direct_client）
+    with _get_direct_client().stream(
+        "POST", url, headers=headers, json=payload, timeout=90
+    ) as response:
         if response.is_error:
             error_body = response.read().decode("utf-8", errors="replace")
             raise RuntimeError(f"Model API HTTP {response.status_code}: {error_body[:800]}")
         for line in response.iter_lines():
+            # Ctrl+C 中断：立即停止消费流（退出 with 关闭连接）。
+            # 半途的工具调用参数不可信，只返回已生成的正文。
+            if cancel_event is not None and cancel_event.is_set():
+                return content, []
             if not line.startswith("data:"):
                 continue
             payload = line[5:].strip()
@@ -154,6 +189,7 @@ def run_local_run(
     on_tool_event: Callable[[dict], None] = lambda _: None,
     on_approval: Callable[[dict], str] = lambda _: "deny",
     max_tokens: int | None = 700,
+    cancel_event: threading.Event | None = None,
     profile: str = "kurisu",
 ) -> str:
     """本地 Hermes-like agent runner。
@@ -193,8 +229,14 @@ def run_local_run(
     auto_allow_commands = policy.get("auto_allow_commands", [])
 
     for _ in range(10):
-        content, tool_calls = _stream_turn_direct(url, headers, model, messages, on_delta, max_tokens=max_tokens)
+        content, tool_calls = _stream_turn_direct(
+            url, headers, model, messages, on_delta,
+            max_tokens=max_tokens, cancel_event=cancel_event,
+        )
         if not tool_calls:
+            return content.strip()
+        # Ctrl+C 中断：不执行工具，直接返回已生成的部分回复
+        if cancel_event is not None and cancel_event.is_set():
             return content.strip()
 
         messages.append({"role": "assistant", "content": content or None, "tool_calls": tool_calls})
@@ -262,10 +304,10 @@ def run_local_run(
                         config["always_approvals"] = list(always_allowed)
                         save_config(config)
                     on_status(_status_text(name, arguments))
-                    result = _execute_tool_safe(name, arguments, vision_capable)
+                    result = _execute_tool_safe(name, arguments, vision_capable, on_status)
             else:
                 on_status(_status_text(name, arguments))
-                result = _execute_tool_safe(name, arguments, vision_capable)
+                result = _execute_tool_safe(name, arguments, vision_capable, on_status)
 
             on_tool_event({
                 "kind": "tool_result",
@@ -285,12 +327,15 @@ def run_local_run(
     raise RuntimeError("Agent 达到最大工具调用轮数限制（10 轮）")
 
 
-def _execute_tool_safe(name: str, arguments: dict, vision_capable: bool) -> dict:
-    """执行工具，捕获异常。对不支持视觉的模型跳过截图。"""
+def _execute_tool_safe(name: str, arguments: dict, vision_capable: bool, on_status=None) -> dict:
+    """执行工具，捕获异常。对不支持视觉的模型跳过截图。
+
+    on_status 透传给 execute_tool（operate_gui 等长任务用它流式回报进度）。
+    """
     if name == "capture_screen" and not vision_capable:
         return {"text": "The configured model cannot inspect images. Use list_windows or run_command instead."}
     try:
-        return execute_tool(name, arguments)
+        return execute_tool(name, arguments, on_status=on_status)
     except Exception as exc:
         return {"text": f"Tool failed: {exc}", "isError": True}
 

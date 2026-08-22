@@ -11,3 +11,4 @@ pytest>=8.0
 ddgs>=4.0
 trafilatura>=1.12
 mss>=9.0
+websockets>=13.0

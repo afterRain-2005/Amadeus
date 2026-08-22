@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import os
 from pathlib import Path
 import shlex
 from typing import Callable
@@ -135,7 +136,8 @@ def _pwd(_args: list[str], ctx: TerminalCommandContext) -> TerminalCommandResult
 def _cd(args: list[str], ctx: TerminalCommandContext) -> TerminalCommandResult:
     if not args:
         return TerminalCommandResult(lines=[("sys", str(ctx.cwd))])
-    target = Path(args[0].strip("\"'"))
+    target_text = os.path.expandvars(os.path.expanduser(args[0].strip("\"'")))
+    target = Path(target_text)
     if not target.is_absolute():
         target = ctx.cwd / target
     try:
@@ -147,8 +149,11 @@ def _cd(args: list[str], ctx: TerminalCommandContext) -> TerminalCommandResult:
     return TerminalCommandResult(cwd=resolved, lines=[("sys", f"cwd={resolved}")])
 
 
-@registry.register("history", "history", "show terminal input history")
-def _history(_args: list[str], ctx: TerminalCommandContext) -> TerminalCommandResult:
+@registry.register("history", "history [clear]", "show or clear terminal input history")
+def _history(args: list[str], ctx: TerminalCommandContext) -> TerminalCommandResult:
+    if args and args[0].lower() in {"clear", "-c"}:
+        ctx.history.clear()
+        return TerminalCommandResult(lines=[("sys", "history cleared")])
     items = ctx.history[-30:]
     if not items:
         return TerminalCommandResult(lines=[("sys", "(history empty)")])

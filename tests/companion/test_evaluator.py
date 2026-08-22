@@ -50,6 +50,32 @@ def test_l1_work_session_over_2h_triggers_concern():
     assert "130" in decision.text or "颈椎" in decision.text
 
 
+def test_l1_coding_one_hour_triggers_focus_break():
+    ev = Evaluator()
+    snap = _snap(
+        work_session_minutes=60,
+        active_window_title="main.py - Visual Studio Code",
+        active_process="Code.exe",
+    )
+    decision = ev.evaluate(snap, allow_llm=False)
+    assert decision is not None
+    assert decision.source == "template"
+    assert decision.topic == "focus_break"
+    assert decision.emotion == "concern"
+    assert "60" in decision.text
+
+
+def test_l1_focus_break_requires_coding_context():
+    ev = Evaluator()
+    snap = _snap(
+        work_session_minutes=60,
+        active_window_title="Inbox - Mail",
+        active_process="Mail.exe",
+    )
+    decision = ev.evaluate(snap, allow_llm=False)
+    assert decision is None
+
+
 def test_l1_no_trigger_when_conditions_not_met():
     ev = Evaluator()
     snap = _snap(idle_seconds=10, work_session_minutes=5, is_deep_night=False)

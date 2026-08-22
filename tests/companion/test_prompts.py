@@ -118,6 +118,37 @@ def test_template_concern_condition_triggers():
 
     assert concern_tpl["condition"](_snap(work_session_minutes=10)) is False
 
+def test_template_focus_break_condition_triggers_for_one_hour_coding():
+
+    """focus_break 模板：活跃写代码满 60 分钟时命中。"""
+
+    focus_tpl = next(t for t in KURISU_PROACTIVE_TEMPLATES if t["topic"] == "focus_break")
+
+    assert focus_tpl["condition"](_snap(
+        work_session_minutes=60,
+        active_window_title="main.py - Visual Studio Code",
+        active_process="Code.exe",
+    )) is True
+
+    assert focus_tpl["condition"](_snap(
+        work_session_minutes=59,
+        active_window_title="main.py - Visual Studio Code",
+        active_process="Code.exe",
+    )) is False
+
+    assert focus_tpl["condition"](_snap(
+        work_session_minutes=60,
+        active_window_title="Inbox - Mail",
+        active_process="Mail.exe",
+    )) is False
+
+    assert focus_tpl["condition"](_snap(
+        idle_seconds=300,
+        work_session_minutes=60,
+        active_window_title="main.py - Visual Studio Code",
+        active_process="Code.exe",
+    )) is False
+
 def test_template_tease_condition_triggers():
 
     """tease 模板：window_changed_recently and greeting_count_today == 0 时命中。"""
@@ -167,6 +198,18 @@ def test_template_concern_text_formats_work_session():
     text = concern_tpl["text"].format(local_time="14:30", work_session_minutes=150)
 
     assert "150" in text
+
+    assert "{work_session_minutes}" not in text
+
+def test_template_focus_break_text_formats_work_session():
+
+    """focus_break 模板文本应包含 {work_session_minutes} 占位符替换结果。"""
+
+    focus_tpl = next(t for t in KURISU_PROACTIVE_TEMPLATES if t["topic"] == "focus_break")
+
+    text = focus_tpl["text"].format(local_time="14:30", work_session_minutes=60)
+
+    assert "60" in text
 
     assert "{work_session_minutes}" not in text
 
@@ -357,6 +400,8 @@ def test_instruction_contains_topic_options():
     assert "work" in KURISU_PROACTIVE_INSTRUCTION
 
     assert "deep_night" in KURISU_PROACTIVE_INSTRUCTION
+
+    assert "focus_break" in KURISU_PROACTIVE_INSTRUCTION
 
     assert "window_change" in KURISU_PROACTIVE_INSTRUCTION
 

@@ -22,6 +22,7 @@ hiddenimports = [
     'pywebview.platforms.edgechromium',
     'ddgs', 'trafilatura', 'mss',
     'miniaudio',  # 阿里云 TTS 流式 MP3 解码（core/mp3_decoder.py 函数内动态 import，PyInstaller 静态分析漏抓）
+    'pythoncom', 'pywintypes', 'win32com', 'win32com.client',  # Windows SAPI 系统语音兜底（后台线程动态 import）
     'markdown', 'markdown.extensions.fenced_code', 'markdown.extensions.tables', 'markdown.extensions.nl2br',  # 终端 markdown 渲染（extensions 动态 import）
     'deepseek_harness', 'deepseek_harness.client', 'deepseek_harness.api', 'deepseek_harness.models', 'deepseek_harness.errors',  # DeepSeek Harness SDK
     'deepseek_harness_runtime',  # DeepSeek Harness 运行时（node 模式）
@@ -76,7 +77,12 @@ exe = EXE(
     # 固定解压目录：避免每次启动在 %TEMP% 创建新目录重复解压
     # 首次启动解压到此目录，后续启动直接复用，启动速度与 onedir 模式相当
     # 目录结构：%LOCALAPPDATA%\Amadeus\Cache\<version>\
-    runtime_tmpdir=os.path.join(os.environ.get('LOCALAPPDATA', os.path.expanduser('~')), 'Amadeus', 'Cache'),
+    runtime_tmpdir=os.path.join(
+        os.environ.get('LOCALAPPDATA', os.path.expanduser('~')),
+        'Amadeus',
+        'Cache',
+        __version__,
+    ),
     console=False,          # 无控制台窗口
     disable_windowed_traceback=False,
     argv_emulation=False,

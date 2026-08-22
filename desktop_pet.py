@@ -13,6 +13,7 @@ import subprocess
 import sys
 import threading
 import time
+import uuid
 
 
 ROOT = Path(sys._MEIPASS) if getattr(sys, 'frozen', False) else Path(__file__).resolve().parent
@@ -25,6 +26,7 @@ if not getattr(sys, 'frozen', False):
 # 通信走 mp.Pipe(duplex=True) 双向管道（frame 下行 / command 上行），
 # 不再用 data/pet_command.json 文件轮询。
 from core.ipc_command import apply_command_js
+from core.single_instance import acquire_single_instance
 from core.storage import APP_DIR as _APP_DIR
 READY_FILE = _APP_DIR / "desktop_pet.ready"
 
@@ -445,11 +447,12 @@ def renderer_process(connection: Connection) -> None:
 #   header  QWidget|None 顶部名牌控件
 #   footer  QWidget|None 底部注脚控件
 #   x       int 气泡横坐标
+#   y       int 气泡纵坐标（Dock 栏上方）
 #   w       int 气泡宽度
 #   h       int 气泡高度
 # 返回值：无（None）
 # ============================================================
-def _sync_bubble_accessories(header, footer, corners, status_line, x, w, h) -> None:
+def _sync_bubble_accessories(header, footer, corners, status_line, x, y, w, h) -> None:
     """气泡头部名牌/底部注脚/四角括号/状态行跟随气泡几何（fauux 稿⑤⑩④）。
 
     初始化早期（bubble_header/footer 创建于 reply_bubble 之后）可能先行调用
@@ -460,18 +463,18 @@ def _sync_bubble_accessories(header, footer, corners, status_line, x, w, h) -> N
     """
     if header is not None:
         hw = min(w, 150)
-        header.setGeometry(x + (w - hw) // 2, 4, hw, 16)
+        header.setGeometry(x + (w - hw) // 2, y - 2, hw, 16)
     if footer is not None:
         fw = min(w, 200)
-        footer.setGeometry(x + (w - fw) // 2, 6 + h - 16, fw, 16)
+        footer.setGeometry(x + (w - fw) // 2, y + h - 16, fw, 16)
     if corners is not None:
         c = 12
-        corners[0].setGeometry(x - 5, 4, c, c)
-        corners[1].setGeometry(x + w - 7, 4, c, c)
-        corners[2].setGeometry(x - 5, 6 + h - 7, c, c)
-        corners[3].setGeometry(x + w - 7, 6 + h - 7, c, c)
+        corners[0].setGeometry(x - 5, y - 2, c, c)
+        corners[1].setGeometry(x + w - 7, y - 2, c, c)
+        corners[2].setGeometry(x - 5, y + h - 7, c, c)
+        corners[3].setGeometry(x + w - 7, y + h - 7, c, c)
     if status_line is not None:
-        status_line.setGeometry(x + 8, 6 + h + 6, w - 16, 14)
+        status_line.setGeometry(x + 8, y + h + 6, w - 16, 14)
 
 
 # ============================================================
@@ -514,12 +517,103 @@ def _bubble_size_hint(html_text: str, font, max_w: int) -> tuple[int, int]:
 
 
 # ============================================================
+# 函数：_streamed_display_text()
+# 作用：从流式累积文本中提取"当前可上屏"的气泡文字（流式气泡体感提速）。
+#       规则：去掉开头 [emotion:xxx] 标签（含只到达一半的残缺标签），
+#       只取第一个 === 分隔符之前的内容（残缺的 == 也按分隔符处理），
+#       保证显示文本随 delta 到达单调增长，情绪标签/日语段不闪现在气泡里。
+#       ★纯函数（不碰 UI、无副作用），方便单元测试。
+# 参数：
+#   streamed str 流式累积的全部文本
+# 返回值：str —— 当前应显示的文本（空串表示尚无可显示内容）
+# ============================================================
+def _streamed_display_text(streamed: str) -> str:
+    """流式阶段的气泡显示文本（纯函数，便于单元测试）。"""
+    import re
+
+    text = streamed.lstrip()
+    # 情绪标签可能只到达一半（如 "[emotion:smi"），一并容忍去掉
+    text = re.sub(r"^\[emotion:[^\]]*\]?", "", text)
+    # 孤立的 "[" 片段（可能是 [emotion: 的第一片）不上屏，等标签闭合或正文到达
+    if text.startswith("[") and "]" not in text:
+        return ""
+    # 中文在 === 之前；分隔符本身也可能只到达一半（"=="），按 2 个以上 = 切
+    text = re.split(r"={2,}", text, maxsplit=1)[0]
+    return text.strip()
+
+
+# ============================================================
+# 函数：_merge_bubble_segments()
+# 作用：把分句列表按"<6 字短句并入前句"规则合并成气泡分段。
+#       ★纯函数。_show_layered_bubbles 与流式增量分句共用，
+#       保证流式期增量分段与最终分段同构（前缀稳定，只增不改前段）。
+# 参数：
+#   parts list[str] 已按句末标点切好的句子列表
+# 返回值：list[str] —— 合并后的分段
+# ============================================================
+def _merge_bubble_segments(parts: list[str]) -> list[str]:
+    """短句（<6 字）并入前一段，避免气泡一次只蹦两三个字。"""
+    merged: list[str] = []
+    for seg in parts:
+        if merged and len(merged[-1]) < 6:
+            merged[-1] += seg
+        else:
+            merged.append(seg)
+    return merged
+
+
+# ============================================================
+# 函数：_final_bubble_segments()
+# 作用：完整文本 → 最终气泡分段（_show_layered_bubbles 的分段算法抽出）。
+#       ★纯函数。
+# 参数：
+#   text str 完整中文回复
+# 返回值：list[str]
+# ============================================================
+def _final_bubble_segments(text: str) -> list[str]:
+    """完整回复的分段（纯函数，便于单元测试）。"""
+    import re
+
+    parts = [p.strip() for p in re.split(r'(?<=[。！？!?\n])\s*', text.strip())]
+    return _merge_bubble_segments([p for p in parts if p])
+
+
+# ============================================================
+# 函数：_split_stream_segments()
+# 作用：流式中文 → (已完成的分段, 未完结尾巴)。流式增量分句核心：
+#       每到句末标点即成段，用户无需等整条回复结束（更无需等 TTS 播完）
+#       就能单击推进；尾巴是最后一个尚未到句末标点的残句，继续打字机。
+#       完成段是最终分段的前缀（追加新句只增长末段/追加新段）。
+#       ★纯函数（不碰 UI、无副作用），方便单元测试。
+# 参数：
+#   display str 流式当前可显示中文（_streamed_display_text 的输出）
+# 返回值：(list[str], str) —— (已完成分段, 未完结尾巴)
+# ============================================================
+def _split_stream_segments(display: str) -> "tuple[list[str], str]":
+    """流式文本 → (已完成分段, 未完结尾巴)（纯函数，便于单元测试）。"""
+    import re
+
+    text = display.strip()
+    if not text:
+        return [], ""
+    parts = [p.strip() for p in re.split(r'(?<=[。！？!?\n])\s*', text)]
+    parts = [p for p in parts if p]
+    if not parts:
+        return [], ""
+    if re.search(r'[。！？!?\n]$', text):
+        return _merge_bubble_segments(parts), ""
+    return _merge_bubble_segments(parts[:-1]), parts[-1]
+
+
+# ============================================================
 # 函数：_decide_delta_action()
 # 作用：AI 回复以流式增量（逐段）到达时，做纯逻辑决策：
-#       把新内容累积进 streamed_reply，并决定是否显示"思考点"动画。
-#       ★纯函数（不碰 UI、无副作用），方便单元测试。
-#       决策规则：delta 期间不更新气泡文字（等 finished 阶段统一显示）；
-#       终端模式激活时不显示思考点动画（终端流式回显已替代）。
+#       把新内容累积进 streamed_reply，并决定显示"思考点"动画还是
+#       流式更新气泡文字。★纯函数（不碰 UI、无副作用），方便单元测试。
+#       决策规则：气泡模式下一旦有可显示内容（_streamed_display_text 非空）
+#       即流式上屏并停止思考点动画——首字即见，不等整条回复结束；
+#       尚无可显示内容（如只到达 [emotion: 前缀）时继续思考点动画；
+#       终端模式激活时不显示思考点也不更新气泡（终端流式回显已替代）。
 # 参数：
 #   streamed_reply    str  已累积的回复内容
 #   text              str  本次新到达的增量文本
@@ -534,14 +628,16 @@ def _decide_delta_action(
 
     返回 (new_streamed, should_show_thinking, should_set_bubble_text)：
     - 始终把 text 累积到 streamed_reply；
-    - delta 期间不更新气泡文字（should_set_bubble_text 恒为 False），由 finished 阶段
-      统一 _show_layered_bubbles；
-    - 仅在未抑制思考点（非终端模式）时显示思考点动画。
+    - 终端模式（suppress_thinking=True）：终端流式回显已替代气泡，两者都不更新；
+    - 气泡模式：_streamed_display_text 非空 → 流式更新气泡文字、停止思考点；
+      仍为空（如只有 [emotion: 前缀到达）→ 继续思考点动画。
     """
     new_streamed = streamed_reply + text
-    should_show_thinking = not suppress_thinking
-    should_set_bubble_text = False
-    return new_streamed, should_show_thinking, should_set_bubble_text
+    if suppress_thinking:
+        return new_streamed, False, False
+    if _streamed_display_text(new_streamed):
+        return new_streamed, False, True
+    return new_streamed, True, False
 
 
 # ============================================================
@@ -922,7 +1018,7 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
                 QGraphicsDropShadowEffect, QGraphicsOpacityEffect,
             )
 
-    from config import get_character_by_id, get_random_greeting
+    from config import PHONE_DEFAULTS, get_character_by_id, get_random_greeting
     from core.agent_client import _load_soul_md
     from core.emotion_parser import parse_reply
     from core.ipc_command import serialize_command
@@ -930,6 +1026,7 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
     from core.skills import SkillManager, build_skill_prompt
     from core.terminal_commands import TerminalCommandContext, registry as terminal_command_registry
     from core.storage import load_config
+    from core.terminal_state import load_terminal_state, save_terminal_state
     from core.tts_client import SpeechPlayer
     from ui.settings_dialog import SettingsDialog
     from ui.widgets.crt_overlay import CrtOverlay
@@ -966,6 +1063,7 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
         delta = Signal(str)
         finished = Signal(str)
         failed = Signal(str)
+        cancelled = Signal(str)
         tool_event = Signal(object)
         confirmation = Signal(object)
 
@@ -993,6 +1091,7 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             response_max_tokens: int | None = 700,
             inject_system_prompt: str | None = None,
             terminal_cwd: str | None = None,
+            terminal_session_id: str | None = None,
         ) -> None:
             super().__init__()
             self.history = history
@@ -1001,7 +1100,12 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             self.response_max_tokens = response_max_tokens
             self.inject_system_prompt = inject_system_prompt
             self.terminal_cwd = terminal_cwd
+            self.terminal_session_id = terminal_session_id
+            self.cancel_event = threading.Event()
             self.signals = AgentSignals()
+
+        def cancel(self) -> None:
+            self.cancel_event.set()
 
         # ============================================================
         # 函数：run()
@@ -1047,10 +1151,18 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
                     on_approval=self._handle_approval,
                     inject_system_prompt=self.inject_system_prompt,
                     response_max_tokens=self.response_max_tokens,
+                    cancel_event=self.cancel_event,
+                    harness_session_id=self.terminal_session_id,
                 )
-                self.signals.finished.emit(reply)
+                if self.cancel_event.is_set():
+                    self.signals.cancelled.emit(reply)
+                else:
+                    self.signals.finished.emit(reply)
             except Exception as exc:
-                self.signals.failed.emit(str(exc))
+                if self.cancel_event.is_set():
+                    self.signals.cancelled.emit("")
+                else:
+                    self.signals.failed.emit(str(exc))
 
         # ============================================================
         # 函数：_handle_approval()
@@ -1066,7 +1178,9 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             import threading
             request = {"payload": payload, "event": threading.Event(), "choice": "deny"}
             self.signals.confirmation.emit(request)
-            request["event"].wait()
+            while not request["event"].wait(0.1):
+                if self.cancel_event.is_set():
+                    return "deny"
             return request["choice"]
 
     # ============================================================
@@ -1542,6 +1656,7 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
         blink 光标 / wiredB text-shadow rose 1px 4px 5px 辉光。
         """
         submitted = Signal(str)
+        interrupt_requested = Signal()
 
         # ============================================================
         # 函数：__init__()
@@ -1561,8 +1676,9 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             self.setObjectName("agentTerminal")
             self.setStyleSheet(
                 "QDialog#agentTerminal{background-color:#171114;"
+                "color:#c1b492;"
                 "background-image:url(" + _dither_texture_url() + ");"
-                "border:2px solid #d2738a;}"
+                "border:1px solid #d2738a;}"
             )
             self.setMinimumSize(560, 390)
             self.resize(720, 520)
@@ -1952,7 +2068,7 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
                     event.accept()
                     return
                 if event.key() == Qt.Key_C:
-                    self._interrupt()
+                    self.interrupt_requested.emit()
                     event.accept()
                     return
             super().keyPressEvent(event)
@@ -1969,7 +2085,7 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             if obj is self.input and event.type() == QEvent.KeyPress:
                 key = event.key()
                 if event.modifiers() & Qt.ControlModifier and key == Qt.Key_C:
-                    self._interrupt()
+                    self.interrupt_requested.emit()
                     return True
                 # / 命令面板可见时，方向键/Tab/回车优先导航面板，而不是翻历史/提交
                 if self._slash_panel.isVisible():
@@ -2036,7 +2152,9 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
         # 返回值：无（None）
         # ============================================================
         def _tab_complete(self) -> None:
-            completed = _complete_terminal_input(self.input.text(), self._history)
+            parent = self.parentWidget()
+            cwd = getattr(parent, "_terminal_cwd", None)
+            completed = _complete_terminal_input(self.input.text(), self._history, cwd)
             if completed is None:
                 return
             self.input.setText(completed)
@@ -2135,17 +2253,6 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
         # 参数：无
         # 返回值：无（None）
         # ============================================================
-        def _interrupt(self) -> None:
-            """Ctrl+C：中断当前正在运行的 harness 回合（仅 harness 模式生效）。"""
-            try:
-                from core.harness_bridge import cancel_active_run
-                requested = cancel_active_run()
-            except Exception:
-                requested = False
-            message = "^C — 已请求中断当前任务" if requested else "^C — 当前没有可中断的 Harness 任务"
-            self._lines.append(("sys", message))
-            self.render_lines(self._lines)
-
         # ============================================================
         # 函数：_submit()
         # 作用：提交输入：存入历史（最多 200 条）→ 发出 submitted 信号 →
@@ -2315,7 +2422,8 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             QDesktopServices.openUrl(url)
 
         def set_busy(self, busy: bool) -> None:
-            self.input.setDisabled(busy)
+            # 保持输入框可接收 Ctrl+C；禁用控件会让焦点事件无法到达中断处理。
+            self.input.setReadOnly(busy)
 
     class PetWindow(QWidget):
         def __init__(self) -> None:
@@ -2332,12 +2440,26 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             self._terminal_reply_index: int | None = None
             self._terminal_route_mode = "auto"
             self._terminal_cwd = ROOT
+            self._active_agent_task = None
+            terminal_state = load_terminal_state()
+            self._terminal_session_id = terminal_state["session_id"]
+            persisted_cwd = terminal_state.get("cwd")
+            if persisted_cwd:
+                candidate_cwd = Path(persisted_cwd).expanduser()
+                if candidate_cwd.is_dir():
+                    self._terminal_cwd = candidate_cwd.resolve()
+            if terminal_state.get("route") in {"auto", "local", "harness"}:
+                self._terminal_route_mode = terminal_state["route"]
             self._skill_manager = SkillManager()
             self._active_skills: dict[str, object] = {}
             self._zoom = 0.9
             self._pinned = False
             self._bubble_segments: list[str] = []
             self._bubble_index = 0
+            # 流式期间用户是否已单击进入逐句阅读（进入后流式文字不再覆盖当前句）；
+            # _stream_live = 已追平所有完成句（此后残句尾巴继续打字机直播）
+            self._stream_reading = False
+            self._stream_live = False
             self._bubble_timer: QTimer | None = None
             self._snap_anim: QPropertyAnimation | None = None
             self._user_pos: QPoint | None = None
@@ -2365,8 +2487,8 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             self.move(screen.right() - self.width() - 20, screen.bottom() - self.height() - 60)
 
             self.reply_bubble = QLabel(self)
-            # 气泡：手机上方 8~104 之间，宽 288（窗口宽 304 - 8px 左右边距）
-            self.reply_bubble.setGeometry(8, 8, 288, 96)
+            # 气泡：手机屏幕内、Dock 栏上方（几何由 _set_bubble_text 统一计算）
+            self.reply_bubble.setGeometry(28, 448, 248, 96)
             # v4：正文左对齐（富文本 line-height 1.5 由 _wrap_bubble_html 提供）
             self.reply_bubble.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
             self.reply_bubble.setWordWrap(True)
@@ -2639,11 +2761,15 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             """
             bubble_html = _wrap_bubble_html(text)
             self.reply_bubble.setText(bubble_html)
-            w, h = _bubble_size_hint(bubble_html, self.reply_bubble.font(), self.width() - 16)
-            w = min(max(w, 80), self.width() - 16)
+            # 手机屏幕区：x=20 w=264；Dock 顶 y = 118+496-64 = 550
+            screen_x, screen_w = 20, 264
+            dock_top = 118 + 496 - 64
+            w, h = _bubble_size_hint(bubble_html, self.reply_bubble.font(), screen_w - 16)
+            w = min(max(w, 80), screen_w - 16)
             h = min(max(h, 36), 100)
-            x = (self.width() - w) // 2
-            self.reply_bubble.setGeometry(x, 6, w, h)
+            x = screen_x + (screen_w - w) // 2
+            y = dock_top - h - 6
+            self.reply_bubble.setGeometry(x, y, w, h)
             # 头部名牌/底部注脚/四角括号/状态行跟随气泡几何（fauux 稿⑤⑩④）。
             # 初始化早期调用本方法时配件尚未创建，传 None 由 _sync_bubble_accessories
             # 跳过同步；构建完成后正常跟随。
@@ -2652,7 +2778,7 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
                 getattr(self, 'bubble_footer', None),
                 getattr(self, 'bubble_corners', None),
                 getattr(self, 'status_line', None),
-                x, w, h,
+                x, y, w, h,
             )
 
         def _show_thinking_dots(self) -> None:
@@ -2709,11 +2835,17 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
 
         def _enter_call(self) -> None:
             """进入通话态：隐藏平时组件，显示 CallView，启动管线。"""
-            config = load_config()
+            config = {**PHONE_DEFAULTS, **load_config()}
             if not all(config.get(key) for key in ("endpoint", "api_key", "model")):
                 SettingsDialog(self).exec()
                 return
             self._in_call = True
+            # 通话独占音频：立即停掉桌面 TTS（避免两个 SpeechPlayer 抢输出流，
+            # 以及桌面播报声被通话 VAD 误拾成用户说话）
+            try:
+                self.speech.stop()
+            except Exception:
+                pass
             self.reply_bubble.hide()
             self.input_panel.hide()
             self.dock_bar.hide()
@@ -2729,6 +2861,9 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
                     self.call_controller.waveform.disconnect()
                     self.call_controller.you_said.disconnect()
                     self.call_controller.error.disconnect()
+                    self.call_controller.muted_changed.disconnect()
+                    self.call_controller.screen_share_changed.disconnect()
+                    self.call_controller.mouth_intensity.disconnect()
                 except Exception:
                     pass
             # 重新创建 controller 以用最新 config
@@ -2740,6 +2875,9 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             self.call_controller.waveform.connect(self.call_view.set_waveform)
             self.call_controller.you_said.connect(self._on_call_you_said)
             self.call_controller.error.connect(self._on_call_error)
+            self.call_controller.muted_changed.connect(self.call_view.set_muted)
+            self.call_controller.screen_share_changed.connect(self.call_view.set_screen_share)
+            self.call_controller.mouth_intensity.connect(lambda value: send_command(mouth=value))
             # 断开 CallView 旧信号再重连（防止重复连接导致 hangup 被多次调用）
             try:
                 self.call_view.mute_clicked.disconnect()
@@ -2750,6 +2888,8 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             self.call_view.mute_clicked.connect(self.call_controller.toggle_mute)
             self.call_view.hangup_clicked.connect(self._hangup_call)
             self.call_view.screen_clicked.connect(self.call_controller.toggle_screen_share)
+            self.call_view.set_muted(self.call_controller.is_muted)
+            self.call_view.set_screen_share(self.call_controller.screen_share_on)
             self.call_controller.start()
 
         def _hangup_call(self) -> None:
@@ -2764,6 +2904,14 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
                     pass
                 try:
                     self.call_controller.phase_changed.disconnect()
+                    self.call_controller.subtitle.disconnect()
+                    self.call_controller.elapsed.disconnect()
+                    self.call_controller.waveform.disconnect()
+                    self.call_controller.you_said.disconnect()
+                    self.call_controller.error.disconnect()
+                    self.call_controller.muted_changed.disconnect()
+                    self.call_controller.screen_share_changed.disconnect()
+                    self.call_controller.mouth_intensity.disconnect()
                 except Exception:
                     pass
                 self.call_controller = None
@@ -2797,8 +2945,11 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
                 send_command(speaking=False)
 
         def _on_call_you_said(self, text: str) -> None:
-            """通话中用户说的话（暂不显示，避免干扰红莉栖字幕）。"""
-            pass
+            """通话中识别到的用户话语：常驻显示在 CallView 小字标签。"""
+            try:
+                self.call_view.set_you_said(text)
+            except Exception:
+                pass
 
         def _on_call_error(self, text: str) -> None:
             self.call_view.set_subtitle(f"⚠ {text}")
@@ -2816,7 +2967,6 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
 
         def _show_layered_bubbles(self, text: str) -> None:
             """将回复分层后分多个气泡前后展示，每段用 opacity 动画淡入。"""
-            import re
             self._cancel_bubbles()
             # 停止思考呼吸动画，恢复 opacity
             self._stop_thinking_anim()
@@ -2824,16 +2974,7 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             # v4：正式回复到达，状态行隐藏（台词与状态分离）
             if hasattr(self, 'status_line'):
                 self.status_line.hide()
-            segments = re.split(r'(?<=[。！？!?\n])\s*', text.strip())
-            merged: list[str] = []
-            for seg in segments:
-                seg = seg.strip()
-                if not seg:
-                    continue
-                if merged and len(merged[-1]) < 6:
-                    merged[-1] += seg
-                else:
-                    merged.append(seg)
+            merged = _final_bubble_segments(text)
             if not merged:
                 return
             self._bubble_segments = merged
@@ -2844,7 +2985,7 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
         def _show_next_bubble(self) -> None:
             """显示下一个气泡分段，用 opacity 动画淡入。"""
             if self._bubble_index >= len(self._bubble_segments):
-                self._bubble_timer = QTimer.singleShot(9000, self._hide_idle_bubble)
+                self._schedule_bubble_hide()
                 return
             text = self._bubble_segments[self._bubble_index]
             self._set_bubble_text(text)
@@ -2864,7 +3005,19 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             self._bubble_index += 1
             # 全部段展示完后，9 秒无操作再隐藏气泡
             if self._bubble_index >= len(self._bubble_segments):
-                self._bubble_timer = QTimer.singleShot(9000, self._hide_idle_bubble)
+                self._schedule_bubble_hide()
+
+        def _schedule_bubble_hide(self) -> None:
+            """9 秒无操作隐藏气泡。用可取消的 QTimer 实例：
+            QTimer.singleShot 静态版无法引用取消，流式期间用户可能仍在
+            逐句阅读，新分段到达时旧定时器必须能被 _cancel_bubbles 停掉。"""
+            if self._bubble_timer is not None:
+                self._bubble_timer.stop()
+            timer = QTimer(self)
+            timer.setSingleShot(True)
+            timer.timeout.connect(self._hide_idle_bubble)
+            timer.start(9000)
+            self._bubble_timer = timer
 
         def _cancel_bubbles(self) -> None:
             """取消正在进行的气泡序列。"""
@@ -2973,6 +3126,8 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             if self.terminal is None:
                 self.terminal = AgentTerminal(self)
                 self.terminal.submitted.connect(self._terminal_send)
+                self.terminal.interrupt_requested.connect(self._interrupt_agent)
+                self.terminal._history = list(load_terminal_state().get("history") or [])
             # 每次打开都从当前会话重建终端行，避免只加载一次导致
             # 之后主页面新增的聊天记录不显示在终端（历史抽屉是每次重读的）。
             self._term_lines = self._terminal_session_lines()
@@ -3007,6 +3162,7 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             def new_session() -> None:
                 create_session(self._state, get_random_greeting(character.id))
                 save_state(character.id, self._state)
+                self._terminal_session_id = f"amadeus-terminal-{uuid.uuid4().hex}"
                 self._term_lines = self._terminal_session_lines()
                 self._terminal_reply_index = None
 
@@ -3030,6 +3186,12 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
                 self._terminal_route_mode = result.route_mode
             if result.cwd is not None:
                 self._terminal_cwd = result.cwd
+            save_terminal_state(
+                history=self.terminal._history if self.terminal is not None else [],
+                route=self._terminal_route_mode,
+                cwd=self._terminal_cwd,
+                session_id=self._terminal_session_id,
+            )
             if result.clear:
                 self._term_lines = []
                 self._terminal_reply_index = None
@@ -3037,6 +3199,37 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             if self.terminal is not None:
                 self.terminal.render_lines(self._term_lines, full=result.clear)
             return result.forward_text
+
+        def _terminal_backend_ready(self) -> bool:
+            """Check only the credentials needed by the selected terminal route."""
+            config = load_config()
+            local_ready = all(config.get(key) for key in ("endpoint", "api_key", "model"))
+            if self._terminal_route_mode == "local":
+                return local_ready
+            harness = dict((config.get("agent_router") or {}).get("harness") or {})
+            harness.update(config.get("harness") or {})
+            harness_ready = bool(
+                (harness.get("api_key") or config.get("api_key"))
+                and (harness.get("model") or config.get("model") or "deepseek-v4-flash")
+            )
+            return local_ready or harness_ready
+
+        def _interrupt_agent(self) -> None:
+            task = self._active_agent_task
+            if task is None or not self._busy:
+                if self.terminal is not None:
+                    self.terminal._lines.append(("sys", "^C — 当前没有正在运行的任务"))
+                    self.terminal.render_lines(self.terminal._lines)
+                return
+            task.cancel()
+            try:
+                from core.harness_bridge import cancel_active_run
+                cancel_active_run()
+            except Exception:
+                pass
+            if self.terminal is not None:
+                self.terminal._lines.append(("sys", "^C — 已请求中断当前任务"))
+                self.terminal.render_lines(self.terminal._lines)
 
         def _terminal_route_override(self) -> str:
             if self._terminal_route_mode == "local":
@@ -3052,14 +3245,19 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             """终端提交：复用气泡发送管线（不显示气泡，输出回显到终端）。"""
             if self._busy:
                 return
-            config = load_config()
-            if not all(config.get(key) for key in ("endpoint", "api_key", "model")):
-                SettingsDialog(self).exec()
-                return
             forwarded = self._handle_terminal_command(text)
             if forwarded is None:
                 return
             text = forwarded
+            save_terminal_state(
+                history=self.terminal._history if self.terminal is not None else [],
+                route=self._terminal_route_mode,
+                cwd=self._terminal_cwd,
+                session_id=self._terminal_session_id,
+            )
+            if not self._terminal_backend_ready():
+                SettingsDialog(self).exec()
+                return
             self._term_lines.append(("cmd", text))
             self._term_lines.append(("out", "▌"))
             self._terminal_reply_index = len(self._term_lines) - 1
@@ -3071,6 +3269,7 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
                 response_max_tokens=None,
                 inject_system_prompt=self._terminal_skill_prompt(),
                 terminal_cwd=str(self._terminal_cwd),
+                terminal_session_id=self._terminal_session_id,
             )
 
         def _hide_input_or_noop(self) -> None:
@@ -3141,7 +3340,11 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
         ) -> None:
             """发送核心：气泡与终端共用（终端模式不显示气泡，回显走终端）。"""
             config = load_config()
-            if not all(config.get(key) for key in ("endpoint", "api_key", "model")):
+            if route_override == "harness" or route_override == "terminal_auto":
+                config_ready = self._terminal_backend_ready()
+            else:
+                config_ready = all(config.get(key) for key in ("endpoint", "api_key", "model"))
+            if not config_ready:
                 SettingsDialog(self).exec()
                 return
             self.input.clear()
@@ -3163,6 +3366,13 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             # 修复 LLM 输出多段 === 交替（中文===日语===中文===日语）时把中文段也送 TTS 的 bug
             self._stream_sep_count = 0
             self._stream_tts_started = False
+            # 流式气泡上屏节流状态（60ms 一帧）；_stream_reading 标记用户是否
+            # 已在流式期间单击进入逐句阅读（进入后流式文字不再覆盖当前句），
+            # _stream_live 标记是否已点完所有完成句（追平后尾巴继续打字机）
+            self._stream_reading = False
+            self._stream_live = False
+            self._stream_paint_ts = 0.0
+            self._stream_paint_text = ""
             self.send_button.setDisabled(True)
             history = [{"role": message["role"], "content": message["content"]} for message in session["messages"][-14:]]
             if route_override is None:
@@ -3181,13 +3391,31 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
                 inject_system_prompt=inject_system_prompt,
                 terminal_cwd=terminal_cwd,
             )
+            self._active_agent_task = task
             task.signals.status.connect(self._show_status)
             task.signals.delta.connect(self._agent_delta)
             task.signals.finished.connect(self._agent_finished)
+            task.signals.cancelled.connect(self._agent_cancelled)
             task.signals.failed.connect(self._agent_failed)
             task.signals.tool_event.connect(self._agent_tool_event)
             task.signals.confirmation.connect(self._confirm_operation)
             QThreadPool.globalInstance().start(task)
+
+        def _agent_cancelled(self, partial_reply: str) -> None:
+            self._busy = False
+            self._streamed_reply = ""
+            self._active_agent_task = None
+            self._stop_thinking_anim()
+            if self.terminal is not None:
+                self.terminal.set_busy(False)
+                if (
+                    self._terminal_reply_index is not None
+                    and self._terminal_reply_index < len(self._term_lines)
+                ):
+                    self._term_lines[self._terminal_reply_index] = ("sys", "^C — 任务已中断")
+                    self.terminal.render_lines(self._term_lines, dirty_from=self._terminal_reply_index)
+            self._terminal_reply_index = None
+            self.send_button.setDisabled(False)
 
         def _confirm_operation(self, request: dict) -> None:
             if self._terminal_active():
@@ -3275,7 +3503,32 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
                 self._term_lines[self._terminal_reply_index] = ("out", chinese if chinese.strip() else "▌")
                 self.terminal.render_lines(self._term_lines, dirty_from=self._terminal_reply_index)
             if should_set_bubble_text:
-                self._set_bubble_text(self._streamed_reply)
+                # 流式气泡：首字即上屏，不等 finished（本地直连低延迟体感优化）。
+                # 停掉思考呼吸动画与 1.2s 短语轮换，防止轮换把流式文字覆盖掉。
+                self._stop_thinking_anim()
+                display = _streamed_display_text(self._streamed_reply)
+                # 增量分句：句末标点一到位即成为可单击的分段，不必等整条回复
+                # 结束（TTS 逐句播放时第一段声音未完也能推进阅读）
+                self._bubble_segments, tail = _split_stream_segments(display)
+                now = time.monotonic()
+                if not getattr(self, "_stream_reading", False):
+                    # 未进入逐句阅读：整段打字机预览（原有行为）
+                    paint_text = display
+                elif getattr(self, "_stream_live", False) or self._bubble_index >= len(self._bubble_segments):
+                    # 已追平全部完成句：只打字机当前残句（新句完成后仍保持直播）
+                    paint_text = tail
+                    self._stream_live = True
+                else:
+                    # 用户停在已完成的句子上：保持不动，等下一次单击推进
+                    paint_text = None
+                # 本地模型 delta 可达数百次/秒，节流到 ~16fps 防止布局风暴；
+                # 尾帧由 _agent_finished 的完整文本兜底，丢帧无碍
+                if paint_text and paint_text != getattr(self, "_stream_paint_text", None) and (
+                    now - getattr(self, "_stream_paint_ts", 0.0) >= 0.06
+                ):
+                    self._stream_paint_ts = now
+                    self._stream_paint_text = paint_text
+                    self._set_bubble_text(paint_text + "▌")
             if should_show_thinking:
                 self._show_thinking_dots()
             # 流式 TTS：纯 === 切段 + 日语字符过滤（修复多段 === + emotion 错位 bug）
@@ -3295,6 +3548,10 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             # 数学本质：日语必有假名（U+3040-309F 平假名 + U+30A0-30FF 片假名），
             # CJK 汉字中日韩共用手写汉字（U+4E00-9FFF）无法区分，但日语段必含假名。
             # 形象理解：每段用 === 切开后扫假名，有假名的是日语段送 TTS。
+            # 通话中桌面 TTS 静默：声音统一归通话管线（ctrl._tts），避免两个
+            # SpeechPlayer 同时开输出流互抢 + 声音回流被通话 VAD 误拾
+            if getattr(self, "_in_call", False):
+                return
             config = load_config()
             if not config.get("tts_enabled", True):
                 return
@@ -3336,22 +3593,73 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
                 # 首次进入日语段时启动流式 TTS 会话
                 if not self._stream_tts_started:
                     config = load_config()
-                    emotion = parse_reply(self._streamed_reply).emotion
                     self.speech.set_rate([-2, 0, 2][config.get("tts_rate", 1)])
-                    self.speech.speak_streaming_start(text_lang="ja", emotion=emotion)
+                    self.speech.speak_streaming_start(text_lang="ja")
                     self._stream_tts_started = True
                 self.speech.speak_streaming_append(segment)
 
         def _agent_finished(self, reply: str) -> None:
             session = active_session(self._state)
             add_message(session, "assistant", reply)
-            save_state(character.id, self._state)
+            parsed = parse_reply(reply)
             self._busy = False
+            self._active_agent_task = None
             self._streamed_reply = ""
             self.send_button.setDisabled(False)
-            parsed = parse_reply(reply)
+            if self.terminal is not None:
+                self.terminal.set_busy(False)
+            if (
+                self._terminal_active()
+                and self._terminal_reply_index is not None
+                and self._terminal_reply_index < len(self._term_lines)
+            ):
+                self._term_lines[self._terminal_reply_index] = ("out", parsed.chinese)
+                self.terminal.render_lines(self._term_lines, dirty_from=self._terminal_reply_index)
+            self._terminal_reply_index = None
+            # 响应提速：TTS 收尾 / 本地 Ollama 表情分类（最长阻塞 3s）/ 会话写盘
+            # 全部后移，不再拖慢首屏文字
+            if not self._terminal_active():
+                # 分层气泡需要完整中文做分段展示，_latest_line 的 105 字截断会丢段
+                if getattr(self, "_stream_reading", False) and self._bubble_index > 0:
+                    # 流式期间用户已在逐句阅读：同步最终分段但保留当前进度，
+                    # 不回卷第一句重播（回卷会让已读过的句子再看一遍）
+                    self._bubble_segments = _final_bubble_segments(parsed.chinese)
+                    if getattr(self, "_stream_live", False) or self._bubble_index >= len(self._bubble_segments):
+                        # 已追平：补显最后一段（流式尾巴此刻刚好完结成句）
+                        self._show_next_bubble()
+                    # 否则停在当前句，单击继续推进
+                else:
+                    # 流式期间未点击阅读：整条回复分层展示，从第一句开始
+                    self._show_layered_bubbles(parsed.chinese)
+                self._stream_reading = False
+                self._stream_live = False
+            print(f"[PET-DBG] finished reply_len={len(reply)} jp_len={len(parsed.japanese)} tts_started={self._stream_tts_started} sep_count={self._stream_sep_count}")
+            print(f"[PET-DBG] finished reply={reply[:200]!r}")
+            print(f"[PET-DBG] finished parsed.jp={parsed.japanese[:200]!r}")
+            # 流式 TTS：会话结束，刷新剩余缓冲
+            # （流式合成在 _agent_delta 中已开始，这里只刷新剩余文本）
+            # 通话中桌面 TTS 静默：正在播的停掉、兜底合成跳过（声音归通话管线）
+            config = load_config()
+            in_call = getattr(self, "_in_call", False)
+            if in_call:
+                self._stream_tts_started = False
+                self.speech.stop()
+            elif config.get("tts_enabled", True) and self._stream_tts_started:
+                self.speech.speak_streaming_end()
+            elif config.get("tts_enabled", True) and parsed.japanese and not self._stream_tts_started:
+                # 兜底：如果流式未启动（如无 === 分隔符），整段合成
+                print(f"[PET-DBG] 兜底整段合成 jp={parsed.japanese[:60]!r}")
+                self.speech.set_rate([-2, 0, 2][config.get("tts_rate", 1)])
+                self.speech.speak_with_options(
+                    parsed.japanese,
+                    text_lang="ja",
+                    allow_fallback=False,
+                )
+            self._stream_sep_count = 0
+            self._stream_tts_started = False
             # 表情/动作综合判定：本地 Ollama 小模型分类（emotion+motion），
-            # 失败回退规则解析；任何异常回退 parse_reply 的 emotion（表现层不影响主流程）
+            # 失败回退规则解析；任何异常回退 parse_reply 的 emotion（表现层不影响主流程）。
+            # 放在气泡显示之后执行——分类请求最长阻塞 3s，不应拖慢文字首屏
             try:
                 from core.companion.expression import decide_expression
                 _cfg = load_config()
@@ -3362,39 +3670,8 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             except Exception:
                 emotion, motion = parsed.emotion, "neutral"
             send_command(emotion=emotion, motion=motion)
-            print(f"[PET-DBG] finished reply_len={len(reply)} jp_len={len(parsed.japanese)} tts_started={self._stream_tts_started} sep_count={self._stream_sep_count}")
-            print(f"[PET-DBG] finished reply={reply[:200]!r}")
-            print(f"[PET-DBG] finished parsed.jp={parsed.japanese[:200]!r}")
-            # 流式 TTS：会话结束，刷新剩余缓冲
-            # （流式合成在 _agent_delta 中已开始，这里只刷新剩余文本）
-            config = load_config()
-            if config.get("tts_enabled", True) and self._stream_tts_started:
-                self.speech.speak_streaming_end()
-            elif config.get("tts_enabled", True) and parsed.japanese and not self._stream_tts_started:
-                # 兜底：如果流式未启动（如无 === 分隔符），整段合成
-                print(f"[PET-DBG] 兜底整段合成 jp={parsed.japanese[:60]!r}")
-                self.speech.set_rate([-2, 0, 2][config.get("tts_rate", 1)])
-                self.speech.speak_with_options(
-                    parsed.japanese,
-                    text_lang="ja",
-                    emotion=parsed.emotion,
-                    allow_fallback=False,
-                )
-            self._stream_sep_count = 0
-            self._stream_tts_started = False
-            if self.terminal is not None:
-                self.terminal.set_busy(False)
-            if (
-                self._terminal_active()
-                and self._terminal_reply_index is not None
-                and self._terminal_reply_index < len(self._term_lines)
-            ):
-                self._term_lines[self._terminal_reply_index] = ("out", parse_reply(reply).chinese)
-                self.terminal.render_lines(self._term_lines, dirty_from=self._terminal_reply_index)
-            self._terminal_reply_index = None
-            if not self._terminal_active():
-                # 分层气泡需要完整中文做分段展示，_latest_line 的 105 字截断会丢段
-                self._show_layered_bubbles(parse_reply(reply).chinese)
+            # 会话持久化后移（写盘不阻塞首屏）
+            save_state(character.id, self._state)
 
         def _hide_idle_bubble(self) -> None:
             if not self._busy:
@@ -3402,7 +3679,10 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
 
         def _agent_failed(self, error: str) -> None:
             self._busy = False
+            self._active_agent_task = None
             self._streamed_reply = ""
+            self._stream_reading = False
+            self._stream_live = False
             # 停止思考呼吸动画，避免失败后气泡永远显示 "● ● ●" 呼吸
             self._stop_thinking_anim()
             if self.terminal is not None:
@@ -3420,7 +3700,7 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
                 self.reply_bubble.show()
                 self._set_bubble_text(self._latest_line(f"任务失败：{error}"))
                 # 失败提示也会闲置后隐藏，避免永久悬挂
-                self._bubble_timer = QTimer.singleShot(9000, self._hide_idle_bubble)
+                self._schedule_bubble_hide()
             self._terminal_reply_index = None
             self.send_button.setDisabled(False)
             send_command(emotion="angry")
@@ -3548,13 +3828,19 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
                     self._home_click_timer.start()
                     event.accept()
                     return
+                # 气泡还有剩余分段时，左键点击推进下一句。
+                # 必须放在"收起输入面板"之前：发完消息面板仍展开，若先收面板，
+                # 用户看下一句的第一击会被吃掉（表现为"点了没反应"）。
+                # 流式期间即可点击（分段随句末标点增量生成，不等整条回复）
+                if self._bubble_segments and self._bubble_index < len(self._bubble_segments):
+                    self._stream_reading = True
+                    self._show_next_bubble()
+                    # 点完若已到队尾 = 追平，后续流式走"尾巴打字机"直播
+                    self._stream_live = (self._bubble_index >= len(self._bubble_segments))
+                    return
                 # input 可见时点 PetWindow 空白区收起 input，不触发拖拽/聚焦
                 if self.input_panel.isVisible() and self._input_opacity.opacity() > 0.5:
                     self._toggle_input_panel()
-                    return
-                # 气泡还有剩余分段时，左键点击推进下一句
-                if self._bubble_segments and self._bubble_index < len(self._bubble_segments):
-                    self._show_next_bubble()
                     return
                 if event.position().x() > 50:
                     self._focus_input()
@@ -3692,6 +3978,10 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
         """周期性检查 companion 触发（每 30s 一次）。"""
         if not companion_cfg.get("enabled"):
             return
+        # 通话中不主动问候：companion 走桌面 SpeechPlayer 播 TTS，会与通话
+        # 管线抢输出流、其声音还会被通话 VAD 当成用户说话拾进去
+        if getattr(pet, "_in_call", False):
+            return
         try:
             aw_sensor._poll()
             at_sensor._poll()
@@ -3725,6 +4015,38 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
     at_sensor.start(parent=pet)
     clip_sensor.start(parent=pet)
 
+    # === IM 消息接入（docs/PRD-im-message-notify.md M1：QQ / OneBot 11）===
+    # IMManager 后台线程收消息，Qt signal 队列投递回主线程弹通知；
+    # 通知通道（气泡/托盘）取自 im.notify 配置，免打扰时段由 filter 兜底。
+    from core.im.manager import IMManager
+    im_manager = IMManager(parent=pet)
+    _im_state_text = {"connecting": "连接中", "connected": "已连接",
+                      "disconnected": "连接断开（自动重连中）", "error": "连接错误"}
+
+    def _on_im_message(msg) -> None:
+        try:
+            notify_cfg = (im_manager.config.get("notify") or {})
+            if notify_cfg.get("tray", True):
+                pet.tray.showMessage("Amadeus 消息", msg.display())
+            # 通话中不弹气泡（分层气泡会盖在 CallView 上干扰通话界面）
+            if getattr(pet, "_in_call", False):
+                return
+            if notify_cfg.get("bubble", True):
+                pet._show_layered_bubbles(msg.display())
+        except Exception:
+            pass  # IM 通知永不影响主流程
+
+    def _on_im_status(state: str, detail: str) -> None:
+        try:
+            pet.tray.showMessage("IM 接入", _im_state_text.get(state, state))
+        except Exception:
+            pass
+
+    im_manager.message_notified.connect(_on_im_message)
+    im_manager.status_changed.connect(_on_im_status)
+    im_manager.start()
+
+
     # 用户发消息时更新 companion 冷却时间戳（包装原 _send）
     _original_pet_send = pet._send
 
@@ -3746,6 +4068,8 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
 
 def main() -> int:
     mp.freeze_support()
+    if not acquire_single_instance("Amadeus2026.DesktopPet"):
+        return 0
     # 语音服务随主进程自启：不在线则后台拉起 GPT-SoVITS API
     # （失败不阻塞桌宠，SpeechPlayer 的 TTL 重查 + 离线气泡提示兜底）
     try:

@@ -66,7 +66,55 @@ def test_user_interrupt_does_not_emit_offline():
     with patch.object(player, "_check_kurisu", return_value=True), \
          patch.object(player, "_speak_kurisu", return_value=False):
         player._speak_worker("テスト", allow_fallback=False)
-        assert offline_count["n"] == 0
+    assert offline_count["n"] == 0
+
+
+def test_provider_failure_uses_requested_sapi_fallback_text():
+    """云端合成失败时应朗读中文译文，并标记为降级而非完全离线。"""
+    player = _make_player()
+    degraded: list[str] = []
+    offline_count = {"n": 0}
+    player.tts_degraded.connect(degraded.append)
+    player.tts_offline.connect(lambda: offline_count.__setitem__("n", offline_count["n"] + 1))
+
+    with patch.object(player, "_check_kurisu", return_value=True), \
+         patch.object(player, "_speak_kurisu", return_value=False), \
+         patch.object(player, "_speak_sapi_blocking", return_value=True) as mock_sapi:
+        player._speak_worker(
+            "ええ、どうしたの？",
+            text_lang="ja",
+            allow_fallback=True,
+            fallback_text="嗯，怎么了？",
+            fallback_lang="zh",
+        )
+
+    mock_sapi.assert_called_once_with(
+        "嗯，怎么了？", session_id=player._session_id, language="zh"
+    )
+    assert degraded
+    assert offline_count["n"] == 0
+
+
+def test_stream_without_audio_uses_fallback_after_end():
+    """流式 TTS 一帧音频都没产生时，完整中文译文仍必须进入系统语音。"""
+    player = _make_player()
+    player._stream_allow_fallback = True
+    player._stream_fallback_text = "云端失败后的中文回答"
+    player._stream_fallback_lang = "zh"
+    player._stream_queue.put(("ええ、どうしたの？", "ja"))
+    player._stream_queue.put(None)
+    degraded: list[str] = []
+    player.tts_degraded.connect(degraded.append)
+
+    with patch.object(player, "_check_kurisu", return_value=True), \
+         patch.object(player, "_synthesize_and_enqueue", return_value=False), \
+         patch.object(player, "_speak_sapi_blocking", return_value=True) as mock_sapi:
+        player._stream_consumer(player._session_id)
+
+    mock_sapi.assert_called_once_with(
+        "云端失败后的中文回答", session_id=player._session_id, language="zh"
+    )
+    assert degraded
 
 
 def test_locate_gpt_sovits_dev_root(tmp_path):

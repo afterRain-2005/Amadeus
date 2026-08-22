@@ -61,6 +61,40 @@ def test_route_hermes_ok(monkeypatch):
     assert (reply, backend) == ("hermes 回复", "hermes")
 
 
+def test_route_openclaw_ok(monkeypatch):
+    import core.openclaw_client as oc
+    seen = {}
+
+    def fake_turn(**kw):
+        seen.update(kw)
+        return "openclaw 回复"
+
+    monkeypatch.setattr(oc, "ensure_gateway", lambda **kw: True)
+    monkeypatch.setattr(oc, "run_openclaw_turn", fake_turn)
+    cfg = _cfg("openclaw")
+    cfg["openclaw"] = {"enabled": True, "base_url": "http://127.0.0.1:18789",
+                       "token": "tk", "model": "openclaw/default", "autostart": True}
+    reply, backend = backend_router.route_and_send(
+        config=cfg, input_text="hi", soul_md="soul")
+    assert (reply, backend) == ("openclaw 回复", "openclaw")
+    assert seen["base_url"] == "http://127.0.0.1:18789"
+    assert seen["token"] == "tk"
+    assert seen["soul_md"] == "soul"
+
+
+def test_route_openclaw_gateway_down_fallback(monkeypatch):
+    import core.agent_client as ac
+    import core.openclaw_client as oc
+    monkeypatch.setattr(oc, "ensure_gateway", lambda **kw: False)
+    monkeypatch.setattr(ac, "run_local_run", lambda **kw: "本地回复")
+    statuses = []
+    reply, backend = backend_router.route_and_send(
+        config=_cfg("openclaw"), input_text="hi", soul_md="soul",
+        on_status=statuses.append)
+    assert backend == "chat"
+    assert any("本地直连" in s for s in statuses)
+
+
 def test_route_deepseek_ok(monkeypatch):
     import core.deepseek_client as dc
     seen = {}

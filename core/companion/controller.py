@@ -16,6 +16,7 @@ from core.companion.evaluator import Evaluator
 from core.companion.prompts import KURISU_PROACTIVE_PASS_THROUGH
 from core.companion.scheduler import Scheduler
 from core.companion.sensors import ContextSnapshot
+from core.companion.state import PresenceStateEngine
 from core.companion import storage
 from core.storage import APP_DIR
 
@@ -30,6 +31,7 @@ class CompanionController:
         except Exception:
             pass  # companion 永不影响主流程
         self.scheduler = Scheduler(config)
+        self.presence = PresenceStateEngine((config.get("presence") or {}))
         self.evaluator = Evaluator()
         self.llm_endpoint = llm_config.get("endpoint", "")
         self.llm_api_key = llm_config.get("api_key", "")
@@ -42,6 +44,13 @@ class CompanionController:
     def on_user_message(self) -> None:
         """用户发消息时调用，更新冷却时间戳。"""
         self._last_user_msg_ts = time.time()
+        self.presence.on_user_message()
+
+    def on_call_started(self) -> None:
+        self.presence.on_call_started()
+
+    def on_call_ended(self) -> None:
+        self.presence.on_call_ended()
 
     def handle_signal(
         self, snapshot: ContextSnapshot, *, local_hour: float,
@@ -60,6 +69,7 @@ class CompanionController:
         所有 storage 调用包 try/except：companion 永不影响主流程
         （DB 缺表/损坏时降级为 None / 0，等价于"无冷却记录/今日0次"）。
         """
+        self.presence.update_from_snapshot(snapshot, local_hour=local_hour)
         # 用户对话冷却
         if not self.scheduler.user_dialogue_cooldown_allows(
             last_user_msg_ts=self._last_user_msg_ts
@@ -92,6 +102,8 @@ class CompanionController:
             llm_model=self.llm_model,
         )
         if decision is None:
+            return
+        if not self.scheduler.topic_cooldown_allows(decision.topic):
             return
         # 触发问候
         self._speak(
@@ -132,6 +144,8 @@ class CompanionController:
                 storage.record_greeting(decision.text, decision.topic, decision.emotion)
             except Exception:
                 pass  # storage 失败不影响回复
+            self.scheduler.record_proactive(decision.topic)
+            self.presence.record_interrupt()
             if on_expression is not None:
                 try:
                     from core.companion.expression import decide_expression

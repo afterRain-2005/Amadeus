@@ -50,11 +50,14 @@ HERMES_DEFAULTS: dict[str, object] = {
 }
 
 
-# === OpenClaw CUA 后端默认配置 ===
+# === OpenClaw 后端默认配置 ===
 # OpenClaw 是 Node.js 个人 AI 助理平台（npm install -g openclaw），其 Gateway 暴露 OpenAI 兼容 HTTP API。
-# amadeus-py 的 operate_gui 工具通过 POST /v1/chat/completions 把 GUI 任务委托给 OpenClaw 代理（默认 openclaw/default），
-# 代理自动启用 CUA skill（如 TuriX-CUA）操作真实桌面（鼠标/键盘）。
-# 前提：用户需先部署 OpenClaw（Node ≥ 22.22.3 + npm install -g openclaw + openclaw onboard + 装 CUA skill + openclaw gateway）。
+# amadeus-py 以两条路径接入（客户端实现在 core/openclaw_client.py）：
+# 1. CUA 工具：operate_gui 通过 POST /v1/chat/completions 把 GUI 任务委托给 OpenClaw 代理
+#    （默认 openclaw/default），代理自动启用 CUA skill（如 TuriX-CUA）操作真实桌面（鼠标/键盘）。
+# 2. 对话后端：agent_router.mode = "openclaw" 时整轮对话委托 OpenClaw 代理处理（流式回传）。
+# 网关生命周期：autostart 开启时探活失败自动 Popen("openclaw gateway") 拉起（同 Hermes 惯例）。
+# 前提：用户需先部署 OpenClaw（Node ≥ 22.22.3 + npm install -g openclaw + openclaw onboard + 装 CUA skill）。
 # 官方文档：https://docs.openclaw.ai/gateway  仓库：https://github.com/openclaw/openclaw
 OPENCLAW_DEFAULTS: dict[str, object] = {
     "enabled": False,                          # 是否启用 OpenClaw CUA 后端（False 时 operate_gui 返回降级提示）
@@ -62,6 +65,7 @@ OPENCLAW_DEFAULTS: dict[str, object] = {
     "token": "",                               # OPENCLAW_GATEWAY_TOKEN（shared-secret 鉴权，onboard 时生成）
     "model": "openclaw/default",               # 稳定代理别名，始终映射到配置的默认代理
     "timeout": 120,                            # GUI 操作可能耗时，给足超时（秒）
+    "autostart": True,                         # 网关离线时自动拉起（openclaw gateway 子进程）
 }
 
 # === Agent 模式路由默认配置（2026-08-15 agent-mode spec §4.4）===
@@ -150,6 +154,51 @@ COMPANION_DEFAULTS: dict[str, object] = {
     "quiet_hours": {"start": "23:00", "end": "08:00"},  # 静音时段
     "frequency": "mid",                         # low=20% / mid=50% / high=100% 触发概率
     "daily_limit": 30,                          # 每日问候上限
+    "presence": {
+        "enabled": True,
+        "focus_minutes": 25,
+        "deep_focus_minutes": 45,
+        "persist_state": False,
+    },
+    "proactive": {
+        "global_cooldown_seconds": 600,
+        "user_dialogue_cooldown_seconds": 300,
+        "topic_cooldowns": {
+            "focus_break": 3600,
+            "idle_check": 1800,
+            "deep_night": 7200,
+            "window_change": 900,
+            "idle": 1800,
+            "away_long": 3600,
+            "sleepy": 7200,
+            "concern": 3600,
+            "tease": 900,
+        },
+        "interrupt_budget": {
+            "soft_per_day": 8,
+            "hard_per_day": 20,
+        },
+    },
+}
+
+
+# === IM 消息接入默认配置（docs/PRD-im-message-notify.md）===
+# QQ 走 NapCat 等 OneBot 11 实现（正向 WS）；微信走 wcferry（M2，暂未实现）。
+# 通知通道：桌宠气泡 / 托盘气泡；TTS 播报默认关（外放隐私，M3 再做）。
+# quiet_hours 与 Companion 语义一致：时段内只缓冲不通知。
+IM_DEFAULTS: dict[str, object] = {
+    "qq": {
+        "enabled": False,                       # 总开关：关 = 完全不连接
+        "ws_url": "ws://127.0.0.1:3001",        # NapCat 正向 WS 端口
+        "group_at_only": True,                  # 群消息默认只通知 @我
+        "keywords": [],                         # 群消息关键词白名单（命中也通知）
+    },
+    "notify": {
+        "bubble": True,                         # 桌宠头顶气泡
+        "tray": True,                           # 托盘系统通知（兜底）
+        "tts": False,                           # TTS 播报（默认关，隐私）
+    },
+    "quiet_hours": {"start": "23:00", "end": "08:00"},  # 免打扰（只缓冲不通知）
 }
 
 
@@ -217,11 +266,20 @@ ALIYUN_TTS_ENGINES: list[tuple[str, str]] = [
 # 滞回阈值：START_THRESH > END_THRESH，留缓冲带防边界抖动（单阈值时噪声在阈值附近波动会反复触发）。
 # 形象理解：像声音的"音量水位线"，超过高位认为有人说话，低于低位持续一段时间认为说完了。
 VAD_PARAMS: dict[str, int | float] = {
-    "start_thresh": 0.018,       # 开始说话的 RMS 阈值（高位）
+    "start_thresh": 0.018,       # 开始说话的 RMS 阈值（高位，浏览器 AGC 场景标定）
     "end_thresh": 0.012,         # 结束说话的 RMS 阈值（低位，低于开始防抖）
-    "start_frames": 3,           # 连续多少帧超阈值才判定"开始说话"
+    "start_frames": 2,           # 连续多少帧超阈值才判定"开始说话"（弱信号下说话帧时高时低，3 帧常凑不齐）
     "silence_ms": 1100,          # 静音持续多久判定"一句话结束"
     "max_utterance_ms": 15000,   # 单次最长录音（防一直不结束）
+    # 底噪自适应（软件替代浏览器 autoGainControl）：sounddevice 裸 PortAudio
+    # 无 AGC，原始电平常仅 0.002-0.01，固定 0.018 永不触发 → 通话无声。
+    # 实际阈值 = clamp(noise_floor × noise_ratio, min_start_thresh, max_start_thresh)
+    # min=0.0015：实测用户说话在部分麦克风上峰值仅 ~0.005、大多帧 0.001-0.004，
+    # 下限 0.004 时连续超阈帧凑不齐 → 永不触发；死设备底噪 0.00002 远低于
+    # 0.0015，不会因此误触发
+    "min_start_thresh": 0.0015,  # 下限：弱信号麦克风也能触发
+    "max_start_thresh": 0.03,    # 上限：强噪声环境阈值封顶
+    "noise_ratio": 4.0,          # 阈值 = 底噪的 4 倍（高于底噪防误触发）
 }
 
 

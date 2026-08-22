@@ -255,6 +255,28 @@ def test_scheduler_defaults_when_config_missing():
     assert s.daily_limit == 30
 
 
+def test_scheduler_topic_cooldown_blocks_repeated_topic():
+    s = Scheduler(config={
+        "enabled": True,
+        "proactive": {"topic_cooldowns": {"idle": 60}},
+    })
+    assert s.topic_cooldown_allows("idle") is True
+    s.record_proactive("idle")
+    assert s.topic_cooldown_allows("idle") is False
+
+
+def test_scheduler_interrupt_budget_blocks_after_hard_limit():
+    s = Scheduler(config={
+        "enabled": True,
+        "frequency": "high",
+        "daily_limit": 30,
+        "proactive": {"interrupt_budget": {"hard_per_day": 1}},
+    })
+    assert s.should_consider(local_hour=14) is True
+    s.record_proactive("idle")
+    assert s.should_consider(local_hour=14) is False
+
+
 def test_scheduler_enabled_string_false():
     """enabled 为字符串 'false' 时应被 bool() 转为 False。"""
     s = Scheduler(config={"enabled": False})

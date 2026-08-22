@@ -13,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from PySide6.QtWidgets import QApplication, QSystemTrayIcon, QMenu
 from PySide6.QtGui import QIcon
+from core.single_instance import acquire_single_instance
 
 
 # 全局引用，防止 gc 回收
@@ -85,6 +86,8 @@ def _start_pet_process() -> None:
 # ============================================================
 def main() -> int:
     global _tray_icon
+    if not acquire_single_instance("Amadeus2026.Main"):
+        return 0
     print("[main] Starting QApplication...", flush=True)
     app = QApplication(sys.argv)
     app.setApplicationName("Amadeus")
@@ -159,6 +162,12 @@ if __name__ == "__main__":
         # 漏拦的 worker：立即非零退出，让父进程通过 join/exitcode 感知 renderer
         # 启动失败，而不是递归复制出整棵桌宠进程树。
         sys.exit(1)
+    if "--voice-smoke-test" in sys.argv:
+        from core.tts_client import SpeechPlayer
+
+        player = SpeechPlayer()
+        ok = player._speak_sapi_blocking("系统语音兜底正常。", language="zh")
+        sys.exit(0 if ok else 2)
     if "--desktop-pet" in sys.argv:
         from desktop_pet import main as pet_main
         sys.exit(pet_main())

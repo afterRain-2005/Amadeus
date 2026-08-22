@@ -7,7 +7,7 @@ import re
 
 import httpx
 
-from config import AGENT_ROUTER_DEFAULTS, KURISU_OUTPUT_FORMAT, MEMORY_DEFAULTS, OPENCLAW_DEFAULTS
+from config import AGENT_ROUTER_DEFAULTS, KURISU_OUTPUT_FORMAT, MEMORY_DEFAULTS
 
 GUI_PATTERN = re.compile(r"打开|启动|关闭|点击|截个屏|截图|屏幕|窗口|鼠标|键盘|记事本")
 AGENT_PATTERN = re.compile(r"搜索|查找|帮我搜|帮我写|整理|运行|执行|读.{0,8}文件|列出|下载|运行动命令|脚本|查一下|百度|google|联网|查天气|查新闻")
@@ -133,6 +133,8 @@ def route_and_send(
     skip_history: bool = False,
     inject_system_prompt: str | None = None,
     response_max_tokens: int | None = 700,
+    cancel_event=None,
+    harness_session_id: str | None = None,
 ) -> tuple[str, str]:
     global _codex_session_started
     from core.agent_client import run_local_run
@@ -141,6 +143,7 @@ def route_and_send(
     from core.harness_bridge import run_harness_turn
     from core.hermes_launcher import ensure_gateway, read_profile_api_key
     from core.memory import merge_memories, recall, remember_turn
+    from core.openclaw_client import merge_config as merge_openclaw_config
     from core.storage import APP_DIR
 
     router = {**AGENT_ROUTER_DEFAULTS, **(config.get("agent_router") or {})}
@@ -158,9 +161,7 @@ def route_and_send(
     else:
         route_memories = memories or []
 
-    openclaw_cfg = dict(OPENCLAW_DEFAULTS)
-    if isinstance(config.get("openclaw"), dict):
-        openclaw_cfg.update(config["openclaw"])
+    openclaw_cfg = merge_openclaw_config(config)
     openclaw_enabled = bool(openclaw_cfg.get("enabled", False))
 
     auto_route = bool(router.get("auto_route", False))
@@ -180,7 +181,7 @@ def route_and_send(
             model=str(ollama_cfg.get("model", "qwen2.5:0.5b")),
             timeout=ollama_timeout,
         )
-    elif mode in ("chat", "harness", "hermes", "deepseek", "codex"):
+    elif mode in ("chat", "harness", "hermes", "deepseek", "codex", "openclaw"):
         route = mode
     else:
         route = classify_input(
@@ -228,11 +229,44 @@ def route_and_send(
         else:
             on_status("Hermes gateway unavailable; using local chat（本地直连）")
 
+    elif route == "openclaw":
+        # 整轮对话委托 OpenClaw 代理（skills/浏览器/CUA 等能力由其 agent loop 处理）
+        from core.openclaw_client import ensure_gateway as ensure_openclaw_gateway
+        from core.openclaw_client import run_openclaw_turn
+        base_url = str(openclaw_cfg.get("base_url", "http://127.0.0.1:18789"))
+        token = str(openclaw_cfg.get("token", ""))
+        instructions = KURISU_OUTPUT_FORMAT
+        if inject_system_prompt:
+            instructions = f"{KURISU_OUTPUT_FORMAT}\n\n{inject_system_prompt}"
+        try:
+            if not ensure_openclaw_gateway(
+                base_url=base_url, token=token,
+                autostart=bool(openclaw_cfg.get("autostart", True)),
+            ):
+                raise RuntimeError(f"gateway unreachable: {base_url}")
+            reply = run_openclaw_turn(
+                base_url=base_url,
+                token=token,
+                model=str(openclaw_cfg.get("model", "openclaw/default")),
+                soul_md=soul_md,
+                instructions=instructions,
+                input_text=input_text,
+                conversation_history=conversation_history,
+                memories=route_memories,
+                on_delta=on_delta,
+            )
+            if memory_enabled:
+                remember_turn(user_text=input_text, assistant_text=reply, source="openclaw", scope=memory_scope)
+            return reply, "openclaw"
+        except RuntimeError as exc:
+            on_status(f"OpenClaw gateway failed ({exc}); using local chat（本地直连）")
+
     elif route == "harness":
         harness_cfg = {**AGENT_ROUTER_DEFAULTS.get("harness", {}), **(config.get("harness") or {})}
         instructions = KURISU_OUTPUT_FORMAT
         if inject_system_prompt:
-            instructions = f"{inject_system_prompt}\n\n{KURISU_OUTPUT_FORMAT}"
+            # inject 放 KURISU 之后：后置指令服从性更高（电话模式靠 OVERRIDES 覆盖格式）
+            instructions = f"{KURISU_OUTPUT_FORMAT}\n\n{inject_system_prompt}"
         try:
             reply = run_harness_turn(
                 endpoint=str(harness_cfg.get("base_url", "") or config.get("endpoint", "")),
@@ -244,6 +278,7 @@ def route_and_send(
                 cwd=str(harness_cfg.get("cwd", "") or ""),
                 session_root=str(harness_cfg.get("session_root", "") or ""),
                 request_timeout_seconds=float(harness_cfg.get("request_timeout_seconds", 180)),
+                session_id=harness_session_id,
                 soul_md=soul_md,
                 instructions=instructions,
                 input_text=input_text,
@@ -309,7 +344,8 @@ def route_and_send(
         conversation_history.append({"role": "user", "content": input_text})
     instructions = KURISU_OUTPUT_FORMAT
     if inject_system_prompt:
-        instructions = f"{inject_system_prompt}\n\n{KURISU_OUTPUT_FORMAT}"
+        # inject 放 KURISU 之后：后置指令服从性更高（电话模式靠 OVERRIDES 覆盖格式）
+        instructions = f"{KURISU_OUTPUT_FORMAT}\n\n{inject_system_prompt}"
     reply = run_local_run(
         endpoint=config.get("endpoint", ""),
         api_key=config.get("api_key", ""),
@@ -324,6 +360,7 @@ def route_and_send(
         on_tool_event=on_tool_event,
         on_approval=on_approval,
         max_tokens=response_max_tokens,
+        cancel_event=cancel_event,
     )
     if memory_enabled:
         remember_turn(user_text=input_text, assistant_text=reply, source=("gui" if route == "gui" else "chat"), scope=memory_scope)

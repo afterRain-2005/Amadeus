@@ -320,6 +320,7 @@ def run_harness_turn(
     cwd: str | None = None,
     session_root: str | None = None,
     request_timeout_seconds: float | None = None,
+    session_id: str | None = None,
     soul_md: str,
     instructions: str,
     input_text: str,
@@ -347,6 +348,7 @@ def run_harness_turn(
                 cwd=cwd,
                 session_root=session_root,
                 request_timeout_seconds=request_timeout_seconds,
+                session_id=session_id,
                 soul_md=soul_md,
                 instructions=instructions,
                 input_text=input_text,
@@ -393,6 +395,7 @@ def _run_via_sdk(
     cwd: str | None,
     session_root: str | None,
     request_timeout_seconds: float | None,
+    session_id: str | None,
     soul_md: str,
     instructions: str,
     input_text: str,
@@ -456,7 +459,7 @@ def _run_via_sdk(
     )
 
     approval_handler = _wrap_harness_approval(on_approval)
-    session_id = f"amadeus-{uuid.uuid4().hex}"
+    session_id = session_id or f"amadeus-{uuid.uuid4().hex}"
 
     with DeepSeekHarness(config) as harness:
         with _active_lock:

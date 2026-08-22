@@ -10,6 +10,50 @@ COMPANION_EMOTION_MOTION: companion 内部情绪 → Live2D 动作名。
   每种对头部/身体参数做短补间偏移，让角色不只眨眼还会歪头/点头/前倾等。
 """
 
+
+def _looks_like_coding(s) -> bool:
+    text = f"{s.active_window_title} {s.active_process}".lower()
+    coding_markers = (
+        "code",
+        "pycharm",
+        "idea",
+        "webstorm",
+        "visual studio",
+        "devenv",
+        "cursor",
+        "zed",
+        "sublime",
+        "vim",
+        "nvim",
+        "emacs",
+        "terminal",
+        "powershell",
+        "cmd",
+        ".py",
+        ".js",
+        ".ts",
+        ".tsx",
+        ".jsx",
+        ".rs",
+        ".go",
+        ".java",
+        ".cpp",
+        ".cs",
+        ".vue",
+        ".md",
+    )
+    return any(marker in text for marker in coding_markers)
+
+
+def _focus_break_condition(s) -> bool:
+    return (
+        s.idle_state == "active"
+        and s.idle_seconds < 300
+        and 60 <= s.work_session_minutes < 120
+        and _looks_like_coding(s)
+    )
+
+
 KURISU_PROACTIVE_TEMPLATES = [
     {
         "topic": "away_long",
@@ -36,6 +80,12 @@ KURISU_PROACTIVE_TEMPLATES = [
         "emotion": "concern",
     },
     {
+        "topic": "focus_break",
+        "condition": _focus_break_condition,
+        "text": "代码写了 {work_session_minutes} 分钟了，起来活动一下。",
+        "emotion": "concern",
+    },
+    {
         "topic": "tease",
         "condition": lambda s: s.window_changed_recently and s.greeting_count_today == 0,
         "text": "切换窗口切得这么勤，是在摸鱼吧？",
@@ -59,7 +109,7 @@ JSON 输出格式：
 {"should_speak": bool, "text": str, "emotion": str, "topic": str}
 
 emotion 可选：neutral/happy/tease/concern/sleepy/idle/angry
-topic 可选：idle/work/deep_night/tease/window_change/general
+topic 可选：idle/work/deep_night/focus_break/tease/window_change/general
 """
 
 KURISU_PROACTIVE_PASS_THROUGH = """你接下来要说的话已经准备好了，把以下内容用你的语气自然说出，可以微调措辞但不要改变意思：

@@ -119,7 +119,17 @@ class CallView(QWidget):
         top.addWidget(self.elapsed_label)
         layout.addLayout(top)
 
-        # 中部：字幕 + 波形
+        # 中部：字幕 + 波形（字幕上方小字常驻显示最近一次语音识别结果，
+        # 让用户确信"我说的话被听见了"）
+        self.you_said_label = QLabel("", self)
+        self.you_said_label.setAlignment(Qt.AlignRight)
+        self.you_said_label.setWordWrap(True)
+        self.you_said_label.setStyleSheet(
+            "color:#8a7f63; font:11px 'Consolas','Microsoft YaHei';"
+            "background:transparent; padding:0 4px"
+        )
+        layout.addWidget(self.you_said_label)
+
         self.subtitle_label = QLabel("正在接通…", self)
         self.subtitle_label.setAlignment(Qt.AlignCenter)
         self.subtitle_label.setWordWrap(True)
@@ -170,6 +180,10 @@ class CallView(QWidget):
     def set_subtitle(self, text: str) -> None:
         self.subtitle_label.setText(text)
 
+    def set_you_said(self, text: str) -> None:
+        """显示最近一次语音识别结果（常驻小字，直到下一次识别覆盖）。"""
+        self.you_said_label.setText(f"🎤 你：{text}")
+
     def set_elapsed(self, seconds: int) -> None:
         m = seconds // 60
         s = seconds % 60
@@ -182,8 +196,11 @@ class CallView(QWidget):
         icon_path = _ICONS / ("mic_off.svg" if muted else "mic.svg")
         if icon_path.exists():
             self.mute_btn._renderer = QSvgRenderer(icon_path.read_bytes())
+        self.mute_btn._color = "amber" if muted else "cyan"
+        self.mute_btn.setToolTip("取消静音" if muted else "静音")
         self.mute_btn.update()
 
     def set_screen_share(self, on: bool) -> None:
         self.screen_btn.setToolTip("屏幕共享：开" if on else "屏幕共享：关")
+        self.screen_btn._color = "cyan" if on else "amber"
         self.screen_btn.update()

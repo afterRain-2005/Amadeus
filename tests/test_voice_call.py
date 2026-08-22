@@ -29,6 +29,22 @@ def test_start_transitions_to_listening():
     assert ctrl.phase == "connecting"
 
 
+def test_start_stops_when_mic_fails():
+    ctrl = _make_controller()
+
+    def fail_open_mic():
+        ctrl._set_phase("ended")
+
+    with patch.object(ctrl, "_open_mic", side_effect=fail_open_mic), \
+         patch.object(ctrl, "_start_screen_capture") as mock_capture:
+        ctrl.start()
+
+    assert ctrl.phase == "ended"
+    assert not ctrl._elapsed_timer.isActive()
+    assert not ctrl._connecting_timer.isActive()
+    mock_capture.assert_not_called()
+
+
 def test_hangup_sets_ended():
     ctrl = _make_controller()
     with patch.object(ctrl, "_open_mic"), \
@@ -41,10 +57,13 @@ def test_hangup_sets_ended():
 
 
 def test_speaking_phase_pauses_vad():
-    """半双工：speaking/processing 态 VAD 不触发（移植 speakingRef）。"""
+    """全双工：仅 speaking 暂停主 VAD（她说话时回声会误触发）；
+    processing（网络等待期扬声器无声）放开 VAD，用户可直接改口。"""
     ctrl = _make_controller()
     ctrl._set_phase("speaking")
     assert ctrl.vad_paused is True
+    ctrl._set_phase("processing")
+    assert ctrl.vad_paused is False
     ctrl._set_phase("listening")
     assert ctrl.vad_paused is False
 
@@ -127,18 +146,24 @@ def test_transcribe_failure_returns_to_listening():
 
 def test_toggle_mute_flips_state():
     ctrl = _make_controller()
+    states = []
+    ctrl.muted_changed.connect(states.append)
     assert ctrl.is_muted is False
     ctrl.toggle_mute()
     assert ctrl.is_muted is True
     ctrl.toggle_mute()
     assert ctrl.is_muted is False
+    assert states == [True, False]
 
 
 def test_toggle_screen_share_flips_state():
     ctrl = _make_controller()
+    states = []
+    ctrl.screen_share_changed.connect(states.append)
     assert ctrl.screen_share_on is True  # 默认开
     ctrl.toggle_screen_share()
     assert ctrl.screen_share_on is False
+    assert states == [False]
 
 
 def test_on_llm_delta_starts_streaming_on_separator():
@@ -154,7 +179,10 @@ def test_on_llm_delta_starts_streaming_on_separator():
         # === 与首句日语同 delta（LLM 流式常见场景）：启动 TTS + 提取首句追加
         ctrl._on_llm_delta("\n===\n（首を傾げる）ええ、どうしたの？")
         assert ctrl._stream_tts_started is True
-        mock_start.assert_called_once_with(text_lang="ja")
+        # 首句立即送合成：first_merge_chars=1（电话模式延迟优先于吞吐）
+        mock_start.assert_called_once_with(
+            text_lang="ja", first_merge_chars=1, allow_fallback=True
+        )
         # phase 切到 speaking（VAD 暂停）
         assert ctrl.phase == "speaking"
         assert ctrl.vad_paused is True
@@ -209,7 +237,9 @@ def test_on_llm_delta_multi_separator_skips_chinese_segments():
         # 两段日语（含假名）应被追加，两段中文（无假名）应被跳过
         assert ctrl._stream_tts_started is True
         # 启动 TTS 1 次（首次进入日语段）
-        mock_start.assert_called_once_with(text_lang="ja")
+        mock_start.assert_called_once_with(
+            text_lang="ja", first_merge_chars=1, allow_fallback=True
+        )
         # 追加次数：第一段日语 + 第二段日语 = 2 次（中文段无假名不追加）
         assert mock_append.call_count == 2
         # 验证追加的内容是日语段
@@ -242,7 +272,7 @@ def test_handle_utterance_streaming_path():
          patch.object(ctrl._tts, "speak_streaming_end") as mock_end:
         ctrl._handle_utterance(b"audio")
     assert mock_start.called
-    assert mock_end.called
+    mock_end.assert_called_once_with(fallback_text="（歪头）嗯，怎么了？", fallback_lang="zh")
     # 流式已启动，不应走兜底 speak_with_options
     # （ctrl._tts 是真实的 SpeechPlayer，speak_with_options 没被 mock 但流式路径不会调它）
 
@@ -263,4 +293,172 @@ def test_handle_utterance_fallback_no_separator():
     args = mock_speak.call_args
     assert args.args[0] == "こんにちは"  # parsed.chinese（无 === 时 chinese=full）
     assert args.kwargs["text_lang"] == "ja"
-    assert args.kwargs["allow_fallback"] is False
+    assert args.kwargs["allow_fallback"] is True
+    assert args.kwargs["fallback_text"] == "こんにちは"
+    assert args.kwargs["fallback_lang"] == "ja"
+
+
+def test_stream_llm_injects_phone_short_reply_prompt():
+    ctrl = _make_controller()
+    with patch("core.backend_router.route_and_send", return_value=("reply", "chat")) as mock_route:
+        assert ctrl._stream_llm("hello") == "reply"
+    _, kwargs = mock_route.call_args
+    inject = kwargs["inject_system_prompt"]
+    assert "Phone mode reply policy" in inject
+    assert "1-2 sentences" in inject
+    assert kwargs["skip_history"] is True
+
+
+def test_stream_llm_no_token_cap():
+    """电话模式不设 max_tokens：推理模型思考即耗 token，上限会把正文整段
+    掐掉 → 空回复（实测 mimo-v2.5 + 300 tokens 回复为空）。长度由 prompt 约束。"""
+    ctrl = _make_controller()
+    with patch("core.backend_router.route_and_send", return_value=("reply", "chat")) as mock_route:
+        ctrl._stream_llm("hello")
+    _, kwargs = mock_route.call_args
+    assert kwargs["response_max_tokens"] is None
+
+
+def test_on_llm_delta_japanese_first_order():
+    """电话模式新语序（日语在前、=== 后中文）：首个假名 delta 立即启动 TTS。
+
+    日语先行让首句假名提前 ~9s 到达（不必等整段中文生成完），
+    这是缩短首声延迟的关键；假名检测顺序无关。
+    """
+    ctrl = _make_controller()
+    with patch.object(ctrl._tts, "speak_streaming_start") as mock_start, \
+         patch.object(ctrl._tts, "speak_streaming_append") as mock_append:
+        # 首个 delta 即日语（含假名）：立即启动 TTS
+        ctrl._on_llm_delta("[emotion:smile]（微笑んで）ええ、どうしたの？")
+        assert ctrl._stream_tts_started is True
+        mock_start.assert_called_once_with(
+            text_lang="ja", first_merge_chars=1, allow_fallback=True
+        )
+        assert mock_append.call_count == 1
+        # 后续 === 与中文翻译：无假名，不追加
+        ctrl._on_llm_delta("\n===\n（微笑）嗯，怎么了？")
+        assert mock_append.call_count == 1
+
+
+def test_on_llm_delta_emits_reply_subtitle():
+    """流式回复实时上字幕（修复：通话中回复从不显示）。"""
+    ctrl = _make_controller()
+    subtitles: list[str] = []
+    ctrl.subtitle.connect(subtitles.append)
+    with patch.object(ctrl._tts, "speak_streaming_start"), \
+         patch.object(ctrl._tts, "speak_streaming_append"):
+        ctrl._on_llm_delta("[emotion:smile]（微笑んで）ええ、どうしたの？")
+        ctrl._on_llm_delta("\n===\n（微笑）嗯，怎么了？")
+    joined = "".join(subtitles)
+    assert "ええ、どうしたの？" in joined, f"日语台词未上字幕: {subtitles}"
+    assert "嗯，怎么了？" in joined, f"中文翻译未上字幕: {subtitles}"
+
+
+# ===== 全双工（barge-in 打断 + turn 作废）=====
+
+def _frame_of(rms_target: float, samples: int = 1024) -> "np.ndarray":
+    import numpy as np
+    noise = np.random.randn(samples).astype(np.float32)
+    cur = float(np.sqrt(np.mean(noise ** 2)))
+    return noise * (rms_target / cur)
+
+
+def test_barge_in_interrupts_tts():
+    """speaking 态用户大声说话（≥阈值×2.5 连续 2 帧）→ 停 TTS 转录用户。"""
+    ctrl = _make_controller()
+    ctrl._set_phase("speaking")
+    barge_thresh = ctrl._vad.current_start_thresh * 2.5
+    with patch.object(ctrl._tts, "stop") as mock_stop, \
+         patch.object(ctrl, "_submit_user_audio") as mock_submit:
+        # 连续 2 帧大声 → 触发打断（TTS 立刻停）
+        ctrl._feed_barge_in(_frame_of(barge_thresh * 2), barge_thresh * 2)
+        ctrl._feed_barge_in(_frame_of(barge_thresh * 2), barge_thresh * 2)
+        assert mock_stop.called
+        assert ctrl._barge_recording is True
+        # 之后录到静音 12 帧提交
+        for _ in range(12):
+            ctrl._feed_barge_record(_frame_of(0.0001), 0.0001)
+        assert mock_submit.called
+        assert ctrl._barge_recording is False
+
+
+def test_barge_in_ignores_tts_echo():
+    """她说话的回声（电平低，< 阈值×2.5）不触发打断。"""
+    ctrl = _make_controller()
+    ctrl._set_phase("speaking")
+    barge_thresh = ctrl._vad.current_start_thresh * 2.5
+    with patch.object(ctrl._tts, "stop") as mock_stop:
+        for _ in range(20):
+            ctrl._feed_barge_in(_frame_of(barge_thresh * 0.5), barge_thresh * 0.5)
+        assert not mock_stop.called
+        assert ctrl._barge_recording is False
+
+
+def test_turn_invalidation_drops_stale_reply():
+    """改口/打断后（_turn_id 前进），旧回合的 LLM 回复不再播 TTS/改状态。"""
+    ctrl = _make_controller()
+
+    def fake_stream_llm(user_text):
+        # 旧回合正在生成时，用户说了新话（turn 前进）
+        ctrl._turn_id += 1
+        return "（微笑）旧回复"
+    with patch("core.voice_call.encode_wav"), \
+         patch.object(ctrl, "_transcribe", return_value="你好"), \
+         patch.object(ctrl, "_stream_llm", side_effect=fake_stream_llm), \
+         patch.object(ctrl._tts, "speak_with_options") as mock_speak, \
+         patch.object(ctrl, "_set_phase") as mock_phase:
+        ctrl._handle_utterance(_frame_of(0.01), turn_id=1)
+    mock_speak.assert_not_called()  # 旧回复不播
+    mock_phase.assert_not_called()  # 旧回合不改状态
+
+
+def test_stale_delta_dropped():
+    """旧回合的流式 delta 不送 TTS、不上字幕。"""
+    ctrl = _make_controller()
+    ctrl._active_turn = 1
+    ctrl._turn_id = 2  # 回合已前进（被打断）
+    with patch.object(ctrl._tts, "speak_streaming_start") as mock_start:
+        ctrl._on_llm_delta("（微笑んで）ええ、どうしたの？")
+    mock_start.assert_not_called()
+    assert ctrl._streamed_reply == ""
+
+
+# ===== 字幕只中文 / 语音只日语 =====
+
+def test_subtitle_shows_chinese_only():
+    """字幕只出中文（需求）；纯日语无翻译时回退显示日语。"""
+    ctrl = _make_controller()
+    subs = []
+    ctrl.subtitle.connect(subs.append)
+    ctrl._active_turn = ctrl._turn_id
+    with patch.object(ctrl._tts, "speak_streaming_start"), \
+         patch.object(ctrl._tts, "speak_streaming_append"):
+        ctrl._on_llm_delta("[emotion:smile]（微笑んで）ええ、どうしたの？")
+        ctrl._on_llm_delta("\n===\n（微笑）嗯，怎么了？")
+    joined = "".join(subs)
+    assert "嗯，怎么了？" in joined
+    # 最终字幕只出中文（首 delta 无翻译时回退日语属预期中间态）
+    assert "ええ" not in subs[-1], f"最终字幕不应含日语: {subs[-1]!r}"
+
+
+def test_fallback_tts_japanese_with_chinese_voice():
+    """兜底路径：有日语段用日语合成；纯中文回复用中文腔读（不混语言）。"""
+    ctrl = _make_controller()
+    with patch("core.voice_call.encode_wav"), \
+         patch.object(ctrl, "_transcribe", return_value="你好"), \
+         patch.object(ctrl, "_stream_llm", return_value="[emotion:smile]（微笑）怎么了？\n===\n（微笑んで）どうしたの？"), \
+         patch.object(ctrl._tts, "speak_with_options") as mock_speak:
+        ctrl._handle_utterance(_frame_of(0.01))
+    args = mock_speak.call_args
+    assert "どうしたの" in args.args[0]
+    assert args.kwargs["text_lang"] == "ja"
+
+    # 纯中文回复：中文腔读
+    ctrl2 = _make_controller()
+    with patch("core.voice_call.encode_wav"), \
+         patch.object(ctrl2, "_transcribe", return_value="你好"), \
+         patch.object(ctrl2, "_stream_llm", return_value="没什么，随便聊聊"), \
+         patch.object(ctrl2._tts, "speak_with_options") as mock_speak2:
+        ctrl2._handle_utterance(_frame_of(0.01))
+    args2 = mock_speak2.call_args
+    assert args2.kwargs["text_lang"] == "zh"

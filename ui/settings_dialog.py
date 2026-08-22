@@ -4,7 +4,7 @@ from __future__ import annotations
 import threading
 
 from PySide6.QtCore import Q_ARG, QMetaObject, QPoint, Qt, QTimer, Slot
-from PySide6.QtGui import QColor
+from PySide6.QtGui import QColor, QFontDatabase
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QDialog, QDialogButtonBox,
     QFormLayout, QGraphicsDropShadowEffect, QHBoxLayout, QLabel, QLineEdit, QPushButton, QScrollArea, QTabWidget,
@@ -21,6 +21,18 @@ _DITHER_URL = str(
 _ABOUT_BG_URL = str(
     Path(__file__).resolve().parent.parent / "resources" / "ui" / "helivitica-bg.png"
 ).replace("\\", "/")
+
+# Poiret One 字体（懒加载，在 QApplication 就绪后调用）
+_POIRET_FONT = str(
+    Path(__file__).resolve().parent.parent / "resources" / "fonts" / "PoiretOne-Regular.ttf"
+).replace("\\", "/")
+_POIRET_FONT_LOADED = False
+
+def _ensure_poiret_font() -> None:
+    global _POIRET_FONT_LOADED
+    if not _POIRET_FONT_LOADED:
+        QFontDatabase.addApplicationFont(_POIRET_FONT)
+        _POIRET_FONT_LOADED = True
 
 _QSS_TMPL = """
 QDialog#settingsDialog { background-color: #171114; color: #c1b492; border: 1px solid #d2738a; background-image: url(__DITHER__); }
@@ -95,6 +107,7 @@ def _scroll_page(page: QWidget) -> QScrollArea:
 class SettingsDialog(QDialog):
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
+        _ensure_poiret_font()
         self.setObjectName("settingsDialog")
         self.setWindowTitle("Amadeus 设置")
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.Dialog)
@@ -153,6 +166,24 @@ class SettingsDialog(QDialog):
         asr_form.addRow("ASR Endpoint", self.asr_endpoint)
         asr_form.addRow("ASR API Key", self.asr_key)
         asr_form.addRow("ASR 模型", self.asr_model)
+
+        # 通话麦克风设备：PortAudio 默认设备常与 Windows 通信默认不一致
+        # （实测默认拿到空置的 Realtek 插孔 → 通话无声/波形死平），
+        # 允许显式指定（自动扫描只在设备明显更差时兜底）
+        self.mic_device = QComboBox()
+        self.mic_device.addItem("自动（系统默认 + 死设备扫描）", -1)
+        try:
+            import sounddevice as _sd
+            for _i, _d in enumerate(_sd.query_devices()):
+                if _d["max_input_channels"] > 0:
+                    self.mic_device.addItem(
+                        f"[{_i}] {str(_d['name'])[:40]}", _i)
+        except Exception:
+            pass
+        _mic_idx = config.get("mic_device_index", -1)
+        _mi = self.mic_device.findData(_mic_idx if isinstance(_mic_idx, int) else -1)
+        self.mic_device.setCurrentIndex(max(_mi, 0))
+        asr_form.addRow("通话麦克风", self.mic_device)
 
         # === GPT-SoVITS 运行模式（独立容器，选择 gpt_sovits 时显示）===
         from config import GPT_SOVITS_DEFAULTS
@@ -248,7 +279,7 @@ class SettingsDialog(QDialog):
         self.tts_provider.currentIndexChanged.connect(self._on_tts_provider_changed)
 
         # === Agent 模式（2026-08-15 agent-mode spec §4.4）===
-        from config import AGENT_ROUTER_DEFAULTS, HARNESS_DEFAULTS, HERMES_DEFAULTS
+        from config import AGENT_ROUTER_DEFAULTS, HARNESS_DEFAULTS, HERMES_DEFAULTS, OPENCLAW_DEFAULTS
         agent_page = QWidget()
         agent_layout = QVBoxLayout(agent_page)
         agent_layout.setContentsMargins(0, 0, 0, 0)
@@ -261,6 +292,7 @@ class SettingsDialog(QDialog):
         self.agent_mode.addItem("本地直连（默认）", "chat")
         self.agent_mode.addItem("DeepSeek Harness SDK", "harness")
         self.agent_mode.addItem("Hermes 网关（deepseek 模式）", "hermes")
+        self.agent_mode.addItem("OpenClaw 网关（本地代理）", "openclaw")
         self.agent_mode.addItem("DeepSeek 直连", "deepseek")
         self.agent_mode.addItem("codex 子进程", "codex")
         self.agent_mode.addItem("自动分流（gate）", "auto")
@@ -312,6 +344,34 @@ class SettingsDialog(QDialog):
         hermes_btn.clicked.connect(self._probe_hermes)
         hermes_form.addRow(self.hermes_status, hermes_btn)
         agent_layout.addWidget(self._hermes_block)
+
+        # OpenClaw 块（对话后端 + CUA 工具共用同一 Gateway 配置）
+        self._openclaw_block = QWidget()
+        openclaw_form = QFormLayout(self._openclaw_block)
+        _tune_form(openclaw_form)
+        openclaw_form.addRow(_section("OPENCLAW GATEWAY"))
+        openclaw_cfg = {**OPENCLAW_DEFAULTS, **(config.get("openclaw") or {})}
+        self.openclaw_enabled = QCheckBox("启用 CUA 工具（operate_gui 委托 OpenClaw 操作桌面）")
+        self.openclaw_enabled.setChecked(bool(openclaw_cfg.get("enabled", False)))
+        openclaw_form.addRow(self.openclaw_enabled)
+        self.openclaw_base_url = QLineEdit(str(openclaw_cfg.get("base_url", "http://127.0.0.1:18789")))
+        openclaw_form.addRow("OpenClaw Base URL", self.openclaw_base_url)
+        self.openclaw_token = QLineEdit(str(openclaw_cfg.get("token", "")))
+        self.openclaw_token.setEchoMode(QLineEdit.Password)
+        openclaw_form.addRow("OpenClaw Token", self.openclaw_token)
+        self.openclaw_model = QLineEdit(str(openclaw_cfg.get("model", "openclaw/default")))
+        openclaw_form.addRow("OpenClaw 代理（model）", self.openclaw_model)
+        self.openclaw_timeout = QLineEdit(str(openclaw_cfg.get("timeout", 120)))
+        openclaw_form.addRow("CUA 超时（秒）", self.openclaw_timeout)
+        self.openclaw_autostart = QCheckBox("网关离线时自动拉起（openclaw gateway）")
+        self.openclaw_autostart.setChecked(bool(openclaw_cfg.get("autostart", True)))
+        openclaw_form.addRow(self.openclaw_autostart)
+        self.openclaw_status = QLabel("未检测")
+        self.openclaw_status.setStyleSheet("color:#8a7f63")
+        openclaw_btn = QPushButton("检测 OpenClaw 网关")
+        openclaw_btn.clicked.connect(self._probe_openclaw)
+        openclaw_form.addRow(self.openclaw_status, openclaw_btn)
+        agent_layout.addWidget(self._openclaw_block)
 
         # DeepSeek 块
         self._deepseek_block = QWidget()
@@ -481,6 +541,55 @@ class SettingsDialog(QDialog):
 
         tabs.addTab(_scroll_page(companion_page), "Companion")
 
+        # === 消息接入（QQ / 微信，docs/PRD-im-message-notify.md）===
+        from config import IM_DEFAULTS
+        im_page = QWidget()
+        im_form = QFormLayout(im_page)
+        _tune_form(im_form)
+        im_form.addRow(_section("IM · QQ（ONEBOT 11 / NAPCAT）"))
+        im_cfg = {**IM_DEFAULTS, **(config.get("im") or {})}
+        qq_cfg = {**IM_DEFAULTS["qq"], **(im_cfg.get("qq") or {})}
+        self.im_qq_enabled = QCheckBox("启用 QQ 消息接入（需先启动 NapCat 并登录）")
+        self.im_qq_enabled.setChecked(bool(qq_cfg.get("enabled", False)))
+        im_form.addRow(self.im_qq_enabled)
+        self.im_ws_url = QLineEdit(str(qq_cfg.get("ws_url", "")))
+        im_form.addRow("WebSocket 地址", self.im_ws_url)
+        self.im_group_at_only = QCheckBox("群消息只通知 @我（否则全部通知）")
+        self.im_group_at_only.setChecked(bool(qq_cfg.get("group_at_only", True)))
+        im_form.addRow(self.im_group_at_only)
+        self.im_keywords = QLineEdit("、".join(qq_cfg.get("keywords") or []))
+        self.im_keywords.setPlaceholderText("关键词、顿号分隔（群消息命中也通知，可留空）")
+        im_form.addRow("群关键词白名单", self.im_keywords)
+
+        im_form.addRow(_section("IM · 通知"))
+        notify_cfg = {**IM_DEFAULTS["notify"], **(im_cfg.get("notify") or {})}
+        self.im_notify_bubble = QCheckBox("桌宠气泡通知")
+        self.im_notify_bubble.setChecked(bool(notify_cfg.get("bubble", True)))
+        im_form.addRow(self.im_notify_bubble)
+        self.im_notify_tray = QCheckBox("托盘系统通知")
+        self.im_notify_tray.setChecked(bool(notify_cfg.get("tray", True)))
+        im_form.addRow(self.im_notify_tray)
+        self.im_notify_tts = QCheckBox("TTS 播报（默认关，注意外放隐私）")
+        self.im_notify_tts.setChecked(bool(notify_cfg.get("tts", False)))
+        im_form.addRow(self.im_notify_tts)
+        im_qh = {**IM_DEFAULTS["quiet_hours"], **(im_cfg.get("quiet_hours") or {})}
+        self.im_quiet_start = QLineEdit(str(im_qh.get("start", "23:00")))
+        self.im_quiet_end = QLineEdit(str(im_qh.get("end", "08:00")))
+        im_form.addRow("免打扰开始", self.im_quiet_start)
+        im_form.addRow("免打扰结束", self.im_quiet_end)
+
+        im_form.addRow(_section("IM · 状态"))
+        self.im_status = QLabel("（保存并重启后生效；下方可测试连通性）")
+        self.im_status.setStyleSheet("color:#8a7f63")
+        self.im_status.setWordWrap(True)
+        im_form.addRow(self.im_status)
+        im_test_btn = QPushButton("测试连接")
+        im_test_btn.clicked.connect(self._test_im_connection)
+        im_form.addRow(im_test_btn)
+        im_form.addRow(QLabel("提示：非官方协议，存在账号风控风险，建议先用小号验证。"))
+        tabs.addTab(_scroll_page(im_page), "消息接入")
+
+
         # === 关于 / 版本 ===
         from core.version import __version__
         about_page = QWidget()
@@ -528,11 +637,12 @@ class SettingsDialog(QDialog):
         # 占据按钮左侧的全部剩余空间，文本右→左缓慢滚动循环
         self._ticker_bar = QWidget(self)
         self._ticker_bar.setStyleSheet("background:transparent")
-        self._ticker_bar.setFixedHeight(24)
+        self._ticker_bar.setFixedHeight(32)
         self._ticker_label = QLabel(_TICKER_TEXT, self._ticker_bar)
         self._ticker_label.setStyleSheet(
             "color:#8a7f63;background:transparent;"
-            "font:700 13px 'Consolas','Microsoft YaHei';white-space:nowrap"
+            "font:700 24px 'Poiret One','Consolas','Microsoft YaHei';"
+            "text-transform:uppercase;white-space:nowrap"
         )
         self._ticker_label.adjustSize()
         self._ticker_w = self._ticker_label.width()
@@ -604,6 +714,7 @@ class SettingsDialog(QDialog):
         show_all = mode == "auto"
         self._agent_hint.setVisible(mode == "chat")
         self._hermes_block.setVisible(mode == "hermes" or show_all)
+        self._openclaw_block.setVisible(mode == "openclaw" or show_all)
         self._deepseek_block.setVisible(mode == "deepseek" or show_all)
         self._harness_block.setVisible(mode == "harness" or show_all)
         self._codex_block.setVisible(mode == "codex" or show_all)
@@ -645,6 +756,20 @@ class SettingsDialog(QDialog):
         ok = probe_health(base_url, api_key)
         self.hermes_status.setText("在线" if ok else "离线")
         self.hermes_status.setStyleSheet("color:#34c759" if ok else "color:#d2738a")
+
+    def _probe_openclaw(self) -> None:
+        """同步探测 OpenClaw 网关 /v1/models（2s 超时，设置页内可接受）。"""
+        from config import OPENCLAW_DEFAULTS
+        from core.openclaw_client import probe_gateway
+        cfg = {**OPENCLAW_DEFAULTS, **(load_config().get("openclaw") or {})}
+        # 优先用输入框当前值，允许保存前先试新地址/token
+        base_url = self.openclaw_base_url.text().strip() or str(cfg.get("base_url"))
+        token = self.openclaw_token.text().strip()
+        self.openclaw_status.setText("检测中…")
+        QApplication.processEvents()
+        ok = probe_gateway(base_url, token)
+        self.openclaw_status.setText("在线" if ok else "离线")
+        self.openclaw_status.setStyleSheet("color:#34c759" if ok else "color:#d2738a")
 
     def _test_companion(self) -> None:
         """手动触发一次 companion 问候（用于设置页验收）。"""
@@ -783,13 +908,22 @@ class SettingsDialog(QDialog):
                 cfg = {**ALIYUN_TTS_DEFAULTS, **(load_config().get("aliyun_tts") or {})}
                 ref_audio = resources_path(str(cfg.get("ref_audio", "/crs_1393.wav")))
                 ref_text = str(cfg.get("ref_text", "") or "").strip() or None
-                voice_id, fallback_mode, fallback_reason = AliyunTTS(api_key).clone_voice(
+                tts_client = AliyunTTS(api_key)
+                voice_id, fallback_mode, fallback_reason = tts_client.clone_voice(
                     ref_audio,
                     preferred_name=preferred_name,
                     target_model=model or str(ALIYUN_TTS_DEFAULTS["model"]),
                     ref_text=ref_text,
                 )
                 if voice_id:
+                    validation_audio = tts_client.synthesize(
+                        "こんにちは、音声テストです。",
+                        voice_id,
+                        text_lang="ja",
+                        model=model,
+                    )
+                    if not validation_audio:
+                        raise RuntimeError("音色已创建，但测试合成未返回音频，请重新克隆")
                     QMetaObject.invokeMethod(
                         self, "_on_clone_done", Qt.QueuedConnection, Q_ARG(str, voice_id)
                     )
@@ -828,6 +962,28 @@ class SettingsDialog(QDialog):
         self.aliyun_status.setText(f"克隆成功（降级模式）：{reason}")
         self.aliyun_status.setStyleSheet("color:#d8a53f")
 
+    def _test_im_connection(self) -> None:
+        """后台线程快速探测 NapCat WS 端口连通性，结果回 UI 线程。"""
+        url = self.im_ws_url.text().strip()
+
+        def worker() -> None:
+            import asyncio
+            import websockets
+
+            try:
+                async def _probe() -> None:
+                    async with websockets.connect(url, open_timeout=5):
+                        pass
+                asyncio.run(_probe())
+                QMetaObject.invokeMethod(self.im_status, "setText",
+                                         Q_ARG(str, f"✓ 连接成功：{url}"))
+            except Exception as exc:  # noqa: BLE001
+                QMetaObject.invokeMethod(self.im_status, "setText",
+                                         Q_ARG(str, f"✗ 连接失败：{exc}"))
+
+        self.im_status.setText("测试中…")
+        threading.Thread(target=worker, daemon=True).start()
+
     def _save(self) -> None:
         config = load_config()
         config.update({
@@ -836,9 +992,10 @@ class SettingsDialog(QDialog):
             "tts_provider": self.tts_provider.currentData(),
             "tts_rate": self.tts_rate.currentIndex(), "asr_endpoint": self.asr_endpoint.text().strip(),
             "asr_api_key": self.asr_key.text().strip(), "asr_model": self.asr_model.text().strip(),
+            "mic_device_index": self.mic_device.currentData(),
             "version_check_url": self.version_check_url.text().strip(),
         })
-        from config import AGENT_ROUTER_DEFAULTS, HARNESS_DEFAULTS, HERMES_DEFAULTS
+        from config import AGENT_ROUTER_DEFAULTS, HARNESS_DEFAULTS, HERMES_DEFAULTS, OPENCLAW_DEFAULTS
         router_cfg = {**AGENT_ROUTER_DEFAULTS, **(config.get("agent_router") or {})}
         codex_cfg = {**AGENT_ROUTER_DEFAULTS["codex"], **(router_cfg.get("codex") or {})}
         codex_cfg["sandbox"] = self.codex_sandbox.currentData()
@@ -866,6 +1023,17 @@ class SettingsDialog(QDialog):
         hermes_cfg = {**HERMES_DEFAULTS, **(config.get("hermes") or {})}
         hermes_cfg["api_key"] = self.hermes_key.text().strip()
         config["hermes"] = hermes_cfg
+        openclaw_cfg = {**OPENCLAW_DEFAULTS, **(config.get("openclaw") or {})}
+        openclaw_cfg["enabled"] = self.openclaw_enabled.isChecked()
+        openclaw_cfg["base_url"] = self.openclaw_base_url.text().strip()
+        openclaw_cfg["token"] = self.openclaw_token.text().strip()
+        openclaw_cfg["model"] = self.openclaw_model.text().strip()
+        try:
+            openclaw_cfg["timeout"] = float(self.openclaw_timeout.text().strip())
+        except ValueError:
+            openclaw_cfg["timeout"] = float(OPENCLAW_DEFAULTS["timeout"])
+        openclaw_cfg["autostart"] = self.openclaw_autostart.isChecked()
+        config["openclaw"] = openclaw_cfg
         deepseek_cfg = {**AGENT_ROUTER_DEFAULTS["deepseek"], **(config.get("deepseek") or {})}
         deepseek_cfg["base_url"] = self.deepseek_base_url.text().strip()
         deepseek_cfg["api_key"] = self.deepseek_api_key.text().strip()
@@ -923,6 +1091,25 @@ class SettingsDialog(QDialog):
         except ValueError:
             companion_cfg["daily_limit"] = 30
         config["companion"] = companion_cfg
+        # IM 消息接入配置（docs/PRD-im-message-notify.md）
+        from config import IM_DEFAULTS
+        im_cfg = {**IM_DEFAULTS, **(config.get("im") or {})}
+        im_cfg["qq"] = {
+            "enabled": self.im_qq_enabled.isChecked(),
+            "ws_url": self.im_ws_url.text().strip() or IM_DEFAULTS["qq"]["ws_url"],
+            "group_at_only": self.im_group_at_only.isChecked(),
+            "keywords": [k.strip() for k in self.im_keywords.text().replace("，", "、").split("、") if k.strip()],
+        }
+        im_cfg["notify"] = {
+            "bubble": self.im_notify_bubble.isChecked(),
+            "tray": self.im_notify_tray.isChecked(),
+            "tts": self.im_notify_tts.isChecked(),
+        }
+        im_cfg["quiet_hours"] = {
+            "start": self.im_quiet_start.text().strip() or "23:00",
+            "end": self.im_quiet_end.text().strip() or "08:00",
+        }
+        config["im"] = im_cfg
         # GPT-SoVITS 运行模式配置
         try:
             local_port = int(self.gpt_local_port.text().strip())
@@ -954,4 +1141,3 @@ class SettingsDialog(QDialog):
             self._tunnel = None
         save_config(config)
         self.accept()
-
