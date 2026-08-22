@@ -119,6 +119,22 @@ class VoiceCallController(QObject):
         self._tts.tts_offline.connect(self._on_tts_offline)
         self._tts.tts_error.connect(self._on_tts_error)
         self._tts.tts_degraded.connect(self._on_tts_degraded)
+        # 软件 AEC（core/aec.py）：TTS 播放 PCM push 到远端参考，
+        # 麦克风信号消除回声后喂 VAD —— 她说话时也能检测用户插话（真全双工）。
+        # 未启用/未收敛时 speaking 态回退 barge-in 电平门槛路径。
+        from config import AEC_PARAMS
+        from core.aec import AECFilter, EchoReference
+        self._aec_cfg = {**AEC_PARAMS, **(self._config.get("aec") or {})}
+        self._aec = AECFilter(
+            filter_len_ms=float(self._aec_cfg["filter_len_ms"]),
+            mu=float(self._aec_cfg["mu"]),
+            align_delay_ms=float(self._aec_cfg["align_delay_ms"]),
+            nlp_threshold=float(self._aec_cfg["nlp_threshold"]),
+            nlp_gain=float(self._aec_cfg["nlp_gain"]),
+            convergence_ms=float(self._aec_cfg["convergence_ms"]),
+        ) if self._aec_cfg.get("enabled", True) else None
+        self._echo_ref = EchoReference() if self._aec is not None else None
+        self._tts.echo_ref = self._echo_ref
         # 流式 LLM/TTS 状态：=== 计数器奇偶判断（与 desktop_pet._agent_delta 对齐）
         # _stream_sep_count 记录已遇 === 数（奇数=日语段，偶数=中文段）
         # _stream_tts_started 标记是否已启动 speak_streaming_start
@@ -395,23 +411,48 @@ class VoiceCallController(QObject):
         if self._barge_recording:
             self._feed_barge_record(samples, rms)
             return
+        # AEC 全双工：她说话时用回声消除后的信号喂主 VAD —— 用户插话直接
+        # 触发正常 utterance 流程（录音送 STT 的也是干净信号）。
+        # 未启用/未收敛/参考不新鲜时回退 barge-in 电平门槛路径
+        vad_input = samples
         if self._phase == "speaking":
-            self._feed_barge_in(samples, rms)
+            cleaned = self._aec_process(samples)
+            if cleaned is not None:
+                vad_input = cleaned
+            else:
+                self._feed_barge_in(samples, rms)
+                return
+        if self._vad_paused and self._phase != "speaking":
             return
-        if self._vad_paused:
-            return
-        result = self._vad.feed(samples)
+        result = self._vad.feed(vad_input)
         if result.utterance_started:
-            self._recording_buf = [samples.copy()]
+            self._recording_buf = [vad_input.copy()]
             self.subtitle.emit("听到了，继续说…")
             _vlog("VAD utterance start")
         elif self._vad.is_recording:
-            self._recording_buf.append(samples.copy())
+            self._recording_buf.append(vad_input.copy())
         if result.utterance_ended and self._recording_buf:
             audio = np.concatenate(self._recording_buf)
             self._recording_buf = []
             _vlog(f"VAD utterance end, {audio.size / self._mic_sample_rate:.1f}s audio")
             self._submit_user_audio(audio)
+
+    def _aec_process(self, samples: np.ndarray) -> np.ndarray | None:
+        """speaking 态回声消除。返回干净信号；不可用（AEC 关/未收敛/
+        参考缓冲不新鲜/参考不足）返回 None，调用方回退 barge-in。"""
+        if self._aec is None or self._echo_ref is None:
+            return None
+        if not self._echo_ref.playing():
+            return None  # 没在播（尾部残余 <0.3s）：无回声，但此时不在 speaking 态，不会到这
+        need = samples.size + self._aec.filter_len - 1
+        hist = self._echo_ref.window(need, end_delay_samples=self._aec.align_delay)
+        if hist is None:
+            return None
+        if not self._aec.converged:
+            # 收敛期也要喂样本让滤波器学习（她的话=训练数据），但不用于 VAD
+            self._aec.process(samples, hist)
+            return None
+        return self._aec.process(samples, hist)
 
     def _feed_barge_in(self, samples: np.ndarray, rms: float) -> None:
         """speaking 态用户打断检测：电平 ≥ 自适应阈值×2.5 连续 2 帧 → 打断。

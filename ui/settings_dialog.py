@@ -185,6 +185,43 @@ class SettingsDialog(QDialog):
         self.mic_device.setCurrentIndex(max(_mi, 0))
         asr_form.addRow("通话麦克风", self.mic_device)
 
+        # === 软件回声消除 AEC（可调；core/aec.py）===
+        from config import AEC_PARAMS
+        aec_cfg = {**AEC_PARAMS, **(config.get("aec") or {})}
+        asr_form.addRow(_section("ECHO CANCELLATION (AEC)"))
+        self.aec_enabled = QCheckBox("启用软件回声消除（她说话时可正常插话打断；关闭则退回音量门槛打断）")
+        self.aec_enabled.setChecked(bool(aec_cfg.get("enabled", True)))
+        asr_form.addRow(self.aec_enabled)
+
+        self.aec_filter_len = QComboBox()
+        for label, ms in [("80ms（低延迟，小房间）", 80), ("120ms（默认，推荐）", 120),
+                          ("200ms（混响大的房间）", 200)]:
+            self.aec_filter_len.addItem(label, ms)
+        _fl = self.aec_filter_len.findData(int(aec_cfg.get("filter_len_ms", 120)))
+        self.aec_filter_len.setCurrentIndex(max(_fl, 0))
+        asr_form.addRow("滤波器长度", self.aec_filter_len)
+
+        self.aec_mu = QComboBox()
+        for label, mu in [("稳（慢收敛）", 0.2), ("平衡（默认）", 0.5), ("快（易过冲）", 0.8)]:
+            self.aec_mu.addItem(label, mu)
+        _mu = self.aec_mu.findData(float(aec_cfg.get("mu", 0.5)))
+        self.aec_mu.setCurrentIndex(max(_mu, 0))
+        asr_form.addRow("收敛速度", self.aec_mu)
+
+        self.aec_align = QComboBox()
+        for label, ms in [("40ms", 40), ("80ms（默认）", 80), ("120ms", 120)]:
+            self.aec_align.addItem(label, ms)
+        _al = self.aec_align.findData(int(aec_cfg.get("align_delay_ms", 80)))
+        self.aec_align.setCurrentIndex(max(_al, 0))
+        asr_form.addRow("对齐延迟", self.aec_align)
+
+        self.aec_nlp = QComboBox()
+        for label, g in [("关闭", 0.0), ("弱", 0.3), ("中（默认）", 0.6), ("强", 0.85)]:
+            self.aec_nlp.addItem(label, g)
+        _nlp = self.aec_nlp.findData(float(aec_cfg.get("nlp_gain", 0.6)))
+        self.aec_nlp.setCurrentIndex(max(_nlp, 0))
+        asr_form.addRow("残余回声抑制", self.aec_nlp)
+
         # === GPT-SoVITS 运行模式（独立容器，选择 gpt_sovits 时显示）===
         from config import GPT_SOVITS_DEFAULTS
         from core.ssh_config_parser import parse_ssh_config
@@ -993,6 +1030,13 @@ class SettingsDialog(QDialog):
             "tts_rate": self.tts_rate.currentIndex(), "asr_endpoint": self.asr_endpoint.text().strip(),
             "asr_api_key": self.asr_key.text().strip(), "asr_model": self.asr_model.text().strip(),
             "mic_device_index": self.mic_device.currentData(),
+            "aec": {
+                "enabled": self.aec_enabled.isChecked(),
+                "filter_len_ms": self.aec_filter_len.currentData(),
+                "mu": self.aec_mu.currentData(),
+                "align_delay_ms": self.aec_align.currentData(),
+                "nlp_gain": self.aec_nlp.currentData(),
+            },
             "version_check_url": self.version_check_url.text().strip(),
         })
         from config import AGENT_ROUTER_DEFAULTS, HARNESS_DEFAULTS, HERMES_DEFAULTS, OPENCLAW_DEFAULTS

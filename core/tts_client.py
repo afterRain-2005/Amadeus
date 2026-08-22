@@ -73,6 +73,9 @@ class SpeechPlayer(QObject):
         self._stream_fallback_text = ""
         self._stream_fallback_lang: str | None = None
         self._last_error = ""
+        # 软件 AEC 远端参考（core/aec.py）：播放的 PCM 在写入输出流前 push，
+        # 语音通话侧据此做回声消除。None（桌面聊天实例）不采集。
+        self.echo_ref = None
         # 会话代次：每次新 speak 递增，旧 worker 凭代次判断自己是否已过期。
         # 修复语音重叠：旧会话线程在 _stop_event 被新会话 clear 后仍继续播放，
         # 用代次彻底作废旧 worker（详见 speak_with_options / speak_streaming_start）。
@@ -802,6 +805,8 @@ class SpeechPlayer(QObject):
                 if not self._alive(session_id):
                     break
                 chunk = audio[idx : idx + chunk_size]
+                if self.echo_ref is not None:
+                    self.echo_ref.push(chunk, sr)  # AEC 远端参考（写设备前）
                 stream.write(chunk.reshape(-1, 1))
                 # 音量 → 口型强度：RMS 经验缩放 ×4 映射到 0-1（静音≈0，正常说话≈0.3-0.8）
                 rms = float(np.sqrt(np.mean(chunk.astype(np.float64) ** 2))) if chunk.size else 0.0
@@ -847,6 +852,10 @@ class SpeechPlayer(QObject):
                 audio = np.frombuffer(payload, dtype=np.int16)
                 if audio.size == 0:
                     continue
+                if self.echo_ref is not None:
+                    self.echo_ref.push(
+                        audio.astype(np.float32) / 32767.0, 24000
+                    )  # AEC 远端参考（写设备前）
                 stream.write(audio.reshape(-1, 1))
                 played = True
                 # 音量 → 口型强度：int16 转 float32 后算 RMS，经验缩放 ×4 映射 0-1
