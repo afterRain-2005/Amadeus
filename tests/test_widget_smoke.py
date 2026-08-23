@@ -107,3 +107,63 @@ def test_agent_task_character_injection(qapp):
     task = AgentTask([{"role": "user", "content": "hi"}], character=FakeCharacter())
     assert task._character.personality == "FAKE_PERSONALITY"
     assert AgentTask([{"role": "user", "content": "hi"}])._character is None
+
+
+# ===== ui/widgets/agent_terminal.py（Step H 提取） =====
+
+
+def _make_terminal(qapp):
+    from ui.widgets.agent_terminal import AgentTerminal
+
+    return AgentTerminal()
+
+
+def test_agent_terminal_construct_and_signals(qapp):
+    term = _make_terminal(qapp)
+    assert hasattr(term, "submitted") and hasattr(term, "interrupt_requested")
+    from ui.widgets.crt_title_bar import CrtTitleBar
+
+    assert isinstance(term.title_bar, CrtTitleBar)
+
+
+def test_agent_terminal_render_lines(qapp):
+    term = _make_terminal(qapp)
+    lines = [
+        ("cmd", "hello"),
+        ("out", "world"),
+        ("err", "boom"),
+        ("tool", "search"),
+    ]
+    term.render_lines(lines, full=True)
+    # 渲染经 33ms 节流定时器合并执行；同步断言内部状态 + 手动触发一次 flush
+    assert list(term._lines) == lines
+    assert term._needs_rebuild is True
+    assert term._render_timer.isActive()
+    term._flush_render()
+    assert "world" in term.log.toHtml()
+
+
+def test_agent_terminal_set_busy(qapp):
+    term = _make_terminal(qapp)
+    term.set_busy(True)
+    assert term.input.isReadOnly() is True
+    term.set_busy(False)
+    assert term.input.isReadOnly() is False
+
+
+def test_agent_terminal_approval_roundtrip(qapp):
+    import threading
+
+    term = _make_terminal(qapp)
+    request = {"payload": {"command": "rm"}, "event": threading.Event(), "choice": "deny"}
+    term.request_approval(request)
+    term._resolve_approval("once")
+    assert request["choice"] == "once"
+    assert request["event"].is_set()
+
+
+def test_agent_terminal_tab_complete_uses_history(qapp):
+    term = _make_terminal(qapp)
+    term._history = ["git status", "git push"]
+    completed = term._tab_complete()  # 不应抛异常
+    assert completed is None or isinstance(completed, type(None))

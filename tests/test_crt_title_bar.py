@@ -40,7 +40,7 @@ def test_title_bar_keeps_rose_frame(qapp):
 
 def test_dialogs_keep_outer_rose_frames():
     settings_source = (ROOT / "ui" / "settings_dialog.py").read_text(encoding="utf-8")
-    terminal_source = (ROOT / "desktop_pet.py").read_text(encoding="utf-8")
+    terminal_source = (ROOT / "ui" / "widgets" / "agent_terminal.py").read_text(encoding="utf-8")
 
     assert "QDialog#settingsDialog" in settings_source
     assert "border: 1px solid #d2738a" in settings_source
