@@ -163,7 +163,7 @@ def test_maybe_start_spawns_when_offline(tmp_path):
     spawn = MagicMock()
     with patch("core.storage.load_config", return_value={"tts_provider": "gpt_sovits"}), \
          patch("core.gpt_sovits_client.KurisuTTS") as mock_tts, \
-         patch("desktop_pet.ROOT", tmp_path):
+         patch("core.gpt_sovits_proc.ROOT", tmp_path):
         mock_tts.return_value.available = False
         assert maybe_start_gpt_sovits(spawn=spawn) is True
         args, kwargs = spawn.call_args
