@@ -86,7 +86,7 @@ dist/Amadeus-<版本号>/Amadeus-<版本号>.exe
 项目已集成 DeepSeek Harness 的 Python SDK，提供了完整的 agent 能力（工具调用、审批、会话管理等）。
 
 - **设置页面**：可切换 Agent 模式为 `DeepSeek Harness SDK`，配置 Provider（Harness 的 base_url/api_key 为空时复用全局 endpoint/api_key）
-- **回退机制**：如果 Harness SDK 运行时不可用，自动回退到 `DeepSeek 直连` 模式（`core/deepseek_client.py`）
+- **回退机制**：如果 Harness SDK 运行时不可用，自动回退到 `DeepSeek 直连` 模式（`core/llm/deepseek_client.py`）
 - **Windows 平台约束**：生产单文件 exe 是 documented non-goal（仅 linux/macos），Windows 上只能使用 dev-only 的 **node 闭包**，因此**运行环境必须安装 Node >= 22.19**（打包后的 exe 也依赖系统 Node）。
 - **构建 Harness**（首次使用前，一次性）：
 
@@ -117,7 +117,7 @@ dist/Amadeus-<版本号>/Amadeus-<版本号>.exe
 ## 6. 常见问题排查
 
 ### 6.1 运行时 `ModuleNotFoundError: No module named 'miniaudio'`
-**原因**：`core/mp3_decoder.py` 在函数内动态 `import miniaudio`，PyInstaller 静态分析抓不到。
+**原因**：`core/voice/mp3_decoder.py` 在函数内动态 `import miniaudio`，PyInstaller 静态分析抓不到。
 **修复**：确认 [Amadeus.spec](../Amadeus.spec) 的 `hiddenimports` 里有 `'miniaudio'`。
 
 ### 6.2 终端 markdown 不渲染 / 无代码块

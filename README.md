@@ -80,9 +80,13 @@ amadeus-py/
 ├── desktop_pet.py           # 桌宠主进程：run_overlay + PetWindow 主窗口
 ├── config.py                # 角色配置
 ├── Amadeus.spec             # PyInstaller 打包配置
-├── core/                    # 核心模块（客户端 / 路由 / 记忆 / 技能 / 语音…）
-│   ├── gpt_sovits_proc.py   #   GPT-SoVITS 子进程 / SSH 隧道生命周期
-│   └── diag.py              #   运行时诊断日志
+├── core/                    # 核心模块
+│   ├── llm/                 #   模型后端与路由（DeepSeek/Ollama/Hermes/Harness/Codex/OpenClaw）
+│   ├── voice/               #   语音全链路（TTS/ASR/VAD/AEC/GPT-SoVITS 进程/通话）
+│   ├── vision/              #   屏幕感知与视觉（截屏/屏幕描述/视觉模型）
+│   ├── companion/           #   每周陪伴调度器
+│   ├── im/                  #   OneBot 消息接入
+│   └── …                    #   会话/记忆/技能/终端/存储等基础设施
 ├── ui/                      # Qt 控件与非 Qt 纯函数助手
 │   ├── bubble.py            #   气泡分段 / 流式决策纯函数
 │   ├── terminal_html.py     #   终端 HTML 构建纯函数
@@ -93,8 +97,8 @@ amadeus-py/
 ├── live2d/                  # Live2D 页面与渲染（手机 UI + PIXI）
 ├── resources/               # 图标 / 纹理 / 模型 / 字体
 ├── scripts/                 # 辅助脚本
-├── docs/                    # 文档（prd/ 需求稿 · archive/ 历史设计稿）
-└── tests/                   # 测试
+├── docs/                    # 文档（prd/ 需求稿 · archive/ 历史设计稿与退役资源）
+└── tests/                   # 测试（按 llm/voice/vision/ui/core/companion 分组）
 ```
 
 ## 常见问题
