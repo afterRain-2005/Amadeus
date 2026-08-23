@@ -360,6 +360,7 @@
     const MOTION_DURATIONS = {
       neutral: 1500, smile: 1200, blush: 1700, angry: 1100, sad: 1900, thinking: 1600,
       hands_on_hips: 1800, arms_crossed: 1800, facepalm: 1600, shrug: 1400, chin_rest: 2000,
+      surprised: 1300, laugh: 1800, sleepy: 2600, confused: 1900,
     };
     const MOTIONS = {
       neutral: (core, t, d) => {
@@ -429,6 +430,31 @@
         d.angleX += -4 * w;
         d.eyeBallY += -0.5 * w;
       },
+      // 惊讶：头后仰 + 身体后撤
+      surprised: (core, t, d) => {
+        const w = Math.sin(t * Math.PI);
+        d.angleY += 8 * w;
+        d.bodyAngleX += -4 * w;
+        d.angleZ += -3 * w;
+      },
+      // 大笑：连续三次点头 + 身体轻晃
+      laugh: (core, t, d) => {
+        const w = Math.sin(t * Math.PI * 3);
+        d.angleX += 6 * w;
+        d.bodyAngleZ += 1.5 * Math.sin(t * Math.PI);
+      },
+      // 困倦：渐进低头（easeIn）+ 缓慢歪头
+      sleepy: (core, t, d) => {
+        const droop = t * t;
+        d.angleX += -12 * droop;
+        d.angleZ += 5 * Math.sin(t * Math.PI);
+      },
+      // 困惑：左右歪头扫视 + 眼球上飘
+      confused: (core, t, d) => {
+        const w = Math.sin(t * Math.PI * 2);
+        d.angleZ += 9 * w;
+        d.eyeBallY += -0.4 * Math.sin(t * Math.PI);
+      },
     };
 
     function playMotion(name) {
@@ -439,7 +465,36 @@
         if (activeMotions[i].name === name) activeMotions.splice(i, 1);
       }
       activeMotions.push({ name, start: performance.now(), duration, apply });
+      resetIdleTimer();
     }
+
+    // —— 闲置微动作（airi idle animation）——
+    // 长时间无交互且未说话时随机播放小动作；手机页无持续鼠标事件，
+    // 以外部命令（setEmotion/setSpeaking/setPointer/playMotion）作为活动信号。
+    const IDLE_MOTION_POOL = ['chin_rest', 'thinking', 'shrug', 'arms_crossed', 'neutral'];
+    let idleMarkAt = performance.now();
+    let idleNextDelay = _nextIdleDelay();
+    let idleLastMotion = '';
+    function _nextIdleDelay() { return 25000 + Math.random() * 20000; }
+    function resetIdleTimer() {
+      idleMarkAt = performance.now();
+      idleNextDelay = _nextIdleDelay();
+    }
+    window.__amadeusResetIdle = resetIdleTimer;
+    setInterval(() => {
+      const now = performance.now();
+      if (speaking || activeMotions.length > 0 || document.hidden) {
+        resetIdleTimer();
+        return;
+      }
+      if (now - idleMarkAt < idleNextDelay) return;
+      let pick = '';
+      do {
+        pick = IDLE_MOTION_POOL[Math.floor(Math.random() * IDLE_MOTION_POOL.length)];
+      } while (pick === idleLastMotion && IDLE_MOTION_POOL.length > 1);
+      idleLastMotion = pick;
+      playMotion(pick);
+    }, 5000);
 
     app.ticker.add(() => {
       // dt 钳制到 100ms：防后台标签页回来后 dt 巨大导致眨眼/平滑跳变
@@ -525,26 +580,31 @@
       const px = Math.max(-1, Math.min(1, x / rect.width * 2 - 1));
       const py = Math.max(-1, Math.min(1, y / rect.height * 2 - 1));
       gaze.setPointer(px, py);
+      resetIdleTimer();
     });
 
     window.__amadeus = {
       model, app,
       setEmotion(emotion) {
         Object.keys(target).forEach(key => target[key] = 0);
-        if (emotion in target) target[emotion] = emotion === 'smile' ? 0.75 : 0.85;
+        if (emotion === 'laugh') target.smile = 0.95;
+        else if (emotion === 'sleepy') target.sad = 0.4;
+        else if (emotion in target) target[emotion] = emotion === 'smile' ? 0.75 : 0.85;
         playMotion(emotion);
       },
       setSpeaking(value) {
         speaking = Boolean(value);
         if (!speaking) mouthTarget = 0;
+        resetIdleTimer();
       },
       setMouth(intensity) {
         mouthTarget = Math.max(0, Math.min(1, Number(intensity) || 0));
         lastMouthAt = performance.now();
       },
       setPointer(x, y) {
-        // Qt 侧 50ms 采样全局鼠标 → gaze 系统内做静止检测与释放回空闲
+        // Qt 侧 50ms 采样全局鼠标（静止已去重）→ gaze 跟随 + 闲置计时复位
         gaze.setPointer(Number(x) || 0, Number(y) || 0);
+        resetIdleTimer();
       },
       playMotion,
     };

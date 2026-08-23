@@ -14,6 +14,8 @@ motion 词表与 live2d/live2d_page.html MOTIONS 字典一一对应：
   neutral/smile/blush/angry/sad/thinking（原有 6 种头部动作）
   + hands_on_hips（叉腰）/ arms_crossed（抱胸）/ facepalm（扶额）/
     shrug（摊手）/ chin_rest（托腮）（新肢体动作，驱动 Param6/7/4 手臂参数）
+  + surprised（惊讶后仰）/ laugh（大笑点头）/ sleepy（困倦低头）/
+    confused（困惑扫视）（情绪动作扩充，对齐 airi 情感表）
 """
 from __future__ import annotations
 
@@ -27,13 +29,17 @@ import httpx
 # === 合法标签集合 ===
 
 VALID_EMOTIONS: frozenset[str] = frozenset(
-    {"neutral", "blush", "angry", "smile", "sad", "thinking"}
+    {
+        "neutral", "blush", "angry", "smile", "sad", "thinking",
+        "surprised", "laugh", "sleepy", "confused",
+    }
 )
 
 VALID_MOTIONS: frozenset[str] = frozenset(
     {
         "neutral", "smile", "blush", "angry", "sad", "thinking",
         "hands_on_hips", "arms_crossed", "facepalm", "shrug", "chin_rest",
+        "surprised", "laugh", "sleepy", "confused",
     }
 )
 
@@ -64,6 +70,18 @@ ACTION_MOTION_MAP: list[tuple[str, str]] = [
     ("前倾", "angry"), ("探身", "angry"), ("挑眉", "angry"),
     # 低头（难过）
     ("低头", "sad"), ("うつむく", "sad"), ("垂下", "sad"), ("垂头", "sad"),
+    # 惊讶（后仰/瞪大眼）
+    ("惊讶", "surprised"), ("吃惊", "surprised"), ("瞪大眼", "surprised"),
+    ("驚く", "surprised"), ("目を見開く", "surprised"), ("愣住", "surprised"),
+    # 大笑
+    ("大笑", "laugh"), ("笑出声", "laugh"), ("哈哈", "laugh"),
+    ("大笑い", "laugh"), ("笑う", "laugh"),
+    # 困倦（打哈欠/揉眼）
+    ("打哈欠", "sleepy"), ("困", "sleepy"), ("揉眼", "sleepy"), ("犯困", "sleepy"),
+    ("あくび", "sleepy"), ("欠伸", "sleepy"), ("眠い", "sleepy"),
+    # 困惑
+    ("困惑", "confused"), ("疑惑", "confused"), ("不解", "confused"),
+    ("困惑する", "confused"), ("疑問", "confused"), ("？？", "confused"),
 ]
 
 # 动作括号正则：中文/日文括号都认（（…）(…)（半角全角混用）
@@ -78,6 +96,10 @@ EMOTION_DEFAULT_MOTION: dict[str, str] = {
     "smile": "smile",
     "sad": "sad",
     "thinking": "thinking",
+    "surprised": "surprised",
+    "laugh": "laugh",
+    "sleepy": "sleepy",
+    "confused": "confused",
 }
 
 # Ollama 分类 system prompt：只输出 JSON，一个词解释都不要
@@ -85,11 +107,14 @@ _CLASSIFY_SYSTEM = (
     "你是 Live2D 角色的表情动作分类器。给定红莉栖（牧瀬紅莉栖）的台词文本，"
     "判断她说话时的表情和肢体动作，只输出 JSON，不要输出任何其他内容。\n"
     '格式：{"emotion": "表情", "motion": "动作"}\n'
-    "emotion 只能是：neutral | blush | angry | smile | sad | thinking\n"
+    "emotion 只能是：neutral | blush | angry | smile | sad | thinking | "
+    "surprised | laugh | sleepy | confused\n"
     "motion 只能是：neutral | smile | blush | angry | sad | thinking | "
-    "hands_on_hips | arms_crossed | facepalm | shrug | chin_rest\n"
+    "hands_on_hips | arms_crossed | facepalm | shrug | chin_rest | "
+    "surprised | laugh | sleepy | confused\n"
     "含义：neutral=平静歪头, smile=开心点头, blush=害羞别过脸, angry=生气前倾, "
-    "sad=难过低头, thinking=思考歪头, hands_on_hips=叉腰, arms_crossed=抱胸, "
+    "sad=难过低头, thinking=思考歪头, surprised=惊讶后仰, laugh=大笑点头, "
+    "sleepy=困倦低头, confused=困惑歪头扫视, hands_on_hips=叉腰, arms_crossed=抱胸, "
     "facepalm=扶额, shrug=摊手耸肩, chin_rest=托腮\n"
     "文本中的（动作）括号或 [emotion:xxx] 标签是作者提示，优先遵循。"
 )

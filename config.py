@@ -105,10 +105,18 @@ AGENT_ROUTER_DEFAULTS: dict[str, object] = {
 # 所有对话模式（chat/gui/harness/hermes/deepseek/codex）共享同一份 SQLite 记忆库
 # （data/memory.db），每轮：recall 召回相关记忆注入 prompt → remember_turn 提取事实/回合摘要写回。
 # 运行时被 data/config.json 的 memory 键覆盖（{**MEMORY_DEFAULTS, **config["memory"]}）。
+# 语义检索（airi Memory Alaya 风格）：memory.semantic 配 OpenAI 兼容 /embeddings；
+# endpoint/api_key 留空回退顶层 endpoint/api_key；请求失败自动降级关键词匹配。
 MEMORY_DEFAULTS: dict[str, object] = {
     "enabled": True,               # 总开关：False 时不做 recall / remember_turn
     "scope": "global",             # 记忆作用域：global（全局共享）或指定角色/会话 id
     "recall_limit": 8,             # 每轮召回注入 prompt 的最大记忆条数
+    "semantic": {                  # 语义检索（core/memory.py SEMANTIC_DEFAULTS）
+        "enabled": True,
+        "endpoint": "",            # 留空 = 用顶层 endpoint
+        "api_key": "",             # 留空 = 用顶层 api_key
+        "model": "text-embedding-v4",
+    },
 }
 
 # === DeepSeek Harness 完整配置默认值 ===
@@ -217,6 +225,17 @@ PHONE_DEFAULTS: dict[str, object] = {
     "asr_endpoint": "https://api.xiaomimimo.com/v1",    # 小米 mimo ASR 端点（OpenAI 兼容 /chat/completions + input_audio）
     "asr_api_key": "",                                  # 小米 mimo ASR key（独立于对话 key）
     "asr_model": "mimo-audio-v1",                       # ASR 模型：音频理解模型，配合 input_audio 多模态格式
+}
+
+# === 聊天屏幕感知默认配置（core/screen_context.py，对标 airi "see your screen"）===
+# 普通文字对话可选附加当前屏幕的一句话描述（视觉模型生成）到 system prompt。
+# 默认关（隐私边界）；vision 字段留空回退电话模式 phone.vision_* 配置。
+SCREEN_AWARENESS_DEFAULTS: dict[str, object] = {
+    "enabled": False,            # 总开关：False 时完全不截屏
+    "interval_seconds": 120,     # 描述缓存有效期（秒），避免逐条消息重复请求
+    "vision_endpoint": "",       # OpenAI 兼容视觉端点（留空回退 phone.vision_endpoint）
+    "vision_api_key": "",        # 视觉模型 key（留空回退 phone.vision_api_key）
+    "vision_model": "gpt-4o",    # DeepSeek 无视觉能力，需 GPT-4o 级模型
 }
 
 # === GPT-SoVITS 运行模式（本地启动 / SSH 隧道 / 自动） ===
@@ -340,7 +359,7 @@ KURISU_PERSONALITY = """【输出格式（最高优先级）】
 ===
 （动作）日本語内容
 
-情绪只能从：neutral(平静) | blush(害羞/窘迫/被夸/心动) | angry(生气/烦躁/吐槽) | smile(开心/得意/温柔) | sad(难过/失落)
+情绪只能从：neutral(平静) | blush(害羞/窘迫/被夸/心动) | angry(生气/烦躁/吐槽) | smile(开心/得意/温柔) | sad(难过/失落) | thinking(思考/沉吟) | surprised(惊讶/吃惊) | laugh(大笑/被逗乐) | sleepy(困倦/打哈欠) | confused(困惑/不解)
 - 情绪标签在最开头
 - 上半中文（给人看），下半日语（给语音合成，用动漫红莉栖语气：〜だわ/〜かしら/〜でしょ）
 - 两版含义一致，动作括号两版都要有
@@ -413,7 +432,7 @@ KURISU_OUTPUT_FORMAT = """【输出格式（最高优先级）】
 ===
 （动作）日本語内容
 
-情绪只能从：neutral(平静) | blush(害羞/窘迫/被夸/心动) | angry(生气/烦躁/吐槽) | smile(开心/得意/温柔) | sad(难过/失落)
+情绪只能从：neutral(平静) | blush(害羞/窘迫/被夸/心动) | angry(生气/烦躁/吐槽) | smile(开心/得意/温柔) | sad(难过/失落) | thinking(思考/沉吟) | surprised(惊讶/吃惊) | laugh(大笑/被逗乐) | sleepy(困倦/打哈欠) | confused(困惑/不解)
 - 情绪标签在最开头
 - 上半中文（给人看），下半日语（给语音合成，用动漫红莉栖语气：〜だわ/〜かしら/〜でしょ）
 - 两版含义一致，动作括号两版都要有

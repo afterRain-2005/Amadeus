@@ -141,6 +141,7 @@
     const MOTION_DURATIONS = {
       neutral: 1500, smile: 1200, blush: 1700, angry: 1100, sad: 1900, thinking: 1600,
       hands_on_hips: 1800, arms_crossed: 1800, facepalm: 1600, shrug: 1400, chin_rest: 2000,
+      surprised: 1300, laugh: 1800, sleepy: 2600, confused: 1900,
     };
     const MOTIONS = {
       // 歪头疑问
@@ -221,6 +222,31 @@
         core.setParameterValueById('ParamAngleX', -4 * w);
         core.setParameterValueById('ParamEyeBallY', -0.5 * w);
       },
+      // 惊讶：头后仰 + 身体后撤
+      surprised: (core, t) => {
+        const w = Math.sin(t * Math.PI);
+        core.setParameterValueById('ParamAngleY', 8 * w);
+        core.setParameterValueById('ParamBodyAngleX', -4 * w);
+        core.setParameterValueById('ParamAngleZ', -3 * w);
+      },
+      // 大笑：连续三次点头 + 身体轻晃
+      laugh: (core, t) => {
+        const w = Math.sin(t * Math.PI * 3);
+        core.setParameterValueById('ParamAngleX', 6 * w);
+        core.setParameterValueById('ParamBodyAngleZ', 1.5 * Math.sin(t * Math.PI));
+      },
+      // 困倦：渐进低头（easeIn，越到后面越低）+ 缓慢歪头
+      sleepy: (core, t) => {
+        const droop = t * t;
+        core.setParameterValueById('ParamAngleX', -12 * droop);
+        core.setParameterValueById('ParamAngleZ', 5 * Math.sin(t * Math.PI));
+      },
+      // 困惑：左右歪头扫视 + 眼球上飘
+      confused: (core, t) => {
+        const w = Math.sin(t * Math.PI * 2);
+        core.setParameterValueById('ParamAngleZ', 9 * w);
+        core.setParameterValueById('ParamEyeBallY', -0.4 * Math.sin(t * Math.PI));
+      },
     };
 
     function playMotion(name) {
@@ -231,7 +257,37 @@
         if (activeMotions[i].name === name) activeMotions.splice(i, 1);
       }
       activeMotions.push({ name, start: performance.now(), duration, apply });
+      resetIdleTimer();
     }
+
+    // —— 闲置微动作（airi idle animation）——
+    // 长时间无交互且未说话时随机播放小动作（托腮发呆/思考/摊手/抱胸/歪头），
+    // 模拟真人放空的小动作。鼠标移动 / 说话 / 外部命令立即重置计时。
+    const IDLE_MOTION_POOL = ['chin_rest', 'thinking', 'shrug', 'arms_crossed', 'neutral'];
+    let idleMarkAt = performance.now();
+    let idleNextDelay = _nextIdleDelay();
+    let idleLastMotion = '';
+    function _nextIdleDelay() { return 25000 + Math.random() * 20000; }
+    function resetIdleTimer() {
+      idleMarkAt = performance.now();
+      idleNextDelay = _nextIdleDelay();
+    }
+    window.__amadeusResetIdle = resetIdleTimer;   // 外部命令也走这里重置
+    setInterval(() => {
+      const now = performance.now();
+      if (speaking || activeMotions.length > 0 || document.hidden) {
+        resetIdleTimer();
+        return;
+      }
+      if (now - idleMarkAt < idleNextDelay) return;
+      // 避免连续两次同一个小动作
+      let pick = '';
+      do {
+        pick = IDLE_MOTION_POOL[Math.floor(Math.random() * IDLE_MOTION_POOL.length)];
+      } while (pick === idleLastMotion && IDLE_MOTION_POOL.length > 1);
+      idleLastMotion = pick;
+      playMotion(pick);
+    }, 5000);
 
     app.ticker.add(() => {
       // dt 钳制到 100ms：防后台标签页回来后 dt 巨大导致眨眼/平滑跳变
@@ -296,17 +352,23 @@
       const px = Math.max(-1, Math.min(1, event.clientX / innerWidth * 2 - 1));
       const py = Math.max(-1, Math.min(1, event.clientY / innerHeight * 2 - 1));
       gaze.setPointer(px, py);
+      resetIdleTimer();
     });
     window.__amadeus = {
       model, app,
       setEmotion(emotion) {
         Object.keys(target).forEach(key => target[key] = 0);
-        if (emotion in target) target[emotion] = emotion === 'smile' ? 0.75 : 0.85;
+        // 扩充情绪（airi 情感表）：laugh 复用 smile 通道（更强），
+        // sleepy 用 sad 低幅表达倦意；thinking/surprised/confused 纯动作表达
+        if (emotion === 'laugh') target.smile = 0.95;
+        else if (emotion === 'sleepy') target.sad = 0.4;
+        else if (emotion in target) target[emotion] = emotion === 'smile' ? 0.75 : 0.85;
         playMotion(emotion);
       },
       setSpeaking(value) {
         speaking = Boolean(value);
         if (!speaking) mouthTarget = 0;
+        resetIdleTimer();
       },
       setMouth(intensity) {
         // 音量强度 → 口型目标：clamp 0-1，并刷新"最近音量"时间戳
@@ -314,8 +376,10 @@
         lastMouthAt = performance.now();
       },
       setPointer(x, y) {
-        // 外部（ipc pointer 命令）驱动的视线目标
+        // 外部（ipc pointer 命令）驱动的视线目标；Python 侧已对静止光标去重，
+        // 收到更新 = 用户鼠标在动 → 同时重置闲置微动作计时
         gaze.setPointer(Number(x) || 0, Number(y) || 0);
+        resetIdleTimer();
       },
       playMotion,
     };

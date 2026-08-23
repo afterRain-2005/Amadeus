@@ -72,6 +72,7 @@ def test_action_map_keywords_covered_by_valid_motions():
     valid = {
         "neutral", "smile", "blush", "angry", "sad", "thinking",
         "hands_on_hips", "arms_crossed", "facepalm", "shrug", "chin_rest",
+        "surprised", "laugh", "sleepy", "confused",
     }
     for _keyword, motion in ACTION_MOTION_MAP:
         assert motion in valid, f"非法 motion: {motion}"

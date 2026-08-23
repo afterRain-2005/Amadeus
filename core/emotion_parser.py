@@ -5,7 +5,9 @@ from dataclasses import dataclass
 import re
 
 
-_EMOTION_RE = re.compile(r"^\[emotion:(neutral|blush|angry|smile|sad)\]")
+_EMOTION_RE = re.compile(
+    r"^\[emotion:(neutral|smile|blush|angry|sad|thinking|surprised|laugh|sleepy|confused)\]"
+)
 
 
 @dataclass(frozen=True)

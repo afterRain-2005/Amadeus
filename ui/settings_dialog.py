@@ -576,6 +576,28 @@ class SettingsDialog(QDialog):
         btn_row.addWidget(clear_btn)
         companion_form.addRow(btn_row)
 
+        # === 屏幕感知（普通聊天，core/screen_context.py，对标 airi see-your-screen）===
+        from config import SCREEN_AWARENESS_DEFAULTS
+        sa_cfg = {**SCREEN_AWARENESS_DEFAULTS, **(config.get("screen_awareness") or {})}
+        companion_form.addRow(_section("屏幕感知 · 聊天"))
+        self.screen_awareness_enabled = QCheckBox("聊天时附加当前屏幕描述（默认关，隐私）")
+        self.screen_awareness_enabled.setChecked(bool(sa_cfg.get("enabled", False)))
+        companion_form.addRow(self.screen_awareness_enabled)
+        self.screen_vision_endpoint = QLineEdit(str(sa_cfg.get("vision_endpoint", "")))
+        self.screen_vision_endpoint.setPlaceholderText("OpenAI 兼容端点，留空回退电话模式视觉端点")
+        companion_form.addRow("视觉端点", self.screen_vision_endpoint)
+        self.screen_vision_api_key = QLineEdit(str(sa_cfg.get("vision_api_key", "")))
+        self.screen_vision_api_key.setEchoMode(QLineEdit.Password)
+        self.screen_vision_api_key.setPlaceholderText("留空回退电话模式 key")
+        companion_form.addRow("视觉 API Key", self.screen_vision_api_key)
+        try:
+            _sa_interval = str(sa_cfg.get("interval_seconds", 120))
+        except (TypeError, ValueError):
+            _sa_interval = "120"
+        self.screen_interval = QLineEdit(_sa_interval)
+        self.screen_interval.setPlaceholderText("描述缓存有效期（秒），避免逐条消息重复请求")
+        companion_form.addRow("缓存秒数", self.screen_interval)
+
         tabs.addTab(_scroll_page(companion_page), "Companion")
 
         # === 消息接入（QQ / 微信，docs/PRD-im-message-notify.md）===
@@ -1135,6 +1157,19 @@ class SettingsDialog(QDialog):
         except ValueError:
             companion_cfg["daily_limit"] = 30
         config["companion"] = companion_cfg
+        # 屏幕感知配置（core/screen_context.py）
+        from config import SCREEN_AWARENESS_DEFAULTS
+        try:
+            _sa_seconds = int(self.screen_interval.text().strip())
+        except ValueError:
+            _sa_seconds = int(SCREEN_AWARENESS_DEFAULTS["interval_seconds"])
+        config["screen_awareness"] = {
+            "enabled": self.screen_awareness_enabled.isChecked(),
+            "interval_seconds": max(15, _sa_seconds),
+            "vision_endpoint": self.screen_vision_endpoint.text().strip(),
+            "vision_api_key": self.screen_vision_api_key.text().strip(),
+            # vision_model 固定默认（DeepSeek 无视觉，需 GPT-4o 级），暂不暴露 UI
+        }
         # IM 消息接入配置（docs/PRD-im-message-notify.md）
         from config import IM_DEFAULTS
         im_cfg = {**IM_DEFAULTS, **(config.get("im") or {})}

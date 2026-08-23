@@ -124,7 +124,7 @@ def test_controller_llm_decision_path():
 def test_companion_emotion_maps_to_live2d_emotion():
     """companion 内部情绪应正确映射为 Live2D 情绪。"""
     assert COMPANION_TO_LIVE2D_EMOTION["idle"] == "neutral"
-    assert COMPANION_TO_LIVE2D_EMOTION["sleepy"] == "sad"
+    assert COMPANION_TO_LIVE2D_EMOTION["sleepy"] == "sleepy"
     assert COMPANION_TO_LIVE2D_EMOTION["concern"] == "sad"
     assert COMPANION_TO_LIVE2D_EMOTION["tease"] == "angry"
     assert COMPANION_TO_LIVE2D_EMOTION["happy"] == "smile"
@@ -134,7 +134,7 @@ def test_companion_emotion_maps_to_live2d_emotion():
 def test_companion_emotion_maps_to_live2d_motion():
     """companion 内部情绪应正确映射为 Live2D 动作。"""
     assert COMPANION_EMOTION_MOTION["idle"] == "thinking"
-    assert COMPANION_EMOTION_MOTION["sleepy"] == "sad"
+    assert COMPANION_EMOTION_MOTION["sleepy"] == "sleepy"
     assert COMPANION_EMOTION_MOTION["concern"] == "sad"
     assert COMPANION_EMOTION_MOTION["tease"] == "angry"
     assert COMPANION_EMOTION_MOTION["happy"] == "smile"
@@ -154,7 +154,8 @@ def test_all_companion_emotions_have_live2d_mapping():
 
 def test_all_live2d_emotions_are_valid():
     """映射后的 Live2D 情绪必须是 emotion_parser 可识别的。"""
-    valid_live2d = {"neutral", "blush", "angry", "smile", "sad"}
+    valid_live2d = {"neutral", "blush", "angry", "smile", "sad", "thinking",
+                    "surprised", "laugh", "sleepy", "confused"}
     for companion_em, live2d_em in COMPANION_TO_LIVE2D_EMOTION.items():
         assert live2d_em in valid_live2d, \
             f"companion '{companion_em}' 映射到无效的 Live2D 情绪 '{live2d_em}'"
@@ -162,7 +163,9 @@ def test_all_live2d_emotions_are_valid():
 
 def test_all_live2d_motions_are_valid():
     """映射后的 Live2D 动作必须在 live2d_page.html MOTIONS 中存在。"""
-    valid_motions = {"neutral", "smile", "blush", "angry", "sad", "thinking"}
+    valid_motions = {"neutral", "smile", "blush", "angry", "sad", "thinking",
+                     "hands_on_hips", "arms_crossed", "facepalm", "shrug", "chin_rest",
+                     "surprised", "laugh", "sleepy", "confused"}
     for companion_em, motion in COMPANION_EMOTION_MOTION.items():
         assert motion in valid_motions, \
             f"companion '{companion_em}' 映射到无效的 Live2D 动作 '{motion}'"

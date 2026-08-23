@@ -121,7 +121,7 @@ KURISU_PROACTIVE_PASS_THROUGH = """你接下来要说的话已经准备好了，
 COMPANION_TO_LIVE2D_EMOTION: dict[str, str] = {
     # companion 评估器输出 → Live2D 可识别 emotion
     "idle":     "neutral",
-    "sleepy":   "sad",
+    "sleepy":   "sleepy",
     "concern":  "sad",
     "tease":    "angry",
     "happy":    "smile",
@@ -130,13 +130,13 @@ COMPANION_TO_LIVE2D_EMOTION: dict[str, str] = {
     "blush":    "blush",
     "sad":      "sad",
     "smile":    "smile",
-    "thinking": "neutral",
+    "thinking": "thinking",
 }
 
 COMPANION_EMOTION_MOTION: dict[str, str] = {
     # companion 情绪 → Live2D 动作名（对应 live2d_page.html MOTIONS 字典）
     "idle":     "thinking",   # 发呆 → 左右歪头 + 眼球扫视
-    "sleepy":   "sad",        # 困倦 → 低头
+    "sleepy":   "sleepy",     # 困倦 → 缓慢低头打哈欠
     "concern":  "sad",        # 关心 → 低头前倾
     "tease":    "angry",      # 吐槽 → 生气前倾 + 微抖
     "happy":    "smile",      # 开心 → 点头

@@ -254,16 +254,19 @@ def test_template_emotions_all_have_live2d_mapping():
         assert em in COMPANION_EMOTION_MOTION, f"模板 {tpl['topic']} 的 emotion '{em}' 缺少动作映射"
 
 # === COMPANION_TO_LIVE2D_EMOTION 映射 ===
-
-VALID_LIVE2D_EMOTIONS = {"neutral", "blush", "angry", "smile", "sad"}
+# 与 live2d/live2d_page.html setEmotion 支持的情绪标签保持一致（2026-08 扩充 10 种）
+VALID_LIVE2D_EMOTIONS = {"neutral", "blush", "angry", "smile", "sad", "thinking",
+                         "surprised", "laugh", "sleepy", "confused"}
 
 def test_emotion_map_idle_to_neutral():
 
     assert COMPANION_TO_LIVE2D_EMOTION["idle"] == "neutral"
 
-def test_emotion_map_sleepy_to_sad():
+def test_emotion_map_sleepy_to_sleepy():
 
-    assert COMPANION_TO_LIVE2D_EMOTION["sleepy"] == "sad"
+    """困倦现在有专属情绪/动作（扩充词表），不再是 sad 的近似。"""
+
+    assert COMPANION_TO_LIVE2D_EMOTION["sleepy"] == "sleepy"
 
 def test_emotion_map_concern_to_sad():
 
@@ -285,13 +288,15 @@ def test_emotion_map_passthrough_emotions():
 
     """Live2D 原生情绪应身份映射（不变）。"""
 
-    for native in ("neutral", "blush", "angry", "smile", "sad"):
+    for native in ("neutral", "blush", "angry", "smile", "sad", "thinking"):
 
         assert COMPANION_TO_LIVE2D_EMOTION[native] == native
 
-def test_emotion_map_thinking_to_neutral():
+def test_emotion_map_thinking_to_thinking():
 
-    assert COMPANION_TO_LIVE2D_EMOTION["thinking"] == "neutral"
+    """思考有专属情绪/动作（扩充词表），不再退化为 neutral。"""
+
+    assert COMPANION_TO_LIVE2D_EMOTION["thinking"] == "thinking"
 
 def test_all_mapped_emotions_are_valid_live2d():
 
@@ -310,15 +315,17 @@ def test_emotion_map_keys_are_superset_of_motion_map_keys():
 
 # === COMPANION_EMOTION_MOTION 映射 ===
 
-VALID_LIVE2D_MOTIONS = {"neutral", "smile", "blush", "angry", "sad", "thinking"}
+VALID_LIVE2D_MOTIONS = {"neutral", "smile", "blush", "angry", "sad", "thinking",
+                        "hands_on_hips", "arms_crossed", "facepalm", "shrug", "chin_rest",
+                        "surprised", "laugh", "sleepy", "confused"}
 
 def test_motion_map_idle_to_thinking():
 
     assert COMPANION_EMOTION_MOTION["idle"] == "thinking"
 
-def test_motion_map_sleepy_to_sad():
+def test_motion_map_sleepy_to_sleepy():
 
-    assert COMPANION_EMOTION_MOTION["sleepy"] == "sad"
+    assert COMPANION_EMOTION_MOTION["sleepy"] == "sleepy"
 
 def test_motion_map_concern_to_sad():
 

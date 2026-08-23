@@ -13,12 +13,18 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from core.single_instance import acquire_single_instance
+from core.single_instance import (
+    acquire_single_instance,
+    consume_instance_signal,
+    create_instance_signal,
+    signal_existing_instance,
+)
 
 
 # 全局引用，防止 gc 回收
 _tray_icon: Any = None
 _pet_process: subprocess.Popen | None = None
+_MAIN_INSTANCE_NAME = "Amadeus2026.Main"
 
 
 # ============================================================
@@ -144,10 +150,13 @@ def _start_pet_process() -> None:
 # ============================================================
 def main() -> int:
     global _tray_icon
-    if not acquire_single_instance("Amadeus2026.Main"):
+    create_instance_signal(_MAIN_INSTANCE_NAME)
+    if not acquire_single_instance(_MAIN_INSTANCE_NAME):
+        signal_existing_instance(_MAIN_INSTANCE_NAME)
         return 0
     from PySide6.QtWidgets import QApplication, QSystemTrayIcon, QMenu
     from PySide6.QtGui import QIcon
+    from PySide6.QtCore import QTimer
 
     print("[main] Starting QApplication...", flush=True)
     app = QApplication(sys.argv)
@@ -168,6 +177,10 @@ def main() -> int:
         if reason == QSystemTrayIcon.ActivationReason.Trigger else None
     )
     _tray_icon.show()
+    activation_timer = QTimer(app)
+    activation_timer.setInterval(250)
+    activation_timer.timeout.connect(_poll_activation_request)
+    activation_timer.start()
     _write_runtime_log(
         "startup.log",
         f"executable={sys.executable}\nargv={sys.argv!r}\n"
@@ -206,6 +219,11 @@ def _show_windows() -> None:
     global _pet_process
     if _pet_process is None or _pet_process.poll() is not None:
         _start_pet_process()
+
+
+def _poll_activation_request() -> None:
+    if consume_instance_signal(_MAIN_INSTANCE_NAME):
+        _show_windows()
 
 
 # ============================================================

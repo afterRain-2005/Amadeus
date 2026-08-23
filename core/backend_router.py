@@ -152,10 +152,12 @@ def route_and_send(
     memory_enabled = bool(memory_cfg.get("enabled", True))
     memory_scope = str(memory_cfg.get("scope", "global") or "global")
     if memory_enabled:
+        from core.memory import semantic_config
         recalled_memories = recall(
             query=input_text,
             limit=int(memory_cfg.get("recall_limit", 8) or 8),
             scope=memory_scope,
+            semantic=semantic_config(config),
         )
         route_memories = merge_memories(memories, recalled_memories)
     else:

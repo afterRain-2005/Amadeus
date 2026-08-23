@@ -215,6 +215,19 @@ class SpeechPlayer(QObject):
             self._stream_queue.put((merged + "。", self._stream_lang))
         self._merge_buffer = ""
 
+    # 流式队列的停顿哨兵项：sentence 位为该值时 consumer 只静默不合成
+    _DELAY_ITEM = "__DELAY__"
+
+    def speak_streaming_delay(self, seconds: float) -> None:
+        """流式队列中插入停顿（[delay:n] 标签）：后续句子延后 n 秒合成播放。
+
+        用 _stop_event.wait 实现可打断：挂断/打断时停顿立即结束，
+        不会出现"挂了电话她还沉默半秒"。
+        """
+        if self._stream_thread is None or not self._stream_thread.is_alive():
+            return
+        self._stream_queue.put((self._DELAY_ITEM, f"{max(0.0, min(5.0, float(seconds))):g}"))
+
     def speak_streaming_end(
         self,
         *,
