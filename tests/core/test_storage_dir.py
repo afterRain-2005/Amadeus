@@ -9,7 +9,7 @@ def test_resolve_dev_dir():
     from core.storage import _resolve_app_dir
     with patch.object(sys, "frozen", False, create=True):
         resolved = _resolve_app_dir()
-    assert resolved == Path(__file__).resolve().parents[1] / "data"
+    assert resolved == Path(__file__).resolve().parents[2] / "data"
 
 
 def test_resolve_frozen_dir(tmp_path):

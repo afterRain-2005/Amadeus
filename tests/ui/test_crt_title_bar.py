@@ -9,7 +9,7 @@ from PySide6.QtWidgets import QApplication, QDialog
 from ui.widgets.crt_title_bar import CRT_TITLE_BAR_QSS, CrtTitleBar
 
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 
 
 @pytest.fixture(scope="module")
