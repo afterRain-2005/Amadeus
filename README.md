@@ -77,14 +77,23 @@ D:\anaconda\python.exe -m PyInstaller Amadeus.spec --noconfirm
 ```
 amadeus-py/
 ├── main.py                  # 入口：拉起桌宠子进程 + 系统托盘
-├── desktop_pet.py           # 桌宠主进程：Qt 窗口 / Dock / 气泡 / 终端
-├── config.py                # 字符配置
+├── desktop_pet.py           # 桌宠主进程：run_overlay + PetWindow 主窗口
+├── config.py                # 角色配置
 ├── Amadeus.spec             # PyInstaller 打包配置
 ├── core/                    # 核心模块（客户端 / 路由 / 记忆 / 技能 / 语音…）
-├── ui/                      # Qt 控件（设置页 / 通话视图 / CRT 叠加…）
+│   ├── gpt_sovits_proc.py   #   GPT-SoVITS 子进程 / SSH 隧道生命周期
+│   └── diag.py              #   运行时诊断日志
+├── ui/                      # Qt 控件与非 Qt 纯函数助手
+│   ├── bubble.py            #   气泡分段 / 流式决策纯函数
+│   ├── terminal_html.py     #   终端 HTML 构建纯函数
+│   ├── theme.py             #   fauux 抖动纹理
+│   ├── renderer_proc.py     #   renderer 子进程（webview + Live2D 帧回传）
+│   ├── settings_dialog.py   #   设置页
+│   └── widgets/             #   Dock / 状态栏 / AgentTerminal / AgentTask…
 ├── live2d/                  # Live2D 页面与渲染（手机 UI + PIXI）
 ├── resources/               # 图标 / 纹理 / 模型 / 字体
 ├── scripts/                 # 辅助脚本
+├── docs/                    # 文档（prd/ 需求稿 · archive/ 历史设计稿）
 └── tests/                   # 测试
 ```
 
