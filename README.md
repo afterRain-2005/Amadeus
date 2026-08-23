@@ -6,12 +6,13 @@
 
 ## 功能特性
 
-- **Live2D 桌宠**：PixiJS + Cubism 4 渲染，面部/身体跟随鼠标，情感动作系统（生气/害羞/微笑/悲伤等），手机外壳 UI（CSS/DOM 渲染，与浏览器预览一致）。
-- **语音对话**：ASR 实时识别（mimo-audio-v1 线路）+ TTS 多引擎（阿里云 / GPT-SoVITS / SAPI 自动降级）。
-- **实时通话**：双向语音通话视图，支持挂断。
+- **Live2D 桌宠**：PixiJS + Cubism 4 渲染，面部/身体跟随鼠标，情感动作系统（10 种情绪 × 歪头/叉腰/扶额/摊手等动作），闲置微动作（长时间无交互随机托腮/发呆），手机外壳 UI（CSS/DOM 渲染，与浏览器预览一致）。
+- **语音对话**：ASR 实时识别（mimo-audio-v1 线路）+ TTS 多引擎（阿里云 / GPT-SoVITS / SAPI 自动降级）+ 音量驱动口型同步。
+- **实时通话**：双向语音通话视图，支持挂断、屏幕共享给 AI 看。
+- **聊天屏幕感知**：普通对话可选附加当前屏幕描述（视觉模型一句话总结，默认关）。
 - **终端系统**：`/` 斜杠命令工具系统（类 Codex CLI），Markdown 渲染，CRT 效果，`Ctrl+=` / `Ctrl+-` 缩放。
 - **Skills 系统**：可加载/读取本地技能包。
-- **长期记忆**：类 Hermes 长期记忆系统，多模式共享。
+- **长期记忆**：类 Hermes 长期记忆系统 + 语义检索（OpenAI 兼容 /embeddings 向量召回，失败自动降级关键词匹配）。
 - **Dock 栏**：macOS 风格 Dock，hover 邻近放大。
 - **多模型路由**：DeepSeek / Ollama / Hermes / Harness 后端自动路由。
 - **每周陪伴周报**：companion 调度器（评估 + 表达式 + 传感器）。
@@ -25,7 +26,7 @@
 | Live2D | PixiJS `pixi-live2d-display` + Cubism 4 Core |
 | 手机 UI | CSS/DOM + html2canvas（与浏览器预览一致） |
 | HTTP | 内置 ThreadingHTTPServer（renderer 静态资源） |
-| 打包 | PyInstaller（onefile） |
+| 打包 | PyInstaller（onedir） |
 
 ## 快速开始
 
@@ -50,7 +51,7 @@ python main.py
 D:\anaconda\python.exe -m PyInstaller Amadeus.spec --noconfirm
 ```
 
-产物：`dist/Amadeus-<版本号>.exe`（单文件，无控制台）。详见 [docs/build.md](docs/build.md)。
+产物：`dist/Amadeus-<版本号>/Amadeus-<版本号>.exe`（目录发布，无控制台）。请压缩发布整个目录，详见 [docs/build.md](docs/build.md)。
 
 ## 配置
 
@@ -89,5 +90,6 @@ amadeus-py/
 
 ## 常见问题
 
-- **exe 启动慢？** onefile 首次启动需解压，已配置固定缓存目录 `%LOCALAPPDATA%\Amadeus\Cache` 加速。
+- **exe 启动慢？** 请从发布目录启动 exe；onedir 不需要启动时解压大型归档。
+- **exe 打不开？** 查看 exe 同级 `data/logs/startup-crash.log` 或 `data/logs/renderer-crash.log`；若提示 WebView，安装 Microsoft Edge WebView2 Runtime。
 - **语音没有声音？** 检查 `data/config.json` 的 TTS 引擎配置；GPT-SoVITS 未启动时会降级 SAPI。

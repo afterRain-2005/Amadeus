@@ -13,6 +13,7 @@ import subprocess
 import sys
 import threading
 import time
+import traceback
 import uuid
 
 
@@ -29,6 +30,18 @@ from core.ipc_command import apply_command_js
 from core.single_instance import acquire_single_instance
 from core.storage import APP_DIR as _APP_DIR
 READY_FILE = _APP_DIR / "desktop_pet.ready"
+
+
+def _write_runtime_log(filename: str, content: str) -> Path | None:
+    """Write a UTF-8 diagnostic log beside runtime data."""
+    try:
+        log_dir = _APP_DIR / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        path = log_dir / filename
+        path.write_text(content, encoding="utf-8")
+        return path
+    except OSError:
+        return None
 
 
 # ============================================================
@@ -308,133 +321,146 @@ def stop_gpt_sovits(timeout: float = 5.0) -> None:
 # 返回值：无（None，函数结束后子进程退出）
 # ============================================================
 def renderer_process(connection: Connection) -> None:
-    import webview
-
-    port = free_port()
-    server = ThreadingHTTPServer(("127.0.0.1", port), QuietHandler)
-    threading.Thread(target=server.serve_forever, daemon=True).start()
-    url = (
-        f"http://127.0.0.1:{port}/live2d/phone_live2d_page.html"
-        f"?model=/resources/live2d/kurisu/amadeusV1.model3.json"
-    )
-
-    # ============================================================
-    # 类：RendererJsApi
-    # 作用：pywebview 向 JS 暴露的桥接 API（必须在 create_window 前构造）。
-    #       JS 端 Home 键点击 → window.pywebview.api.home_click()
-    #       → 通过管道通知主进程 _minimize_to_tray()。
-    # ============================================================
-    class RendererJsApi:
-        def home_click(self) -> None:
-            try:
-                connection.send(("home_click", True))
-            except (BrokenPipeError, OSError):
-                pass
-
-        def hide_window(self) -> None:
-            try:
-                connection.send(("hide_window", True))
-            except (BrokenPipeError, OSError):
-                pass
-
-        def close(self) -> None:
-            try:
-                connection.send(("close", True))
-            except (BrokenPipeError, OSError):
-                pass
-
-    window = webview.create_window(
-        "Amadeus Renderer", url=url, width=340, height=720,
-        x=-10000, y=-10000, frameless=True, shadow=False,
-        js_api=RendererJsApi(),
-    )
-
-    def loaded() -> None:
-        # ============================================================
-        # 函数：stream_frames()
-        # 作用：★renderer 主循环（独立线程，daemon=True）。
-        #       1. 等模型就绪
-        #       2. 循环：接收命令→驱动动作；监听 Home 键；截取"#app 整页"
-        #         （手机壳+屏幕+辉光+角色一体）回传主进程 paintEvent 直接显示
-        #       每秒 15 帧
-        # ============================================================
-        def stream_frames() -> None:
-            try:
-                # JS 端：给页面原有的单/双击分流提供 pywebview 回调。
-                # 不额外绑定 click，避免双击时第一下 click 立即最小化。
-                home_js = (
-                    "(function(){"
-                    "  window.__amadeusHomeClick = function() {"
-                    "    if (window.pywebview && window.pywebview.api && window.pywebview.api.home_click) {"
-                    "      try { window.pywebview.api.home_click(); } catch(e){}"
-                    "    }"
-                    "  };"
-                    "  const menu = document.getElementById('pet-menu');"
-                    "  if (menu) menu.addEventListener('click', () => {"
-                    "    if (window.pywebview && window.pywebview.api && window.pywebview.api.close) {"
-                    "      try { window.pywebview.api.close(); } catch(e){}"
-                    "    }"
-                    "  });"
-                    "})();"
-                )
-                try:
-                    window.evaluate_js(home_js)
-                except Exception:
-                    pass
-
-                for _ in range(30):
-                    time.sleep(0.25)
-                    if window.evaluate_js("document.title") == "KURISU_READY":
-                        break
-                else:
-                    connection.send(("error", "Live2D model did not become ready"))
-                    return
-
-                # 调 JS 端的 __amadeusComposite()：手机壳 + Live2D 一体合成
-                # （返回 PNG dataURL；304×690；手机 UI 完全在 Web 端用 Canvas 2D 绘制）
-                script = (
-                    "(function(){"
-                    "  return typeof window.__amadeusComposite === 'function'"
-                    "    ? window.__amadeusComposite()"
-                    "    : (window.__amadeus && window.__amadeus.app"
-                    "       ? window.__amadeus.app.renderer.extract.canvas("
-                    "         window.__amadeus.app.stage).toDataURL('image/png')"
-                    "       : null);"
-                    "})()"
-                )
-                while True:
-                    # 接收 overlay→renderer 命令（非阻塞，drain 队列）
-                    while connection.poll():
-                        try:
-                            kind, payload = connection.recv()
-                        except (EOFError, OSError):
-                            break
-                        if kind == "command":
-                            js = apply_command_js(payload)
-                            if js:
-                                window.evaluate_js(js)
-                    data_url = window.evaluate_js(script)
-                    if not data_url:
-                        time.sleep(1 / 15)
-                        continue
-                    frame = base64.b64decode(data_url.split(",", 1)[1])
-                    connection.send(("frame", frame))
-                    time.sleep(1 / 15)
-            except (BrokenPipeError, EOFError, OSError):
-                pass
-            finally:
-                try:
-                    window.destroy()
-                except Exception:
-                    pass
-
-        threading.Thread(target=stream_frames, daemon=True).start()
-
-    window.events.loaded += loaded
     try:
-        webview.start(gui="edgechromium", debug=False)
-    finally:
-        server.shutdown()
+        import webview
+
+        port = free_port()
+        server = ThreadingHTTPServer(("127.0.0.1", port), QuietHandler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        url = (
+            f"http://127.0.0.1:{port}/live2d/phone_live2d_page.html"
+            f"?model=/resources/live2d/kurisu/amadeusV1.model3.json"
+        )
+
+        # ============================================================
+        # 类：RendererJsApi
+        # 作用：pywebview 向 JS 暴露的桥接 API（必须在 create_window 前构造）。
+        #       JS 端 Home 键点击 → window.pywebview.api.home_click()
+        #       → 通过管道通知主进程 _minimize_to_tray()。
+        # ============================================================
+        class RendererJsApi:
+            def home_click(self) -> None:
+                try:
+                    connection.send(("home_click", True))
+                except (BrokenPipeError, OSError):
+                    pass
+
+            def hide_window(self) -> None:
+                try:
+                    connection.send(("hide_window", True))
+                except (BrokenPipeError, OSError):
+                    pass
+
+            def close(self) -> None:
+                try:
+                    connection.send(("close", True))
+                except (BrokenPipeError, OSError):
+                    pass
+
+        window = webview.create_window(
+            "Amadeus Renderer", url=url, width=340, height=720,
+            x=-10000, y=-10000, frameless=True, shadow=False,
+            js_api=RendererJsApi(),
+        )
+
+        def loaded() -> None:
+            # ============================================================
+            # 函数：stream_frames()
+            # 作用：★renderer 主循环（独立线程，daemon=True）。
+            #       1. 等模型就绪
+            #       2. 循环：接收命令→驱动动作；监听 Home 键；截取"#app 整页"
+            #         （手机壳+屏幕+辉光+角色一体）回传主进程 paintEvent 直接显示
+            #       每秒 15 帧
+            # ============================================================
+            def stream_frames() -> None:
+                try:
+                    # JS 端：给页面原有的单/双击分流提供 pywebview 回调。
+                    # 不额外绑定 click，避免双击时第一下 click 立即最小化。
+                    home_js = (
+                        "(function(){"
+                        "  window.__amadeusHomeClick = function() {"
+                        "    if (window.pywebview && window.pywebview.api && window.pywebview.api.home_click) {"
+                        "      try { window.pywebview.api.home_click(); } catch(e){}"
+                        "    }"
+                        "  };"
+                        "  const menu = document.getElementById('pet-menu');"
+                        "  if (menu) menu.addEventListener('click', () => {"
+                        "    if (window.pywebview && window.pywebview.api && window.pywebview.api.close) {"
+                        "      try { window.pywebview.api.close(); } catch(e){}"
+                        "    }"
+                        "  });"
+                        "})();"
+                    )
+                    try:
+                        window.evaluate_js(home_js)
+                    except Exception:
+                        pass
+
+                    for _ in range(30):
+                        time.sleep(0.25)
+                        if window.evaluate_js("document.title") == "KURISU_READY":
+                            break
+                    else:
+                        connection.send(("error", "Live2D model did not become ready"))
+                        return
+
+                    # 调 JS 端的 __amadeusComposite()：手机壳 + Live2D 一体合成
+                    # （返回 PNG dataURL；304×690；手机 UI 完全在 Web 端用 Canvas 2D 绘制）
+                    script = (
+                        "(function(){"
+                        "  return typeof window.__amadeusComposite === 'function'"
+                        "    ? window.__amadeusComposite()"
+                        "    : (window.__amadeus && window.__amadeus.app"
+                        "       ? window.__amadeus.app.renderer.extract.canvas("
+                        "         window.__amadeus.app.stage).toDataURL('image/png')"
+                        "       : null);"
+                        "})()"
+                    )
+                    while True:
+                        # 接收 overlay→renderer 命令（非阻塞，drain 队列）
+                        while connection.poll():
+                            try:
+                                kind, payload = connection.recv()
+                            except (EOFError, OSError):
+                                break
+                            if kind == "command":
+                                js = apply_command_js(payload)
+                                if js:
+                                    window.evaluate_js(js)
+                        data_url = window.evaluate_js(script)
+                        if not data_url:
+                            time.sleep(1 / 15)
+                            continue
+                        frame = base64.b64decode(data_url.split(",", 1)[1])
+                        connection.send(("frame", frame))
+                        time.sleep(1 / 15)
+                except (BrokenPipeError, EOFError, OSError):
+                    pass
+                except Exception:
+                    path = _write_runtime_log("renderer-crash.log", traceback.format_exc())
+                    try:
+                        connection.send(("error", f"Renderer crashed. Log: {path}"))
+                    except (BrokenPipeError, OSError):
+                        pass
+                finally:
+                    try:
+                        window.destroy()
+                    except Exception:
+                        pass
+
+            threading.Thread(target=stream_frames, daemon=True).start()
+
+        window.events.loaded += loaded
+        try:
+            webview.start(gui="edgechromium", debug=False)
+        finally:
+            server.shutdown()
+    except Exception:
+        path = _write_runtime_log("renderer-crash.log", traceback.format_exc())
+        try:
+            connection.send(("error", f"Renderer failed to start. Log: {path}"))
+        except (BrokenPipeError, OSError):
+            pass
 
 
 # ============================================================
@@ -1137,6 +1163,17 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
                 config["harness"] = harness_cfg
             # 读取 SOUL.md（若存在），否则回退到 config.py 中的 KURISU_PERSONALITY
             soul_md = _load_soul_md("kurisu") or character.personality
+            # 聊天屏幕感知：开启时附加当前屏幕一句话描述（缓存内复用，失败静默）
+            try:
+                from core.screen_context import build_screen_prompt
+                screen_prompt = build_screen_prompt(config)
+                if screen_prompt:
+                    self.inject_system_prompt = (
+                        f"{self.inject_system_prompt}\n\n{screen_prompt}"
+                        if self.inject_system_prompt else screen_prompt
+                    )
+            except Exception:
+                pass
             try:
                 from core.backend_router import route_and_send
                 reply, _backend = route_and_send(
@@ -3311,6 +3348,8 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
 
             归一化逻辑：以窗口中心为原点，水平 ±250px / 垂直 ±200px 映射到 [-1, 1]，
             clamp 后发送。鼠标在窗口左侧 → pointerX = -1（角色看左），右侧 → +1。
+            光标静止时跳过发送（管道去重）：renderer 收不到 pointer 更新即视为
+            无鼠标活动，作为闲置微动作计时器的复位信号（live2d_page.html setPointer）。
             """
             try:
                 cursor = QCursor.pos()
@@ -3319,6 +3358,10 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
                 dy = (cursor.y() - center.y()) / 200.0
                 px = max(-1.0, min(1.0, dx))
                 py = max(-1.0, min(1.0, dy))
+                last = getattr(self, "_last_pointer", None)
+                if last is not None and abs(px - last[0]) < 1e-3 and abs(py - last[1]) < 1e-3:
+                    return
+                self._last_pointer = (px, py)
                 send_command(pointer=(px, py))
             except Exception:
                 pass
@@ -3713,6 +3756,15 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
                     latest = payload
                 elif kind == "error":
                     print(f"[Amadeus] {payload}", file=sys.stderr)
+                    _write_runtime_log("renderer-error.log", str(payload))
+                    if hasattr(self, 'status_line'):
+                        self.status_line.hide()
+                    self.reply_bubble.show()
+                    self._set_bubble_text(
+                        "Live2D 渲染启动失败。\n"
+                        "请安装 Microsoft Edge WebView2 Runtime，"
+                        "或把 data/logs/renderer-crash.log 发给开发者。"
+                    )
                 elif kind == "home_click":
                     # JS 端 Home 键点击 → 最小化到托盘（保留托盘）
                     self._minimize_to_tray()
@@ -3737,6 +3789,24 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
                         except OSError:
                             pass  # 快照/就绪标记仅调试用途，frozen 只读环境失败不影响主流程
                     self.update()
+            elif (
+                not self._first_frame_received
+                and not renderer.is_alive()
+                and not getattr(self, "_renderer_exit_reported", False)
+            ):
+                self._renderer_exit_reported = True
+                _write_runtime_log(
+                    "renderer-error.log",
+                    f"Renderer exited before first frame. exitcode={renderer.exitcode}",
+                )
+                if hasattr(self, 'status_line'):
+                    self.status_line.hide()
+                self.reply_bubble.show()
+                self._set_bubble_text(
+                    "Live2D 渲染进程提前退出。\n"
+                    "请安装 Microsoft Edge WebView2 Runtime，"
+                    "或查看 data/logs/renderer-error.log。"
+                )
 
         def paintEvent(self, event) -> None:
             if self._frame.isNull():
@@ -4070,16 +4140,33 @@ def main() -> int:
     mp.freeze_support()
     if not acquire_single_instance("Amadeus2026.DesktopPet"):
         return 0
-    # 语音服务随主进程自启：不在线则后台拉起 GPT-SoVITS API
-    # （失败不阻塞桌宠，SpeechPlayer 的 TTL 重查 + 离线气泡提示兜底）
+    _write_runtime_log(
+        "desktop-pet-entry.log",
+        f"executable={sys.executable}\nargv={sys.argv!r}\n"
+        f"frozen={getattr(sys, 'frozen', False)}\n",
+    )
+
+    def start_voice_service() -> None:
+        try:
+            maybe_start_gpt_sovits()
+        except Exception:
+            _write_runtime_log("tts-autostart-crash.log", traceback.format_exc())
+
+    # 语音服务探测/模型启动可能访问网络或加载数十秒，不能阻塞桌宠首屏。
+    threading.Thread(target=start_voice_service, daemon=True).start()
     try:
-        maybe_start_gpt_sovits()
+        READY_FILE.unlink(missing_ok=True)
+        parent_connection, child_connection = mp.Pipe(duplex=True)
+        renderer = mp.Process(target=renderer_process, args=(child_connection,), daemon=True)
+        renderer.start()
+        _write_runtime_log(
+            "desktop-pet-startup.log",
+            f"executable={sys.executable}\nargv={sys.argv!r}\n"
+            f"frozen={getattr(sys, 'frozen', False)}\nrenderer_pid={renderer.pid}\n",
+        )
     except Exception:
-        pass
-    READY_FILE.unlink(missing_ok=True)
-    parent_connection, child_connection = mp.Pipe(duplex=True)
-    renderer = mp.Process(target=renderer_process, args=(child_connection,), daemon=True)
-    renderer.start()
+        _write_runtime_log("desktop-pet-crash.log", traceback.format_exc())
+        raise
     try:
         return run_overlay(parent_connection, renderer)
     finally:

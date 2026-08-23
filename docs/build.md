@@ -1,6 +1,6 @@
 # Amadeus 打包指南
 
-本文档教你如何把 `amadeus-py` 打包成 Windows 单文件可执行程序（exe）。
+本文档教你如何把 `amadeus-py` 打包成 Windows 可发布目录（包含 exe）。
 
 ---
 
@@ -50,7 +50,8 @@ D:\anaconda\python.exe -m PyInstaller Amadeus.spec --noconfirm
 ```
 
 - `--noconfirm`：不询问直接覆盖旧的 `build/` 中间产物
-- 全程约 6 分钟（118 MB 单文件）
+- 全程约 6 分钟
+- 使用 onedir 发布，不需要启动时解压大型单文件归档，避免被 Windows 安全软件拦截或长时间卡在 bootloader。
 
 ---
 
@@ -59,10 +60,10 @@ D:\anaconda\python.exe -m PyInstaller Amadeus.spec --noconfirm
 打包完成后，exe 位于：
 
 ```
-dist/Amadeus-<版本号>.exe
+dist/Amadeus-<版本号>/Amadeus-<版本号>.exe
 ```
 
-例如 `dist/Amadeus-0.4.1.exe`，约 118 MB，单文件、无控制台窗口（`console=False`）。
+请把整个 `Amadeus-<版本号>/` 目录压缩发布，不要只复制其中的 exe；目录内包含 Qt、Live2D 和 Python 运行时文件。
 
 ---
 
@@ -142,6 +143,11 @@ dist/Amadeus-<版本号>.exe
 'matplotlib', 'scipy', 'pandas', 'botocore', 'boto3', 'IPython',
 ```
 
+### 6.6 exe 启动后无窗口
+运行数据写在 exe 同级的 `data/`，不会写入 PyInstaller 的临时解压目录。
+启动诊断日志位于 `data/logs/`：`startup-crash.log`、`desktop-pet-crash.log`、
+`renderer-crash.log`。Live2D 渲染需要系统安装 Microsoft Edge WebView2 Runtime。
+
 ---
 
 ## 7. spec 文件要点（进阶）
@@ -156,6 +162,7 @@ dist/Amadeus-<版本号>.exe
 | `excludes` | 排除 anaconda 科学栈和多余 Qt 绑定，瘦身 |
 | `name=f'Amadeus-{__version__}'` | 产物名自动带版本号 |
 | `console=False` | 无控制台黑窗 |
+| `COLLECT(...)` | 生成稳定的 onedir 发布目录，避免 onefile 启动解压卡顿 |
 
 新增「运行时动态 import」的第三方库时，**必须在 `hiddenimports` 里手动加上**，否则 exe 运行时找不到该模块。
 
@@ -167,5 +174,5 @@ dist/Amadeus-<版本号>.exe
 # 1. 改版本号：core/version.py 的 __version__
 # 2. 打包：
 D:\anaconda\python.exe -m PyInstaller Amadeus.spec --noconfirm
-# 3. 产物：dist/Amadeus-<版本号>.exe
+# 3. 产物：dist/Amadeus-<版本号>/Amadeus-<版本号>.exe
 ```

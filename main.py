@@ -7,17 +7,17 @@ from __future__ import annotations
 
 import sys
 import subprocess
+import traceback
 from pathlib import Path
+from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from PySide6.QtWidgets import QApplication, QSystemTrayIcon, QMenu
-from PySide6.QtGui import QIcon
 from core.single_instance import acquire_single_instance
 
 
 # 全局引用，防止 gc 回收
-_tray_icon: QSystemTrayIcon | None = None
+_tray_icon: Any = None
 _pet_process: subprocess.Popen | None = None
 
 
@@ -46,6 +46,59 @@ def _resource_dir() -> Path:
     return Path(__file__).resolve().parent
 
 
+def _diagnostic_dir() -> Path:
+    if _is_frozen():
+        return Path(sys.executable).resolve().parent / "data" / "logs"
+    return Path(__file__).resolve().parent / "data" / "logs"
+
+
+def _write_crash_log(where: str) -> Path | None:
+    """Write a UTF-8 startup crash report for windowed release builds."""
+    try:
+        log_dir = _diagnostic_dir()
+        log_dir.mkdir(parents=True, exist_ok=True)
+        path = log_dir / "startup-crash.log"
+        path.write_text(
+            f"[{where}]\n"
+            f"executable={sys.executable}\n"
+            f"argv={sys.argv!r}\n\n"
+            f"{traceback.format_exc()}",
+            encoding="utf-8",
+        )
+        return path
+    except OSError:
+        return None
+
+
+def _write_runtime_log(filename: str, content: str) -> Path | None:
+    """Write a UTF-8 runtime diagnostic log beside the executable."""
+    try:
+        log_dir = _diagnostic_dir()
+        log_dir.mkdir(parents=True, exist_ok=True)
+        path = log_dir / filename
+        path.write_text(content, encoding="utf-8")
+        return path
+    except OSError:
+        return None
+
+
+def _show_startup_error(log_path: Path | None) -> None:
+    try:
+        from PySide6.QtWidgets import QApplication, QMessageBox
+
+        app = QApplication.instance() or QApplication([])
+        detail = f"\n\n诊断日志：{log_path}" if log_path else ""
+        QMessageBox.critical(
+            None,
+            "Amadeus 启动失败",
+            "Amadeus 启动时遇到错误。请把 data/logs/startup-crash.log 发给开发者。"
+            + detail,
+        )
+        app.quit()
+    except Exception:
+        pass
+
+
 # ============================================================
 # 函数：_start_pet_process()
 # 作用：拉起桌宠子进程（用 subprocess 启动另一个 Python 程序）。
@@ -60,17 +113,22 @@ def _start_pet_process() -> None:
     """启动桌宠进程。"""
     global _pet_process
     creation_flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
-    if _is_frozen():
-        _pet_process = subprocess.Popen(
-            [sys.executable, "--desktop-pet"],
-            creationflags=creation_flags,
-        )
-    else:
-        _pet_process = subprocess.Popen(
-            [sys.executable, str(Path(__file__).resolve().parent / "desktop_pet.py")],
-            cwd=str(Path(__file__).resolve().parent),
-            creationflags=creation_flags,
-        )
+    try:
+        if _is_frozen():
+            _pet_process = subprocess.Popen(
+                [sys.executable, "--desktop-pet"],
+                cwd=str(Path(sys.executable).resolve().parent),
+                creationflags=creation_flags,
+            )
+        else:
+            _pet_process = subprocess.Popen(
+                [sys.executable, str(Path(__file__).resolve().parent / "desktop_pet.py")],
+                cwd=str(Path(__file__).resolve().parent),
+                creationflags=creation_flags,
+            )
+    except Exception:
+        _write_runtime_log("pet-launch-error.log", traceback.format_exc())
+        raise
 
 
 # ============================================================
@@ -88,6 +146,9 @@ def main() -> int:
     global _tray_icon
     if not acquire_single_instance("Amadeus2026.Main"):
         return 0
+    from PySide6.QtWidgets import QApplication, QSystemTrayIcon, QMenu
+    from PySide6.QtGui import QIcon
+
     print("[main] Starting QApplication...", flush=True)
     app = QApplication(sys.argv)
     app.setApplicationName("Amadeus")
@@ -107,6 +168,11 @@ def main() -> int:
         if reason == QSystemTrayIcon.ActivationReason.Trigger else None
     )
     _tray_icon.show()
+    _write_runtime_log(
+        "startup.log",
+        f"executable={sys.executable}\nargv={sys.argv!r}\n"
+        f"frozen={_is_frozen()}\npet_pid={_pet_process.pid if _pet_process else None}\n",
+    )
     print("[main] Pet process started, entering event loop...", flush=True)
     return app.exec()
 
@@ -122,6 +188,8 @@ def main() -> int:
 # ============================================================
 def _on_quit() -> None:
     global _pet_process
+    from PySide6.QtWidgets import QApplication
+
     print("[main] Quitting...", flush=True)
     if _pet_process is not None and _pet_process.poll() is None:
         _pet_process.terminate()
@@ -149,26 +217,33 @@ def _show_windows() -> None:
 #   4. 都不是 → 我是托盘进程 → 跑本文件的 main
 # ============================================================
 if __name__ == "__main__":
-    # 冻结模式下 multiprocessing spawn 会重新执行本 exe（--multiprocessing-fork）。
-    # 实测 PyInstaller 6.21 bootloader 会把 worker argv 里的 --multiprocessing-fork
-    # 剥离（Python 层 sys.argv 只剩业务参数），freeze_support/is_forking 永远拦不住；
-    # worker 恢复协议一旦失败即落入下方 argv 分发 → 误入 pet_main → 无限递归 spawn
-    # （实测进程树每秒 +1）。
-    # mp.parent_process() 由 spawn 协议设置在进程对象上、不依赖 argv，是 frozen 下
-    # 判定「本进程是 mp worker」的唯一可靠手段：worker 绝不进入任何业务入口。
-    import multiprocessing as mp
-    mp.freeze_support()
-    if mp.parent_process() is not None:
-        # 漏拦的 worker：立即非零退出，让父进程通过 join/exitcode 感知 renderer
-        # 启动失败，而不是递归复制出整棵桌宠进程树。
-        sys.exit(1)
-    if "--voice-smoke-test" in sys.argv:
-        from core.tts_client import SpeechPlayer
+    try:
+        # 冻结模式下 multiprocessing spawn 会重新执行本 exe（--multiprocessing-fork）。
+        # 实测 PyInstaller 6.21 bootloader 会把 worker argv 里的 --multiprocessing-fork
+        # 剥离（Python 层 sys.argv 只剩业务参数），freeze_support/is_forking 永远拦不住；
+        # worker 恢复协议一旦失败即落入下方 argv 分发 → 误入 pet_main → 无限递归 spawn
+        # （实测进程树每秒 +1）。
+        # mp.parent_process() 由 spawn 协议设置在进程对象上、不依赖 argv，是 frozen 下
+        # 判定「本进程是 mp worker」的唯一可靠手段：worker 绝不进入任何业务入口。
+        import multiprocessing as mp
+        mp.freeze_support()
+        if mp.parent_process() is not None:
+            # 漏拦的 worker：立即非零退出，让父进程通过 join/exitcode 感知 renderer
+            # 启动失败，而不是递归复制出整棵桌宠进程树。
+            sys.exit(1)
+        if "--voice-smoke-test" in sys.argv:
+            from core.tts_client import SpeechPlayer
 
-        player = SpeechPlayer()
-        ok = player._speak_sapi_blocking("系统语音兜底正常。", language="zh")
-        sys.exit(0 if ok else 2)
-    if "--desktop-pet" in sys.argv:
-        from desktop_pet import main as pet_main
-        sys.exit(pet_main())
-    sys.exit(main())
+            player = SpeechPlayer()
+            ok = player._speak_sapi_blocking("系统语音兜底正常。", language="zh")
+            sys.exit(0 if ok else 2)
+        if "--desktop-pet" in sys.argv:
+            from desktop_pet import main as pet_main
+            sys.exit(pet_main())
+        sys.exit(main())
+    except SystemExit:
+        raise
+    except Exception:
+        path = _write_crash_log("main")
+        _show_startup_error(path)
+        sys.exit(1)

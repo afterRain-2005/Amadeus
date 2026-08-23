@@ -1,7 +1,6 @@
 # -*- mode: python ; coding: utf-8 -*-
-# Amadeus PyInstaller spec —— 版本号取自 core/version.py，产物名 Amadeus-<version>.exe
+# Amadeus PyInstaller spec —— 版本号取自 core/version.py，产物名 Amadeus-<version>/Amadeus-<version>.exe
 # 打包说明见 docs/build.md
-import os
 import sys
 from pathlib import Path
 
@@ -65,8 +64,7 @@ pyz = PYZ(a.pure)
 exe = EXE(
     pyz,
     a.scripts,
-    a.binaries,
-    a.datas,
+    [],
     [],
     name=f'Amadeus-{__version__}',
     debug=False,
@@ -74,19 +72,21 @@ exe = EXE(
     strip=False,
     upx=False,
     upx_exclude=[],
-    # 固定解压目录：避免每次启动在 %TEMP% 创建新目录重复解压
-    # 首次启动解压到此目录，后续启动直接复用，启动速度与 onedir 模式相当
-    # 目录结构：%LOCALAPPDATA%\Amadeus\Cache\<version>\
-    runtime_tmpdir=os.path.join(
-        os.environ.get('LOCALAPPDATA', os.path.expanduser('~')),
-        'Amadeus',
-        'Cache',
-        __version__,
-    ),
+    exclude_binaries=True,
     console=False,          # 无控制台窗口
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+)
+
+coll = COLLECT(
+    exe,
+    a.binaries,
+    a.datas,
+    strip=False,
+    upx=False,
+    upx_exclude=[],
+    name=f'Amadeus-{__version__}',
 )
