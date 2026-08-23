@@ -6,9 +6,7 @@ import types
 
 import pytest
 
-from core import screen_context
-
-
+from core.vision import screen_context
 @pytest.fixture(autouse=True)
 def clean_cache():
     screen_context.reset_screen_context_cache()
@@ -95,7 +93,7 @@ def test_failure_cached_short_term(monkeypatch):
 
 
 def test_build_screen_prompt(monkeypatch):
-    import core.screen_context as sc
+    import core.vision.screen_context as sc
     # 禁用 → 空串（不触发 describe）
     assert sc.build_screen_prompt({"screen_awareness": {"enabled": False}}) == ""
     monkeypatch.setattr(

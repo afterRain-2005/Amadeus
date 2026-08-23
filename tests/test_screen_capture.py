@@ -1,11 +1,11 @@
 # tests/test_screen_capture.py
 from unittest.mock import MagicMock, patch
-from core.screen_capture import ScreenCapturer
+from core.vision.screen_capture import ScreenCapturer
 
 def test_capturer_starts_and_stops():
     """启动后定时截帧，停止后线程退出。"""
     cap = ScreenCapturer(interval_ms=100)
-    with patch("core.screen_capture.mss") as mock_mss:
+    with patch("core.vision.screen_capture.mss") as mock_mss:
         mock_sct = MagicMock()
         mock_mss.mss.return_value.__enter__.return_value = mock_sct
         mock_sct.grab.return_value = MagicMock()  # 假帧
@@ -17,7 +17,7 @@ def test_capturer_starts_and_stops():
 def test_latest_frame_caches_only_newest():
     """仅缓存最新帧，不存历史（省内存）。"""
     cap = ScreenCapturer(interval_ms=50)
-    with patch("core.screen_capture.mss") as mock_mss:
+    with patch("core.vision.screen_capture.mss") as mock_mss:
         mock_sct = MagicMock()
         mock_mss.mss.return_value.__enter__.return_value = mock_sct
         frame1, frame2 = MagicMock(name="frame1"), MagicMock(name="frame2")

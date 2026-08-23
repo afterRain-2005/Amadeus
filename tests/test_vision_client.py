@@ -5,7 +5,7 @@ from unittest.mock import patch, MagicMock
 
 from PIL import Image
 
-from core.vision_client import describe_screen, frame_to_data_url
+from core.vision.vision_client import describe_screen, frame_to_data_url
 
 def test_describe_screen_returns_text():
     """GPT-4o 视觉调用返回屏幕描述文本。"""
@@ -14,7 +14,7 @@ def test_describe_screen_returns_text():
     fake_response.json.return_value = {
         "choices": [{"message": {"content": "用户在 VS Code 编辑 Python 文件"}}]
     }
-    with patch("core.vision_client.httpx.post", return_value=fake_response) as mock_post:
+    with patch("core.vision.vision_client.httpx.post", return_value=fake_response) as mock_post:
         text = describe_screen(
             image_bytes=b"\x89PNG fake",
             endpoint="https://api.openai.com/v1",
@@ -26,7 +26,7 @@ def test_describe_screen_returns_text():
 
 def test_describe_screen_failure_returns_empty():
     """视觉调用失败返回空字符串（不阻塞主管线）。"""
-    with patch("core.vision_client.httpx.post", side_effect=Exception("network")):
+    with patch("core.vision.vision_client.httpx.post", side_effect=Exception("network")):
         text = describe_screen(b"x", "https://api.openai.com/v1", "sk-test", "gpt-4o")
     assert text == ""
 

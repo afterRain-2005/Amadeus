@@ -18,7 +18,7 @@ from __future__ import annotations
 import threading
 import time
 
-from core.vision_client import describe_screen
+from core.vision.vision_client import describe_screen
 
 # 进程内缓存：{"text": str, "at": float} + 锁（AgentTask 在线程池里跑）
 _cache = {"text": "", "at": 0.0}

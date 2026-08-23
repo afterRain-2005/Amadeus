@@ -108,7 +108,7 @@ class AgentTask(QRunnable):
     )
         # 聊天屏幕感知：开启时附加当前屏幕一句话描述（缓存内复用，失败静默）
         try:
-            from core.screen_context import build_screen_prompt
+            from core.vision.screen_context import build_screen_prompt
             screen_prompt = build_screen_prompt(config)
             if screen_prompt:
                 self.inject_system_prompt = (

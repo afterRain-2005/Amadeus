@@ -33,9 +33,9 @@ from config import PHONE_DEFAULTS, VAD_PARAMS, get_character_by_id
 from core.llm.agent_client import _load_soul_md
 from core.voice.asr_client import encode_wav, transcribe
 from core.emotion_parser import parse_reply
-from core.screen_capture import ScreenCapturer
+from core.vision.screen_capture import ScreenCapturer
 from core.voice.vad import VADDetector
-from core.vision_client import describe_screen
+from core.vision.vision_client import describe_screen
 
 
 CONNECTING_MS = 1300  # "正在接通"动画时长（移植原项目）
