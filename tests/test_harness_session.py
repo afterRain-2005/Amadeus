@@ -3,8 +3,8 @@ from __future__ import annotations
 
 
 def test_terminal_harness_session_id_reaches_bridge(monkeypatch):
-    import core.backend_router as router
-    import core.harness_bridge as bridge
+    import core.llm.backend_router as router
+    import core.llm.harness_bridge as bridge
 
     captured = {}
 

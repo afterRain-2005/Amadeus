@@ -6,8 +6,8 @@ from unittest.mock import MagicMock
 import httpx
 import pytest
 
-from core import openclaw_client
-from core.openclaw_client import (
+from core.llm import openclaw_client
+from core.llm.openclaw_client import (
     ensure_gateway,
     merge_config,
     probe_gateway,

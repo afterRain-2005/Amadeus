@@ -300,7 +300,7 @@ def test_handle_utterance_fallback_no_separator():
 
 def test_stream_llm_injects_phone_short_reply_prompt():
     ctrl = _make_controller()
-    with patch("core.backend_router.route_and_send", return_value=("reply", "chat")) as mock_route:
+    with patch("core.llm.backend_router.route_and_send", return_value=("reply", "chat")) as mock_route:
         assert ctrl._stream_llm("hello") == "reply"
     _, kwargs = mock_route.call_args
     inject = kwargs["inject_system_prompt"]
@@ -313,7 +313,7 @@ def test_stream_llm_no_token_cap():
     """电话模式不设 max_tokens：推理模型思考即耗 token，上限会把正文整段
     掐掉 → 空回复（实测 mimo-v2.5 + 300 tokens 回复为空）。长度由 prompt 约束。"""
     ctrl = _make_controller()
-    with patch("core.backend_router.route_and_send", return_value=("reply", "chat")) as mock_route:
+    with patch("core.llm.backend_router.route_and_send", return_value=("reply", "chat")) as mock_route:
         ctrl._stream_llm("hello")
     _, kwargs = mock_route.call_args
     assert kwargs["response_max_tokens"] is None

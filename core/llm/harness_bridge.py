@@ -367,7 +367,7 @@ def run_harness_turn(
                 raise
 
     on_status("Harness SDK 不可用，使用 DeepSeek 直连")
-    from core.deepseek_client import run_deepseek_turn
+    from core.llm.deepseek_client import run_deepseek_turn
 
     return run_deepseek_turn(
         endpoint=endpoint or "http://127.0.0.1:8642",

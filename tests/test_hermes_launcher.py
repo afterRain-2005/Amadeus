@@ -4,8 +4,8 @@ from unittest.mock import MagicMock
 
 import httpx
 
-from core import hermes_launcher
-from core.hermes_launcher import ensure_gateway, probe_health, read_profile_api_key
+from core.llm import hermes_launcher
+from core.llm.hermes_launcher import ensure_gateway, probe_health, read_profile_api_key
 
 
 def test_read_profile_api_key(tmp_path, monkeypatch):

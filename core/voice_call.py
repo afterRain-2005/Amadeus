@@ -30,7 +30,7 @@ import numpy as np
 from PySide6.QtCore import QObject, QTimer, Signal
 
 from config import PHONE_DEFAULTS, VAD_PARAMS, get_character_by_id
-from core.agent_client import _load_soul_md
+from core.llm.agent_client import _load_soul_md
 from core.asr_client import encode_wav, transcribe
 from core.emotion_parser import parse_reply
 from core.screen_capture import ScreenCapturer
@@ -637,7 +637,7 @@ class VoiceCallController(QObject):
         这条路径会沿用桌面端同一套路由、审批、工具和流式 delta 处理，
         让电话模式不再绕开 harness 内核。
         """
-        from core.backend_router import route_and_send
+        from core.llm.backend_router import route_and_send
         from core.companion.call_style import build_phone_short_reply_prompt
         reply, _backend = route_and_send(
             config=self._config,

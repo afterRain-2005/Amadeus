@@ -31,7 +31,7 @@ def test_operate_gui_disabled_returns_hint(monkeypatch):
 
 def test_operate_gui_runtime_config_override(monkeypatch):
     """data/config.json 的 openclaw 运行时覆盖生效（而非 config.py 静态默认值）。"""
-    import core.openclaw_client as oc
+    import core.llm.openclaw_client as oc
     _patch_runtime_openclaw(monkeypatch, {
         "enabled": True, "base_url": "http://127.0.0.1:19999",
         "token": "rt-token", "model": "openclaw/custom", "timeout": 5,
@@ -51,7 +51,7 @@ def test_operate_gui_runtime_config_override(monkeypatch):
 
 
 def test_operate_gui_gateway_unreachable(monkeypatch):
-    import core.openclaw_client as oc
+    import core.llm.openclaw_client as oc
     _patch_runtime_openclaw(monkeypatch, {"enabled": True, "autostart": False})
     monkeypatch.setattr(oc, "probe_gateway", lambda *a, **kw: False)
     result = execute_tool("operate_gui", {"task": "复杂任务"})
@@ -59,7 +59,7 @@ def test_operate_gui_gateway_unreachable(monkeypatch):
 
 
 def test_operate_gui_status_passthrough(monkeypatch):
-    import core.openclaw_client as oc
+    import core.llm.openclaw_client as oc
     _patch_runtime_openclaw(monkeypatch, {"enabled": True, "autostart": False})
     monkeypatch.setattr(oc, "probe_gateway", lambda *a, **kw: True)
     client = MagicMock()

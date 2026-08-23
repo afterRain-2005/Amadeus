@@ -137,13 +137,13 @@ def route_and_send(
     harness_session_id: str | None = None,
 ) -> tuple[str, str]:
     global _codex_session_started
-    from core.agent_client import run_local_run
-    from core.codex_client import ensure_agents_md, run_codex_turn
-    from core.deepseek_client import run_deepseek_turn
-    from core.harness_bridge import run_harness_turn
-    from core.hermes_launcher import ensure_gateway, read_profile_api_key
+    from core.llm.agent_client import run_local_run
+    from core.llm.codex_client import ensure_agents_md, run_codex_turn
+    from core.llm.deepseek_client import run_deepseek_turn
+    from core.llm.harness_bridge import run_harness_turn
+    from core.llm.hermes_launcher import ensure_gateway, read_profile_api_key
     from core.memory import merge_memories, recall, remember_turn
-    from core.openclaw_client import merge_config as merge_openclaw_config
+    from core.llm.openclaw_client import merge_config as merge_openclaw_config
     from core.storage import APP_DIR
 
     router = {**AGENT_ROUTER_DEFAULTS, **(config.get("agent_router") or {})}
@@ -170,7 +170,7 @@ def route_and_send(
     if system_role == "companion":
         route = "chat"
     elif auto_route:
-        from core.ollama_router import route_with_ollama
+        from core.llm.ollama_router import route_with_ollama
         ollama_cfg = dict(router.get("ollama") or {})
         try:
             ollama_timeout = float(ollama_cfg.get("timeout", 30))
@@ -206,7 +206,7 @@ def route_and_send(
         api_key = str(hermes_cfg.get("api_key") or "") or (read_profile_api_key(str(hermes_cfg.get("profile"))) or "")
         if ensure_gateway(base_url=base_url, api_key=api_key, profile=str(hermes_cfg.get("profile"))):
             try:
-                from core.agent_client import run_hermes_run
+                from core.llm.agent_client import run_hermes_run
                 instructions = KURISU_OUTPUT_FORMAT
                 if route_memories:
                     memory_text = "\n".join(str(item.get("content", "")) for item in route_memories[-8:])
@@ -233,8 +233,8 @@ def route_and_send(
 
     elif route == "openclaw":
         # 整轮对话委托 OpenClaw 代理（skills/浏览器/CUA 等能力由其 agent loop 处理）
-        from core.openclaw_client import ensure_gateway as ensure_openclaw_gateway
-        from core.openclaw_client import run_openclaw_turn
+        from core.llm.openclaw_client import ensure_gateway as ensure_openclaw_gateway
+        from core.llm.openclaw_client import run_openclaw_turn
         base_url = str(openclaw_cfg.get("base_url", "http://127.0.0.1:18789"))
         token = str(openclaw_cfg.get("token", ""))
         instructions = KURISU_OUTPUT_FORMAT

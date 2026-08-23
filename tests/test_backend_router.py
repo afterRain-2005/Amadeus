@@ -2,8 +2,8 @@
 """backend_router：分类矩阵 + 分发/降级链（monkeypatch 后端函数，不打真 API）。"""
 import pytest
 
-from core import backend_router
-from core.backend_router import classify_input
+from core.llm import backend_router
+from core.llm.backend_router import classify_input
 
 
 @pytest.mark.parametrize("text,expected", [
@@ -43,7 +43,7 @@ def _cfg(mode, **kw):
 
 
 def test_route_chat_uses_local(monkeypatch):
-    import core.agent_client as ac
+    import core.llm.agent_client as ac
     monkeypatch.setattr(ac, "run_local_run", lambda **kw: "本地回复")
     reply, backend = backend_router.route_and_send(
         config=_cfg("chat"), input_text="你好", soul_md="soul")
@@ -51,8 +51,8 @@ def test_route_chat_uses_local(monkeypatch):
 
 
 def test_route_hermes_ok(monkeypatch):
-    import core.agent_client as ac
-    import core.hermes_launcher as hl
+    import core.llm.agent_client as ac
+    import core.llm.hermes_launcher as hl
     monkeypatch.setattr(hl, "read_profile_api_key", lambda p: "hk")
     monkeypatch.setattr(hl, "ensure_gateway", lambda **kw: True)
     monkeypatch.setattr(ac, "run_hermes_run", lambda **kw: "hermes 回复")
@@ -62,7 +62,7 @@ def test_route_hermes_ok(monkeypatch):
 
 
 def test_route_openclaw_ok(monkeypatch):
-    import core.openclaw_client as oc
+    import core.llm.openclaw_client as oc
     seen = {}
 
     def fake_turn(**kw):
@@ -83,8 +83,8 @@ def test_route_openclaw_ok(monkeypatch):
 
 
 def test_route_openclaw_gateway_down_fallback(monkeypatch):
-    import core.agent_client as ac
-    import core.openclaw_client as oc
+    import core.llm.agent_client as ac
+    import core.llm.openclaw_client as oc
     monkeypatch.setattr(oc, "ensure_gateway", lambda **kw: False)
     monkeypatch.setattr(ac, "run_local_run", lambda **kw: "本地回复")
     statuses = []
@@ -96,7 +96,7 @@ def test_route_openclaw_gateway_down_fallback(monkeypatch):
 
 
 def test_route_deepseek_ok(monkeypatch):
-    import core.deepseek_client as dc
+    import core.llm.deepseek_client as dc
     seen = {}
 
     def fake_turn(**kw):
@@ -114,7 +114,7 @@ def test_route_deepseek_ok(monkeypatch):
 
 
 def test_route_harness_passes_runtime_bin(monkeypatch):
-    import core.harness_bridge as hb
+    import core.llm.harness_bridge as hb
     seen = {}
 
     def fake_turn(**kw):
@@ -139,8 +139,8 @@ def test_route_harness_passes_runtime_bin(monkeypatch):
 
 
 def test_route_hermes_gateway_down_fallback(monkeypatch):
-    import core.agent_client as ac
-    import core.hermes_launcher as hl
+    import core.llm.agent_client as ac
+    import core.llm.hermes_launcher as hl
     monkeypatch.setattr(hl, "read_profile_api_key", lambda p: "hk")
     monkeypatch.setattr(hl, "ensure_gateway", lambda **kw: False)
     monkeypatch.setattr(ac, "run_local_run", lambda **kw: "本地回复")
@@ -153,8 +153,8 @@ def test_route_hermes_gateway_down_fallback(monkeypatch):
 
 
 def test_route_hermes_runerror_fallback(monkeypatch):
-    import core.agent_client as ac
-    import core.hermes_launcher as hl
+    import core.llm.agent_client as ac
+    import core.llm.hermes_launcher as hl
     monkeypatch.setattr(hl, "read_profile_api_key", lambda p: "hk")
     monkeypatch.setattr(hl, "ensure_gateway", lambda **kw: True)
 
@@ -169,7 +169,7 @@ def test_route_hermes_runerror_fallback(monkeypatch):
 
 
 def test_route_codex(monkeypatch, tmp_path):
-    import core.codex_client as cc
+    import core.llm.codex_client as cc
     monkeypatch.setattr(backend_router, "_codex_session_started", False)
     monkeypatch.setattr(cc, "ensure_agents_md", lambda ws, s, o: ws / "AGENTS.md")
     seen = {}
@@ -191,7 +191,7 @@ def test_route_codex(monkeypatch, tmp_path):
 
 
 def test_route_auto_uses_classify(monkeypatch):
-    import core.agent_client as ac
+    import core.llm.agent_client as ac
     monkeypatch.setattr(ac, "run_local_run", lambda **kw: "ok")
     monkeypatch.setattr(backend_router, "classify_input", lambda text, **kw: "chat")
     reply, backend = backend_router.route_and_send(
@@ -200,7 +200,7 @@ def test_route_auto_uses_classify(monkeypatch):
 
 
 def test_route_gui_nudge_local(monkeypatch):
-    import core.agent_client as ac
+    import core.llm.agent_client as ac
     seen = {}
 
     def fake_local(**kw):

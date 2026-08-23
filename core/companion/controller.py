@@ -124,7 +124,7 @@ class CompanionController:
         避免 LLM 失败时 storage 记录“从未说出口的问候”导致每日上限虚高。
         """
         # 延迟导入避免循环依赖
-        from core.backend_router import route_and_send
+        from core.llm.backend_router import route_and_send
         inject = KURISU_PROACTIVE_PASS_THROUGH.format(text=decision.text)
         try:
             reply, _backend = route_and_send(

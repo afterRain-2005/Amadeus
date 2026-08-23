@@ -9,7 +9,7 @@ import time
 
 import pytest
 
-from core.codex_client import build_codex_input, ensure_agents_md, parse_event_line, run_codex_turn
+from core.llm.codex_client import build_codex_input, ensure_agents_md, parse_event_line, run_codex_turn
 
 
 class FakeProc:

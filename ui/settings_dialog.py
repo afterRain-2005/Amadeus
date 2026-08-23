@@ -806,7 +806,7 @@ class SettingsDialog(QDialog):
     def _probe_hermes(self) -> None:
         """同步探测 Hermes 网关 /health（2s 超时，设置页内可接受）。"""
         from config import HERMES_DEFAULTS
-        from core.hermes_launcher import probe_health, read_profile_api_key
+        from core.llm.hermes_launcher import probe_health, read_profile_api_key
         hermes_cfg = {**HERMES_DEFAULTS, **(load_config().get("hermes") or {})}
         base_url = str(hermes_cfg.get("base_url") or "http://127.0.0.1:8642")
         api_key = str(hermes_cfg.get("api_key") or "") or (read_profile_api_key() or "")
@@ -819,7 +819,7 @@ class SettingsDialog(QDialog):
     def _probe_openclaw(self) -> None:
         """同步探测 OpenClaw 网关 /v1/models（2s 超时，设置页内可接受）。"""
         from config import OPENCLAW_DEFAULTS
-        from core.openclaw_client import probe_gateway
+        from core.llm.openclaw_client import probe_gateway
         cfg = {**OPENCLAW_DEFAULTS, **(load_config().get("openclaw") or {})}
         # 优先用输入框当前值，允许保存前先试新地址/token
         base_url = self.openclaw_base_url.text().strip() or str(cfg.get("base_url"))

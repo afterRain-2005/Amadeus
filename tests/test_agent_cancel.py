@@ -2,9 +2,9 @@
 import json
 import threading
 
-import core.agent_client as ac
-from core import backend_router
-from core.agent_client import _stream_turn_direct, run_local_run
+import core.llm.agent_client as ac
+from core.llm import backend_router
+from core.llm.agent_client import _stream_turn_direct, run_local_run
 
 
 class _FakeResponse:

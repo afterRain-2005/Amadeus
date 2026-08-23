@@ -10,7 +10,7 @@ import threading
 from PySide6.QtCore import QObject, QRunnable, Signal
 
 from config import get_character_by_id
-from core.agent_client import _load_soul_md
+from core.llm.agent_client import _load_soul_md
 from core.storage import load_config
 
 
@@ -118,7 +118,7 @@ class AgentTask(QRunnable):
         except Exception:
             pass
         try:
-            from core.backend_router import route_and_send
+            from core.llm.backend_router import route_and_send
             reply, _backend = route_and_send(
                 config=config,
                 input_text=self.history[-1]["content"],

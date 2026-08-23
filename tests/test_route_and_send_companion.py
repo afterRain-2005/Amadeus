@@ -7,7 +7,7 @@
 """
 from unittest.mock import patch, MagicMock
 
-import core.backend_router as router
+import core.llm.backend_router as router
 
 
 def test_route_and_send_companion_skips_classify_and_history():
@@ -27,8 +27,8 @@ def test_route_and_send_companion_skips_classify_and_history():
     history = [{"role": "user", "content": "earlier"}]
 
     with patch.object(router, "classify_input") as mock_classify, \
-         patch("core.agent_client.run_local_run", side_effect=fake_run_local_run), \
-         patch("core.hermes_launcher.ensure_gateway", return_value=False):
+         patch("core.llm.agent_client.run_local_run", side_effect=fake_run_local_run), \
+         patch("core.llm.hermes_launcher.ensure_gateway", return_value=False):
         reply, backend = router.route_and_send(
             config=config, input_text="主动问候文本", soul_md="SOUL",
             conversation_history=history,
@@ -59,8 +59,8 @@ def test_route_and_send_default_user_mode_unchanged():
     history = [{"role": "user", "content": "earlier"}]
 
     with patch.object(router, "classify_input", return_value="chat") as mock_classify, \
-         patch("core.agent_client.run_local_run", side_effect=fake_run_local_run), \
-         patch("core.hermes_launcher.ensure_gateway", return_value=False):
+         patch("core.llm.agent_client.run_local_run", side_effect=fake_run_local_run), \
+         patch("core.llm.hermes_launcher.ensure_gateway", return_value=False):
         router.route_and_send(
             config=config, input_text="hello", soul_md="SOUL",
             conversation_history=history,
@@ -81,8 +81,8 @@ def test_route_and_send_inject_system_prompt_passes_through():
 
     config = {"endpoint": "http://x", "api_key": "k", "model": "m"}
 
-    with patch("core.agent_client.run_local_run", side_effect=fake_run_local_run), \
-         patch("core.hermes_launcher.ensure_gateway", return_value=False):
+    with patch("core.llm.agent_client.run_local_run", side_effect=fake_run_local_run), \
+         patch("core.llm.hermes_launcher.ensure_gateway", return_value=False):
         router.route_and_send(
             config=config, input_text="主动问候", soul_md="SOUL",
             conversation_history=[],

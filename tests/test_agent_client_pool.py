@@ -6,7 +6,7 @@ _stream_turn_direct 原先每轮用顶层 httpx.stream() 新建连接，每轮�
 """
 from __future__ import annotations
 
-import core.agent_client as ac
+import core.llm.agent_client as ac
 
 
 def test_direct_client_is_shared_singleton():

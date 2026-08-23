@@ -52,7 +52,7 @@ def _run_pipeline(transcribe_text="你好"):
     synth_mock = MagicMock(side_effect=_fake_aliyun_stream)
     with patch("core.voice_call.encode_wav"), \
          patch.object(ctrl, "_transcribe", return_value=transcribe_text), \
-         patch("core.backend_router.route_and_send", side_effect=_fake_route_and_send), \
+         patch("core.llm.backend_router.route_and_send", side_effect=_fake_route_and_send), \
          patch.object(ctrl._tts, "_get_tts_provider", return_value="aliyun"), \
          patch.object(ctrl._tts, "_check_provider_available", return_value=True), \
          patch.object(ctrl._tts, "_synthesize_aliyun_stream", synth_mock), \

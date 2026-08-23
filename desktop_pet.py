@@ -933,7 +933,7 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
                 return
             task.cancel()
             try:
-                from core.harness_bridge import cancel_active_run
+                from core.llm.harness_bridge import cancel_active_run
                 cancel_active_run()
             except Exception:
                 pass

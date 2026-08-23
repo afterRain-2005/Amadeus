@@ -281,7 +281,7 @@ def _operate_gui(arguments: dict, on_status=None) -> dict:
     task = arguments.get("task", "").strip()
     if not task:
         return {"text": "Empty GUI task."}
-    from core.openclaw_client import merge_config, run_gui_task
+    from core.llm.openclaw_client import merge_config, run_gui_task
     cfg = merge_config()
     return {"text": run_gui_task(cfg, task, on_status=on_status or (lambda _: None))}
 

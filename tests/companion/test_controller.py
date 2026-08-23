@@ -203,7 +203,7 @@ def test_handle_signal_user_cooldown_blocks():
     with patch("core.companion.storage.record_greeting", mocks["record_greeting"]), \
          patch("core.companion.storage.last_greeting_ts", mocks["last_greeting_ts"]), \
          patch("core.companion.storage.greeting_count_today", mocks["greeting_count_today"]), \
-         patch("core.backend_router.route_and_send") as mock_router:
+         patch("core.llm.backend_router.route_and_send") as mock_router:
 
         ctrl.handle_signal(_snap(idle_seconds=1000), local_hour=14)
 
@@ -226,7 +226,7 @@ def test_handle_signal_user_cooldown_expired_allows():
     with patch("core.companion.storage.record_greeting", mocks["record_greeting"]), \
          patch("core.companion.storage.last_greeting_ts", mocks["last_greeting_ts"]), \
          patch("core.companion.storage.greeting_count_today", mocks["greeting_count_today"]), \
-         patch("core.backend_router.route_and_send", return_value=("reply", "chat")):
+         patch("core.llm.backend_router.route_and_send", return_value=("reply", "chat")):
 
         ctrl.handle_signal(_snap(idle_seconds=1000), local_hour=14)
 
@@ -319,7 +319,7 @@ def test_handle_signal_global_cooldown_expired_allows():
     with patch("core.companion.storage.record_greeting", mocks["record_greeting"]), \
          patch("core.companion.storage.last_greeting_ts", mocks["last_greeting_ts"]), \
          patch("core.companion.storage.greeting_count_today", mocks["greeting_count_today"]), \
-         patch("core.backend_router.route_and_send", return_value=("reply", "chat")):
+         patch("core.llm.backend_router.route_and_send", return_value=("reply", "chat")):
 
         ctrl.handle_signal(_snap(idle_seconds=1000), local_hour=14)
 
@@ -336,7 +336,7 @@ def test_handle_signal_greeting_count_today_exception_degrades_to_zero():
     with patch("core.companion.storage.greeting_count_today", side_effect=Exception("DB locked")), \
          patch("core.companion.storage.last_greeting_ts", return_value=None), \
          patch("core.companion.storage.record_greeting", return_value=1), \
-         patch("core.backend_router.route_and_send", return_value=("reply", "chat")) as mock_router:
+         patch("core.llm.backend_router.route_and_send", return_value=("reply", "chat")) as mock_router:
 
         ctrl.handle_signal(_snap(idle_seconds=1000), local_hour=14)
 
@@ -351,7 +351,7 @@ def test_handle_signal_last_greeting_ts_exception_degrades_to_none():
     with patch("core.companion.storage.greeting_count_today", return_value=0), \
          patch("core.companion.storage.last_greeting_ts", side_effect=Exception("DB locked")), \
          patch("core.companion.storage.record_greeting", return_value=1), \
-         patch("core.backend_router.route_and_send", return_value=("reply", "chat")) as mock_router:
+         patch("core.llm.backend_router.route_and_send", return_value=("reply", "chat")) as mock_router:
 
         ctrl.handle_signal(_snap(idle_seconds=1000), local_hour=14)
 
@@ -366,7 +366,7 @@ def test_handle_signal_evaluator_returns_none_no_speak():
     with patch("core.companion.storage.greeting_count_today", return_value=0), \
          patch("core.companion.storage.last_greeting_ts", return_value=None), \
          patch("core.companion.controller.Evaluator.evaluate", return_value=None), \
-         patch("core.backend_router.route_and_send") as mock_router:
+         patch("core.llm.backend_router.route_and_send") as mock_router:
 
         ctrl.handle_signal(_snap(idle_seconds=10), local_hour=14)
 
@@ -395,7 +395,7 @@ def test_speak_records_greeting_after_route_success():
         return 1
 
     with patch("core.companion.storage.record_greeting", side_effect=fake_record), \
-         patch("core.backend_router.route_and_send", side_effect=fake_router), \
+         patch("core.llm.backend_router.route_and_send", side_effect=fake_router), \
          patch.object(ctrl, "_get_config", return_value={}), \
          patch.object(ctrl, "_get_soul_md", return_value="soul"):
 
@@ -412,7 +412,7 @@ def test_speak_storage_failure_does_not_block_reply():
     on_finished = MagicMock()
 
     with patch("core.companion.storage.record_greeting", side_effect=Exception("DB error")), \
-         patch("core.backend_router.route_and_send", return_value=("reply", "chat")), \
+         patch("core.llm.backend_router.route_and_send", return_value=("reply", "chat")), \
          patch.object(ctrl, "_get_config", return_value={}), \
          patch.object(ctrl, "_get_soul_md", return_value="soul"):
 
@@ -433,7 +433,7 @@ def test_speak_route_failure_no_record():
     ctrl = _make_controller()
 
     with patch("core.companion.storage.record_greeting") as mock_record, \
-         patch("core.backend_router.route_and_send", side_effect=Exception("LLM error")), \
+         patch("core.llm.backend_router.route_and_send", side_effect=Exception("LLM error")), \
          patch.object(ctrl, "_get_config", return_value={}), \
          patch.object(ctrl, "_get_soul_md", return_value="soul"):
 
@@ -452,7 +452,7 @@ def test_speak_passes_on_delta_and_on_status():
     on_status = MagicMock()
 
     with patch("core.companion.storage.record_greeting", return_value=1), \
-         patch("core.backend_router.route_and_send", return_value=("reply", "chat")) as mock_router, \
+         patch("core.llm.backend_router.route_and_send", return_value=("reply", "chat")) as mock_router, \
          patch.object(ctrl, "_get_config", return_value={}), \
          patch.object(ctrl, "_get_soul_md", return_value="soul"):
 
@@ -477,7 +477,7 @@ def test_speak_uses_companion_system_role():
     ctrl = _make_controller()
 
     with patch("core.companion.storage.record_greeting", return_value=1), \
-         patch("core.backend_router.route_and_send", return_value=("reply", "chat")) as mock_router, \
+         patch("core.llm.backend_router.route_and_send", return_value=("reply", "chat")) as mock_router, \
          patch.object(ctrl, "_get_config", return_value={}), \
          patch.object(ctrl, "_get_soul_md", return_value="soul"):
 
@@ -496,7 +496,7 @@ def test_speak_injects_pass_through_prompt():
     ctrl = _make_controller()
 
     with patch("core.companion.storage.record_greeting", return_value=1), \
-         patch("core.backend_router.route_and_send", return_value=("reply", "chat")) as mock_router, \
+         patch("core.llm.backend_router.route_and_send", return_value=("reply", "chat")) as mock_router, \
          patch.object(ctrl, "_get_config", return_value={}), \
          patch.object(ctrl, "_get_soul_md", return_value="soul"):
 
@@ -739,7 +739,7 @@ def test_handle_signal_passes_idle_state_as_signal_type():
     with patch("core.companion.storage.greeting_count_today", return_value=0), \
          patch("core.companion.storage.last_greeting_ts", return_value=None), \
          patch("core.companion.controller.Evaluator.evaluate") as mock_eval, \
-         patch("core.backend_router.route_and_send", return_value=("reply", "chat")):
+         patch("core.llm.backend_router.route_and_send", return_value=("reply", "chat")):
 
         ctrl.handle_signal(_snap(idle_state="idle"), local_hour=14)
 
@@ -756,7 +756,7 @@ def test_handle_signal_default_signal_type_when_idle_state_empty():
     with patch("core.companion.storage.greeting_count_today", return_value=0), \
          patch("core.companion.storage.last_greeting_ts", return_value=None), \
          patch("core.companion.controller.Evaluator.evaluate") as mock_eval, \
-         patch("core.backend_router.route_and_send", return_value=("reply", "chat")):
+         patch("core.llm.backend_router.route_and_send", return_value=("reply", "chat")):
 
         ctrl.handle_signal(_snap(idle_state=""), local_hour=14)
 

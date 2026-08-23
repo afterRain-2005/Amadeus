@@ -11,7 +11,7 @@ def _notification(event_type: str, data: dict):
 
 
 def test_event_adapter_streams_chunks_without_replaying_final_message():
-    from core.harness_bridge import _HarnessEventAdapter
+    from core.llm.harness_bridge import _HarnessEventAdapter
 
     deltas: list[str] = []
     adapter = _HarnessEventAdapter(
@@ -34,7 +34,7 @@ def test_event_adapter_streams_chunks_without_replaying_final_message():
 
 
 def test_event_adapter_pairs_real_tool_result_schema():
-    from core.harness_bridge import _HarnessEventAdapter
+    from core.llm.harness_bridge import _HarnessEventAdapter
 
     events: list[dict] = []
     statuses: list[str] = []
@@ -72,7 +72,7 @@ def test_event_adapter_pairs_real_tool_result_schema():
 
 
 def test_event_adapter_surfaces_tool_error():
-    from core.harness_bridge import _HarnessEventAdapter
+    from core.llm.harness_bridge import _HarnessEventAdapter
 
     events: list[dict] = []
     adapter = _HarnessEventAdapter(
