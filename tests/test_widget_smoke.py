@@ -80,3 +80,30 @@ def test_glitch_label_glitch_frames_cycle(qapp):
     label._glitch_frames = 2
     label._advance()
     assert label._glitch_frames == 1
+
+
+# ===== ui/widgets/agent_task.py（Step G 提取） =====
+
+
+def test_agent_task_signals_and_cancel(qapp):
+    from ui.widgets.agent_task import AgentSignals, AgentTask
+
+    task = AgentTask([{"role": "user", "content": "hi"}])
+    assert task.cancel_event.is_set() is False
+    task.cancel()
+    assert task.cancel_event.is_set() is True
+    # 7 路信号齐全（status/delta/finished/failed/cancelled/tool_event/confirmation）
+    for sig in ("status", "delta", "finished", "failed", "cancelled", "tool_event", "confirmation"):
+        assert hasattr(task.signals, sig), sig
+    AgentSignals()  # 可独立实例化
+
+
+def test_agent_task_character_injection(qapp):
+    from ui.widgets.agent_task import AgentTask
+
+    class FakeCharacter:
+        personality = "FAKE_PERSONALITY"
+
+    task = AgentTask([{"role": "user", "content": "hi"}], character=FakeCharacter())
+    assert task._character.personality == "FAKE_PERSONALITY"
+    assert AgentTask([{"role": "user", "content": "hi"}])._character is None
