@@ -343,7 +343,7 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
 
             self.tray = QSystemTrayIcon(self)
             # v4：tray 图标用项目 logo 缩略；缺失时回落红色方块（避免空图标）
-            icon_pixmap = QPixmap(str(ROOT / "amadeus-logo-TM.png"))
+            icon_pixmap = QPixmap(str(ROOT / "resources" / "amadeus-logo-TM.png"))
             if icon_pixmap.isNull():
                 icon_pixmap = QPixmap(24, 24)
                 icon_pixmap.fill(QColor(210, 115, 138))
@@ -375,7 +375,7 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             btn.setToolTip("点击打开红莉栖")
             btn.setCursor(Qt.PointingHandCursor)
             # 加载 amadeus logo 作为按钮图标（44×44，居中留 2px 边距）
-            _logo_path = ROOT / "amadeus-logo-TM.png"
+            _logo_path = ROOT / "resources" / "amadeus-logo-TM.png"
             if _logo_path.exists():
                 _logo_pix = QPixmap(str(_logo_path)).scaled(
                     44, 44, Qt.KeepAspectRatio, Qt.SmoothTransformation
