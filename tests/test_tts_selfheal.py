@@ -10,7 +10,7 @@ def _make_player():
     但本测试套件 mock 的是 _check_kurisu/_speak_kurisu，需要强制 gpt_sovits
     路径才能让 _check_provider_available 调到 _check_kurisu。
     """
-    from core.tts_client import SpeechPlayer
+    from core.voice.tts_client import SpeechPlayer
     player = SpeechPlayer()
     # 覆盖实例方法：_get_tts_provider 始终返回 "gpt_sovits"
     player._get_tts_provider = lambda: "gpt_sovits"
@@ -144,7 +144,7 @@ def test_maybe_start_skips_when_online():
     # config.TTS_PROVIDER_DEFAULT=aliyun 时 maybe_start 直接 return False，
     # 测试需要 gpt_sovits provider 才能走到 KurisuTTS().available 检查
     with patch("core.storage.load_config", return_value={"tts_provider": "gpt_sovits"}), \
-         patch("core.gpt_sovits_client.KurisuTTS") as mock_tts:
+         patch("core.voice.gpt_sovits_client.KurisuTTS") as mock_tts:
         mock_tts.return_value.available = True
         assert maybe_start_gpt_sovits(spawn=spawn) is False
         spawn.assert_not_called()
@@ -162,8 +162,8 @@ def test_maybe_start_spawns_when_offline(tmp_path):
 
     spawn = MagicMock()
     with patch("core.storage.load_config", return_value={"tts_provider": "gpt_sovits"}), \
-         patch("core.gpt_sovits_client.KurisuTTS") as mock_tts, \
-         patch("core.gpt_sovits_proc.ROOT", tmp_path):
+         patch("core.voice.gpt_sovits_client.KurisuTTS") as mock_tts, \
+         patch("core.voice.gpt_sovits_proc.ROOT", tmp_path):
         mock_tts.return_value.available = False
         assert maybe_start_gpt_sovits(spawn=spawn) is True
         args, kwargs = spawn.call_args

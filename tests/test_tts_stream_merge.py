@@ -1,6 +1,6 @@
 # tests/test_tts_stream_merge.py
 """SpeechPlayer 流式首句合并阈值测试：first_merge_chars 会话级覆盖。"""
-from core.tts_client import SpeechPlayer
+from core.voice.tts_client import SpeechPlayer
 
 
 def _drain(q):

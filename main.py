@@ -250,7 +250,7 @@ if __name__ == "__main__":
             # 启动失败，而不是递归复制出整棵桌宠进程树。
             sys.exit(1)
         if "--voice-smoke-test" in sys.argv:
-            from core.tts_client import SpeechPlayer
+            from core.voice.tts_client import SpeechPlayer
 
             player = SpeechPlayer()
             ok = player._speak_sapi_blocking("系统语音兜底正常。", language="zh")

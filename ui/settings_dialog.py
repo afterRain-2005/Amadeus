@@ -898,7 +898,7 @@ class SettingsDialog(QDialog):
     def _test_tunnel(self) -> None:
         """建立隧道并探测 GPT-SoVITS API 是否可用。"""
         from core.ssh_tunnel import SSHTunnel
-        from core.gpt_sovits_client import KurisuTTS
+        from core.voice.gpt_sovits_client import KurisuTTS
         host_alias = self.gpt_ssh_host.currentData()
         if not host_alias:
             self.gpt_ssh_status.setText("请先选择 SSH Host")
@@ -962,7 +962,7 @@ class SettingsDialog(QDialog):
         def worker() -> None:
             try:
                 from config import ALIYUN_TTS_DEFAULTS, resources_path
-                from core.aliyun_tts_client import AliyunTTS
+                from core.voice.aliyun_tts_client import AliyunTTS
 
                 cfg = {**ALIYUN_TTS_DEFAULTS, **(load_config().get("aliyun_tts") or {})}
                 ref_audio = resources_path(str(cfg.get("ref_audio", "/crs_1393.wav")))

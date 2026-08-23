@@ -2,7 +2,7 @@ import json
 from pathlib import Path
 from unittest.mock import patch
 
-from core.aliyun_tts_client import AliyunTTS
+from core.voice.aliyun_tts_client import AliyunTTS
 
 
 class FakeResponse:
@@ -31,7 +31,7 @@ def test_clone_voice_payload():
         seen["payload"] = json.loads(request.data.decode("utf-8"))
         return FakeResponse(json.dumps({"output": {"voice": "voice_123"}}).encode("utf-8"))
 
-    with patch("core.aliyun_tts_client.urlopen", fake_urlopen):
+    with patch("core.voice.aliyun_tts_client.urlopen", fake_urlopen):
         voice, fallback, reason = AliyunTTS(" key ").clone_voice(
             ref,
             preferred_name="kurisu",
@@ -57,7 +57,7 @@ def test_clone_voice_payload_without_text():
         seen["payload"] = json.loads(request.data.decode("utf-8"))
         return FakeResponse(json.dumps({"output": {"voice": "voice_123"}}).encode("utf-8"))
 
-    with patch("core.aliyun_tts_client.urlopen", fake_urlopen):
+    with patch("core.voice.aliyun_tts_client.urlopen", fake_urlopen):
         voice, _, _ = AliyunTTS("key").clone_voice(ref, preferred_name="kurisu")
 
     assert voice == "voice_123"
@@ -79,7 +79,7 @@ def test_clone_voice_reports_fallback_mode():
             }).encode("utf-8")
         )
 
-    with patch("core.aliyun_tts_client.urlopen", fake_urlopen):
+    with patch("core.voice.aliyun_tts_client.urlopen", fake_urlopen):
         voice, fallback, reason = AliyunTTS("key").clone_voice(ref, ref_text="text")
 
     assert voice == "voice_fb"
@@ -99,7 +99,7 @@ def test_synthesize_downloads_audio_url():
             return FakeResponse(json.dumps({"output": {"audio": {"url": "https://oss/audio.mp3"}}}).encode("utf-8"))
         return FakeResponse(b"MP3DATA")
 
-    with patch("core.aliyun_tts_client.urlopen", fake_urlopen):
+    with patch("core.voice.aliyun_tts_client.urlopen", fake_urlopen):
         audio = AliyunTTS("key").synthesize("こんにちは", "voice_123", text_lang="ja")
 
     assert audio == b"MP3DATA"
@@ -122,7 +122,7 @@ def test_synthesize_cosyvoice_payload_and_url():
             json.dumps({"output": {"audio": {"url": "https://oss/cosy.mp3"}}}).encode("utf-8")
         )
 
-    with patch("core.aliyun_tts_client.urlopen", fake_urlopen):
+    with patch("core.voice.aliyun_tts_client.urlopen", fake_urlopen):
         url = AliyunTTS("key").synthesize_cosyvoice(
             "こんにちは", "voice_123", engine="cosyvoice-v3.5-flash"
         )
@@ -157,7 +157,7 @@ def test_synthesize_cosyvoice_extracts_urls_array():
             ]}}}).encode("utf-8")
         )
 
-    with patch("core.aliyun_tts_client.urlopen", fake_urlopen):
+    with patch("core.voice.aliyun_tts_client.urlopen", fake_urlopen):
         url = AliyunTTS("key").synthesize_cosyvoice("long text", "voice")
 
     assert url == "https://oss/part1.mp3"

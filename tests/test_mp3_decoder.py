@@ -11,7 +11,7 @@ if "miniaudio" not in sys.modules:
     _fake_miniaudio.FileFormat.MP3 = 1
     sys.modules["miniaudio"] = _fake_miniaudio
 
-from core.mp3_decoder import _HttpStreamableSource, decode_mp3_to_wav, decode_mp3_stream
+from core.voice.mp3_decoder import _HttpStreamableSource, decode_mp3_to_wav, decode_mp3_stream
 
 
 class FakeHttpResponse:

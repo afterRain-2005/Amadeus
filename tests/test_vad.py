@@ -1,6 +1,6 @@
 # tests/test_vad.py
 import numpy as np
-from core.vad import VADDetector
+from core.voice.vad import VADDetector
 
 def _frame(rms_target: float, samples: int = 1024) -> np.ndarray:
     """生成指定 RMS 的帧（白噪声缩放）。"""

@@ -31,10 +31,10 @@ from PySide6.QtCore import QObject, QTimer, Signal
 
 from config import PHONE_DEFAULTS, VAD_PARAMS, get_character_by_id
 from core.llm.agent_client import _load_soul_md
-from core.asr_client import encode_wav, transcribe
+from core.voice.asr_client import encode_wav, transcribe
 from core.emotion_parser import parse_reply
 from core.screen_capture import ScreenCapturer
-from core.vad import VADDetector
+from core.voice.vad import VADDetector
 from core.vision_client import describe_screen
 
 
@@ -112,7 +112,7 @@ class VoiceCallController(QObject):
         self._soul_md = _load_soul_md("kurisu") or self._character.personality
         # TTS：流式 SpeechPlayer，默认走 aliyun CosyVoice（与普通对话对齐），
         # SAPI 仅作 allow_fallback 兜底
-        from core.tts_client import SpeechPlayer
+        from core.voice.tts_client import SpeechPlayer
         self._tts = SpeechPlayer(self)
         self._tts.speaking_changed.connect(self._on_tts_speaking_changed)
         self._tts.mouth_intensity.connect(self.mouth_intensity.emit)
@@ -123,7 +123,7 @@ class VoiceCallController(QObject):
         # 麦克风信号消除回声后喂 VAD —— 她说话时也能检测用户插话（真全双工）。
         # 未启用/未收敛时 speaking 态回退 barge-in 电平门槛路径。
         from config import AEC_PARAMS
-        from core.aec import AECFilter, EchoReference
+        from core.voice.aec import AECFilter, EchoReference
         self._aec_cfg = {**AEC_PARAMS, **(self._config.get("aec") or {})}
         self._aec = AECFilter(
             filter_len_ms=float(self._aec_cfg["filter_len_ms"]),

@@ -1,5 +1,5 @@
 from unittest.mock import patch, MagicMock, call
-from core.voice_call import VoiceCallController
+from core.voice.voice_call import VoiceCallController
 
 
 def _make_controller():
@@ -75,8 +75,8 @@ def test_utterance_end_attaches_screen_frame():
     fake_frame = MagicMock()
     ctrl._capturer = MagicMock()
     ctrl._capturer.latest_frame = fake_frame
-    with patch("core.voice_call.encode_wav"), \
-         patch("core.voice_call.describe_screen", return_value="VS Code 编辑") as mock_vis, \
+    with patch("core.voice.voice_call.encode_wav"), \
+         patch("core.voice.voice_call.describe_screen", return_value="VS Code 编辑") as mock_vis, \
          patch.object(ctrl, "_transcribe", return_value="我在写代码"), \
          patch.object(ctrl, "_stream_llm", return_value="加油"), \
          patch.object(ctrl._tts, "speak_with_options"):
@@ -91,7 +91,7 @@ def test_handle_utterance_uses_actual_mic_sample_rate():
     """设备 fallback 到默认采样率时，WAV header 应使用真实采样率。"""
     ctrl = _make_controller()
     ctrl._mic_sample_rate = 48000
-    with patch("core.voice_call.encode_wav") as mock_encode, \
+    with patch("core.voice.voice_call.encode_wav") as mock_encode, \
          patch.object(ctrl, "_transcribe", return_value="你好"), \
          patch.object(ctrl, "_stream_llm", return_value="こんにちは"), \
          patch.object(ctrl._tts, "speak_with_options"):
@@ -106,8 +106,8 @@ def test_screen_share_off_skips_vision():
     ctrl._screen_share_on = False
     ctrl._capturer = MagicMock()
     ctrl._capturer.latest_frame = b"frame"
-    with patch("core.voice_call.encode_wav"), \
-         patch("core.voice_call.describe_screen") as mock_vis, \
+    with patch("core.voice.voice_call.encode_wav"), \
+         patch("core.voice.voice_call.describe_screen") as mock_vis, \
          patch.object(ctrl, "_transcribe", return_value="你好"), \
          patch.object(ctrl, "_stream_llm", return_value="こんにちは"), \
          patch.object(ctrl._tts, "speak_with_options"):
@@ -122,8 +122,8 @@ def test_vision_empty_key_skips_vision():
     ctrl._screen_share_on = True
     ctrl._capturer = MagicMock()
     ctrl._capturer.latest_frame = b"frame"
-    with patch("core.voice_call.encode_wav"), \
-         patch("core.voice_call.describe_screen") as mock_vis, \
+    with patch("core.voice.voice_call.encode_wav"), \
+         patch("core.voice.voice_call.describe_screen") as mock_vis, \
          patch.object(ctrl, "_transcribe", return_value="你好"), \
          patch.object(ctrl, "_stream_llm", return_value="こんにちは"), \
          patch.object(ctrl._tts, "speak_with_options"):
@@ -134,7 +134,7 @@ def test_vision_empty_key_skips_vision():
 def test_transcribe_failure_returns_to_listening():
     """STT 失败回 listening（spec §7 降级表）。"""
     ctrl = _make_controller()
-    with patch("core.voice_call.encode_wav"), \
+    with patch("core.voice.voice_call.encode_wav"), \
          patch.object(ctrl, "_transcribe", side_effect=Exception("ASR fail")), \
          patch.object(ctrl, "_set_phase") as mock_phase:
         ctrl._handle_utterance(b"audio")
@@ -264,7 +264,7 @@ def test_handle_utterance_streaming_path():
         ctrl._on_llm_delta("ええ、どうしたの？")
         return reply_with_sep
 
-    with patch("core.voice_call.encode_wav"), \
+    with patch("core.voice.voice_call.encode_wav"), \
          patch.object(ctrl, "_transcribe", return_value="你好"), \
          patch.object(ctrl, "_stream_llm", side_effect=fake_stream_llm), \
          patch.object(ctrl._tts, "speak_streaming_start") as mock_start, \
@@ -280,7 +280,7 @@ def test_handle_utterance_streaming_path():
 def test_handle_utterance_fallback_no_separator():
     """_handle_utterance 兜底路径：LLM 返回无 === 时整段合成。"""
     ctrl = _make_controller()
-    with patch("core.voice_call.encode_wav"), \
+    with patch("core.voice.voice_call.encode_wav"), \
          patch.object(ctrl, "_transcribe", return_value="你好"), \
          patch.object(ctrl, "_stream_llm", return_value="こんにちは"), \
          patch.object(ctrl._tts, "speak_with_options") as mock_speak, \
@@ -402,7 +402,7 @@ def test_turn_invalidation_drops_stale_reply():
         # 旧回合正在生成时，用户说了新话（turn 前进）
         ctrl._turn_id += 1
         return "（微笑）旧回复"
-    with patch("core.voice_call.encode_wav"), \
+    with patch("core.voice.voice_call.encode_wav"), \
          patch.object(ctrl, "_transcribe", return_value="你好"), \
          patch.object(ctrl, "_stream_llm", side_effect=fake_stream_llm), \
          patch.object(ctrl._tts, "speak_with_options") as mock_speak, \
@@ -444,7 +444,7 @@ def test_subtitle_shows_chinese_only():
 def test_fallback_tts_japanese_with_chinese_voice():
     """兜底路径：有日语段用日语合成；纯中文回复用中文腔读（不混语言）。"""
     ctrl = _make_controller()
-    with patch("core.voice_call.encode_wav"), \
+    with patch("core.voice.voice_call.encode_wav"), \
          patch.object(ctrl, "_transcribe", return_value="你好"), \
          patch.object(ctrl, "_stream_llm", return_value="[emotion:smile]（微笑）怎么了？\n===\n（微笑んで）どうしたの？"), \
          patch.object(ctrl._tts, "speak_with_options") as mock_speak:
@@ -455,7 +455,7 @@ def test_fallback_tts_japanese_with_chinese_voice():
 
     # 纯中文回复：中文腔读
     ctrl2 = _make_controller()
-    with patch("core.voice_call.encode_wav"), \
+    with patch("core.voice.voice_call.encode_wav"), \
          patch.object(ctrl2, "_transcribe", return_value="你好"), \
          patch.object(ctrl2, "_stream_llm", return_value="没什么，随便聊聊"), \
          patch.object(ctrl2._tts, "speak_with_options") as mock_speak2:

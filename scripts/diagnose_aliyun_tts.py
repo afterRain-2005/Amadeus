@@ -19,8 +19,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from core.aliyun_tts_client import AliyunTTS
-from core.mp3_decoder import decode_mp3_to_wav, decode_mp3_stream
+from core.voice.aliyun_tts_client import AliyunTTS
+from core.voice.mp3_decoder import decode_mp3_to_wav, decode_mp3_stream
 
 
 def load_user_cfg() -> dict:

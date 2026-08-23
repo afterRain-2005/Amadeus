@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 
 def _make_tts():
-    from core.gpt_sovits_client import KurisuTTS
+    from core.voice.gpt_sovits_client import KurisuTTS
     return KurisuTTS()
 
 
@@ -39,8 +39,8 @@ def test_synthesize_with_cut1():
     tts = _make_tts()
     captured = {}
     # patch Path.exists 跳过 ref_audio 存在性检查
-    with patch("core.gpt_sovits_client.Path.exists", return_value=True), \
-         patch("core.gpt_sovits_client.urlopen", side_effect=_fake_urlopen_factory(captured)):
+    with patch("core.voice.gpt_sovits_client.Path.exists", return_value=True), \
+         patch("core.voice.gpt_sovits_client.urlopen", side_effect=_fake_urlopen_factory(captured)):
         wav = tts.synthesize("テスト。", text_lang="ja", text_split_method="cut1")
     assert wav == b"fake_wav_bytes"
     assert captured["data"]["text_split_method"] == "cut1"
@@ -52,15 +52,15 @@ def test_synthesize_default_uses_cut5():
     """不传 text_split_method 时保持 DEFAULT_PARAMS 的 cut5。"""
     tts = _make_tts()
     captured = {}
-    with patch("core.gpt_sovits_client.Path.exists", return_value=True), \
-         patch("core.gpt_sovits_client.urlopen", side_effect=_fake_urlopen_factory(captured)):
+    with patch("core.voice.gpt_sovits_client.Path.exists", return_value=True), \
+         patch("core.voice.gpt_sovits_client.urlopen", side_effect=_fake_urlopen_factory(captured)):
         tts.synthesize("テスト。", text_lang="ja")
     assert captured["data"]["text_split_method"] == "cut5"
 
 
 def test_strip_stage_directions_still_works():
     """括号情态提示词应被过滤（回归测试）。"""
-    from core.gpt_sovits_client import _strip_stage_directions
+    from core.voice.gpt_sovits_client import _strip_stage_directions
     assert _strip_stage_directions("（静かに）続けて。") == "続けて。"
     assert _strip_stage_directions("(silence) test.") == "test."
     assert _strip_stage_directions("（静かに一瞬置いて）続けて。") == "続けて。"

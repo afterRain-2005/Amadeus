@@ -6,7 +6,7 @@
 3. 多余空白 → 单空格
 4. 末尾确保有句号
 """
-from core.tts_client import SpeechPlayer
+from core.voice.tts_client import SpeechPlayer
 
 
 def _clean(text: str) -> str:

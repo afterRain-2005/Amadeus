@@ -452,7 +452,7 @@ class SpeechPlayer(QObject):
 
     def _check_kurisu(self) -> bool:
         try:
-            from core.gpt_sovits_client import KurisuTTS
+            from core.voice.gpt_sovits_client import KurisuTTS
             return KurisuTTS().available
         except Exception:
             return False
@@ -626,7 +626,7 @@ class SpeechPlayer(QObject):
         if session_id is None:
             session_id = self._session_id
         try:
-            from core.gpt_sovits_client import KurisuTTS
+            from core.voice.gpt_sovits_client import KurisuTTS
 
             tts = KurisuTTS()
             if not tts.available:
@@ -697,8 +697,8 @@ class SpeechPlayer(QObject):
             session_id = self._session_id
         try:
             from config import ALIYUN_TTS_DEFAULTS
-            from core.aliyun_tts_client import AliyunTTS
-            from core.mp3_decoder import decode_mp3_to_wav
+            from core.voice.aliyun_tts_client import AliyunTTS
+            from core.voice.mp3_decoder import decode_mp3_to_wav
             from core.storage import load_config
 
             cfg = {**ALIYUN_TTS_DEFAULTS, **(load_config().get("aliyun_tts") or {})}
@@ -756,8 +756,8 @@ class SpeechPlayer(QObject):
             session_id = self._session_id
         try:
             from config import ALIYUN_TTS_DEFAULTS
-            from core.aliyun_tts_client import AliyunTTS
-            from core.mp3_decoder import decode_mp3_stream
+            from core.voice.aliyun_tts_client import AliyunTTS
+            from core.voice.mp3_decoder import decode_mp3_stream
             from core.storage import load_config
 
             cfg = {**ALIYUN_TTS_DEFAULTS, **(load_config().get("aliyun_tts") or {})}

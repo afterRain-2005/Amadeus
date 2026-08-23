@@ -4,7 +4,7 @@ NLMS 滤波器应显著衰减（ERLE），且参数可调、不可用时正确�
 import numpy as np
 import pytest
 
-from core.aec import AECFilter, EchoReference
+from core.voice.aec import AECFilter, EchoReference
 
 
 SR, N = 16000, 1024
@@ -110,7 +110,7 @@ def test_echo_reference_window_insufficient():
 def test_aec_disabled_in_controller():
     """VoiceCallController：aec.enabled=False 时不建 AEC、TTS 不采集参考。"""
     from unittest.mock import patch
-    from core.voice_call import VoiceCallController
+    from core.voice.voice_call import VoiceCallController
     ctrl = VoiceCallController({
         "endpoint": "https://api.test/v1", "api_key": "k", "model": "m",
         "aec": {"enabled": False},
@@ -122,7 +122,7 @@ def test_aec_disabled_in_controller():
 
 def test_aec_controller_wiring():
     """启用时 controller 注入参考到 TTS，_aec_process 未收敛返回 None（回退 barge-in）。"""
-    from core.voice_call import VoiceCallController
+    from core.voice.voice_call import VoiceCallController
     ctrl = VoiceCallController({
         "endpoint": "https://api.test/v1", "api_key": "k", "model": "m",
     })

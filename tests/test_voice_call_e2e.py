@@ -6,7 +6,7 @@
 """
 from unittest.mock import patch, MagicMock
 
-from core.voice_call import VoiceCallController
+from core.voice.voice_call import VoiceCallController
 
 
 REPLY_FULL_JA_FIRST = (
@@ -50,7 +50,7 @@ def _run_pipeline(transcribe_text="你好"):
 
     sd_out = MagicMock(name="sd.OutputStream")
     synth_mock = MagicMock(side_effect=_fake_aliyun_stream)
-    with patch("core.voice_call.encode_wav"), \
+    with patch("core.voice.voice_call.encode_wav"), \
          patch.object(ctrl, "_transcribe", return_value=transcribe_text), \
          patch("core.llm.backend_router.route_and_send", side_effect=_fake_route_and_send), \
          patch.object(ctrl._tts, "_get_tts_provider", return_value="aliyun"), \

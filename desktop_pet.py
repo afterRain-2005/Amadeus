@@ -28,7 +28,7 @@ from core.storage import APP_DIR as _APP_DIR
 # 气泡纯函数已抽出至 ui/bubble.py（重构 2026-08-24）。
 # 此处再导出保持 desktop_pet.* 旧命名空间兼容（tests/ 与历史引用）。
 from core.diag import _write_runtime_log  # noqa: F401
-from core.gpt_sovits_proc import (  # noqa: F401
+from core.voice.gpt_sovits_proc import (  # noqa: F401
     _locate_gpt_sovits,
     maybe_start_gpt_sovits,
     _warmup_gpt_sovits,
@@ -109,7 +109,7 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
     from core.terminal_commands import TerminalCommandContext, registry as terminal_command_registry
     from core.storage import load_config
     from core.terminal_state import load_terminal_state, save_terminal_state
-    from core.tts_client import SpeechPlayer
+    from core.voice.tts_client import SpeechPlayer
     from ui.settings_dialog import SettingsDialog
     from ui.widgets.crt_overlay import CrtOverlay
     from ui.widgets.agent_task import AgentTask
@@ -577,7 +577,7 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
                 except Exception:
                     pass
             # 重新创建 controller 以用最新 config
-            from core.voice_call import VoiceCallController
+            from core.voice.voice_call import VoiceCallController
             self.call_controller = VoiceCallController(config, character, self)
             self.call_controller.phase_changed.connect(self._on_call_phase_changed)
             self.call_controller.subtitle.connect(self.call_view.set_subtitle)

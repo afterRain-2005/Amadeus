@@ -58,7 +58,7 @@ def maybe_start_gpt_sovits(spawn=subprocess.Popen) -> bool:
         pass
 
     try:
-        from core.gpt_sovits_client import KurisuTTS
+        from core.voice.gpt_sovits_client import KurisuTTS
         if KurisuTTS().available:
             return False
     except Exception:
@@ -133,7 +133,7 @@ def _warmup_gpt_sovits(max_wait: float = 90.0) -> None:
     返回值：无（None）
     """
     try:
-        from core.gpt_sovits_client import KurisuTTS
+        from core.voice.gpt_sovits_client import KurisuTTS
     except ImportError:
         return
     tts = KurisuTTS(timeout=15.0)
