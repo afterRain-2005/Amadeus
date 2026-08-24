@@ -5,6 +5,7 @@
 「识别 → 流式 LLM delta → 流式 TTS → 播放队列 → 输出设备」整条链是否闭合。
 """
 from unittest.mock import patch, MagicMock
+import time
 
 from core.voice.voice_call import VoiceCallController
 

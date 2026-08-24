@@ -578,9 +578,17 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
                     pass
             # 重新创建 controller 以用最新 config
             from core.voice.voice_call import VoiceCallController
-            self.call_controller = VoiceCallController(config, character, self)
+            self.call_controller = VoiceCallController(
+                config,
+                character,
+                self,
+                on_record=lambda role, content: add_message(
+                    active_session(self._state), role, content
+                ),
+            )
             self.call_controller.phase_changed.connect(self._on_call_phase_changed)
             self.call_controller.subtitle.connect(self.call_view.set_subtitle)
+            self.call_controller.reply_show.connect(self.call_view.set_reply_show)
             self.call_controller.elapsed.connect(self.call_view.set_elapsed)
             self.call_controller.waveform.connect(self.call_view.set_waveform)
             self.call_controller.you_said.connect(self._on_call_you_said)
@@ -598,6 +606,7 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             self.call_view.mute_clicked.connect(self.call_controller.toggle_mute)
             self.call_view.hangup_clicked.connect(self._hangup_call)
             self.call_view.screen_clicked.connect(self.call_controller.toggle_screen_share)
+            self.call_view.advance_requested.connect(self.call_controller.advance_reply)
             self.call_view.set_muted(self.call_controller.is_muted)
             self.call_view.set_screen_share(self.call_controller.screen_share_on)
             self.call_controller.start()
@@ -625,6 +634,7 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
                 except Exception:
                     pass
                 self.call_controller = None
+            self.call_view.clear_reply()
             self.call_view.hide()
             self.dock_bar.show()
             self.reply_bubble.show()

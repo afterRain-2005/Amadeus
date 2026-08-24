@@ -166,136 +166,120 @@ def test_toggle_screen_share_flips_state():
     assert states == [False]
 
 
-def test_on_llm_delta_starts_streaming_on_separator():
-    """_on_llm_delta 检测到 === 时启动流式 TTS，切换 phase 到 speaking。"""
+def test_on_llm_delta_only_accumulates():
+    """逐句协议：_on_llm_delta 只累积全文，不再自动启动流式 TTS 口播。"""
     ctrl = _make_controller()
-    ctrl._set_phase("processing")
+    ctrl._active_turn = ctrl._turn_id
     with patch.object(ctrl._tts, "speak_streaming_start") as mock_start, \
          patch.object(ctrl._tts, "speak_streaming_append") as mock_append:
-        # 中文段：不启动 TTS（无假名）
         ctrl._on_llm_delta("[emotion:neutral]（歪头）嗯，怎么了？")
-        assert ctrl._stream_tts_started is False
-        mock_start.assert_not_called()
-        # === 与首句日语同 delta（LLM 流式常见场景）：启动 TTS + 提取首句追加
         ctrl._on_llm_delta("\n===\n（首を傾げる）ええ、どうしたの？")
-        assert ctrl._stream_tts_started is True
-        # 首句立即送合成：first_merge_chars=1（电话模式延迟优先于吞吐）
-        mock_start.assert_called_once_with(
-            text_lang="ja", first_merge_chars=1, allow_fallback=True
-        )
-        # phase 切到 speaking（VAD 暂停）
-        assert ctrl.phase == "speaking"
-        assert ctrl.vad_paused is True
-        # 首句日语（=== 之后部分，含假名）已追加 1 次
-        assert mock_append.call_count == 1
-        # 后续 delta：含假名的追加，纯中文（无假名）跳过
-        ctrl._on_llm_delta("微笑んでいる")  # 含假名，追加
-        assert mock_append.call_count == 2
-        ctrl._on_llm_delta("元気かしら？")  # 含假名 かしら，追加
-        assert mock_append.call_count == 3
+    # 只累积，不播
+    mock_start.assert_not_called()
+    mock_append.assert_not_called()
+    assert ctrl._stream_tts_started is False
+    assert "嗯，怎么了？" in ctrl._streamed_reply
+    assert "ええ、どうしたの？" in ctrl._streamed_reply
 
 
-def test_on_llm_delta_separator_only_no_append():
-    """=== 出现但 === 后无内容时不调 speak_streaming_append（边界场景）。"""
+def test_prepare_reply_segments_and_emits_first():
+    """_prepare_reply 切成中文字幕句 + 日语句，发 reply_show 显示第一句，不自动播。"""
     ctrl = _make_controller()
-    with patch.object(ctrl._tts, "speak_streaming_start") as mock_start, \
-         patch.object(ctrl._tts, "speak_streaming_append") as mock_append:
-        ctrl._on_llm_delta("中文\n===\n")
-        # 中文段无假名不启动 TTS；=== 后为空也不启动
-        assert ctrl._stream_tts_started is False
-        mock_start.assert_not_called()
-        mock_append.assert_not_called()
+    shown: list[tuple[int, int, str]] = []
+    ctrl.reply_show.connect(lambda i, t, s: shown.append((i, t, s)))
+    with patch.object(ctrl._tts, "speak_with_options") as mock_speak, \
+         patch.object(ctrl, "_set_phase") as mock_phase:
+        ctrl._prepare_reply("[emotion:neutral]（歪头）嗯，怎么了？\n===\n（首を傾げる）ええ、どうしたの？")
+    assert shown, "第一句未显示"
+    assert shown[0][1] > 0  # total>0（分句态）
+    assert "嗯，怎么了？" in shown[0][2]  # 第一句为中文字幕
+    # 进入分句态但不自动朗读，等点击
+    mock_speak.assert_not_called()
+    mock_phase.assert_any_call("listening")
 
 
-def test_on_llm_delta_skips_chinese_before_separator():
-    """=== 之前的中文段不送 TTS（无假名跳过）。"""
+def test_advance_reply_drives_speech_and_progress():
+    """点击推进：朗读当前句日语 + 显示下一字幕，逐句听写。"""
     ctrl = _make_controller()
-    with patch.object(ctrl._tts, "speak_streaming_start") as mock_start, \
-         patch.object(ctrl._tts, "speak_streaming_append") as mock_append:
-        # 中文段多次 delta（无假名，不启动 TTS）
-        ctrl._on_llm_delta("[emotion:smile]（微笑）")
-        ctrl._on_llm_delta("你好啊。")
-        ctrl._on_llm_delta("今天天气不错。")
-        assert ctrl._stream_tts_started is False
-        mock_start.assert_not_called()
-        mock_append.assert_not_called()
+    shown: list[str] = []
+    ctrl.reply_show.connect(lambda i, t, s: shown.append(s))
+    ctrl._prepare_reply("（歪头）今天怎么样？\n===\n（首を傾げる）今日はどう？")
+    first = len(shown)
+    with patch.object(ctrl._tts, "speak_with_options") as mock_speak:
+        ctrl.advance_reply()
+    # 第一次点击：显示并朗读第一句日语
+    assert mock_speak.called
+    args = mock_speak.call_args
+    assert args.kwargs["text_lang"] == "ja"
+    assert args.kwargs["fallback_lang"] == "zh"  # 中文兜底
+    assert "今日はどう" in args.args[0]
+    assert len(shown) == first + 1  # 显示推进
+    assert ctrl.phase == "speaking"  # 半双工：朗读时 VAD 暂停
 
 
-def test_on_llm_delta_multi_separator_skips_chinese_segments():
-    """多段 === + emotion 错位：LLM 输出「中文1 === 日语1 \\n\\n [emotion:neutral]中文2 === 日语2」。
-
-    修复 bug：LLM 把 [emotion:xxx] 放在 === 后的日语段里（违反 prompt 约定），
-    双重切段逻辑会错误把日语段1重置为中文段，后续 TTS 全跳过 → 无声。
-    新方案：纯 === 切段 + 假名过滤，只送含假名的日语段。
-    """
+def test_advance_reply_after_end_returns_to_listening():
+    """读到尾部后再点击 → 结束回放，恢复聆听态。"""
     ctrl = _make_controller()
-    with patch.object(ctrl._tts, "speak_streaming_start") as mock_start, \
-         patch.object(ctrl._tts, "speak_streaming_append") as mock_append:
-        # 模拟 LLM 多段输出（[emotion] 在 === 后的日语段里）
-        # 日语段含假名（ええ、どうしたの / そうね、分かったわ）
-        ctrl._on_llm_delta("你好\n===\nええ、どうしたの？\n\n[emotion:neutral]我很好\n===\nそうね、分かったわ")
-        # 两段日语（含假名）应被追加，两段中文（无假名）应被跳过
-        assert ctrl._stream_tts_started is True
-        # 启动 TTS 1 次（首次进入日语段）
-        mock_start.assert_called_once_with(
-            text_lang="ja", first_merge_chars=1, allow_fallback=True
-        )
-        # 追加次数：第一段日语 + 第二段日语 = 2 次（中文段无假名不追加）
-        assert mock_append.call_count == 2
-        # 验证追加的内容是日语段
-        appended_texts = [call.args[0] for call in mock_append.call_args_list]
-        all_appended = "".join(appended_texts)
-        assert "ええ、どうしたの？" in all_appended
-        assert "そうね、分かったわ" in all_appended
-        assert "我很好" not in all_appended  # 中文段不送 TTS
-        assert "你好" not in all_appended  # 中文段不送 TTS
+    shown: list[str] = []
+    ctrl.reply_show.connect(lambda i, t, s: shown.append(s))
+    ctrl._prepare_reply("就一句。\n===\n一言だけ。")
+    with patch.object(ctrl._tts, "speak_with_options"):
+        ctrl.advance_reply()  # 读第 0 句
+        ctrl.advance_reply()  # 到尾 → 回聆听
+    assert ctrl.phase == "listening"
+    assert ctrl._resp_index == -1
+    assert ctrl._reply_review is False
 
 
-def test_handle_utterance_streaming_path():
-    """_handle_utterance 走流式 TTS 路径：LLM 返回含 === 的 reply，调 speak_streaming_end。"""
+def test_advance_reply_inactive_is_noop():
+    """未进分句态/挂断后调用 advance_reply 为空操作。"""
     ctrl = _make_controller()
+    with patch.object(ctrl._tts, "speak_with_options") as mock_speak:
+        ctrl.advance_reply()
+    mock_speak.assert_not_called()
+
+
+def test_record_invokes_callback():
+    """通话一问一答经 on_record 回调写入聊天会话（与普通聊天统一）。"""
+    recorded: list[tuple[str, str]] = []
+    ctrl = VoiceCallController({}, on_record=lambda r, c: recorded.append((r, c)))
+    ctrl._record("user", "你好")
+    ctrl._record("assistant", "[emotion:x]嗯\n===\nはい")
+    assert recorded == [("user", "你好"), ("assistant", "[emotion:x]嗯\n===\nはい")]
+
+
+def test_record_callback_exception_is_swallowed():
+    """record 回调异常静默，不中断通话管线。"""
+    def boom(role, content):
+        raise RuntimeError("boom")
+    ctrl = VoiceCallController({}, on_record=boom)
+    ctrl._record("user", "你好")  # 不应抛异常
+
+
+def test_handle_utterance_segment_and_record():
+    """_handle_utterance 收尾：记录一问一答 + 分句显示，不再自动流式口播。"""
+    ctrl = _make_controller()
+    recorded: list[tuple[str, str]] = []
+    ctrl._on_record = lambda r, c: recorded.append((r, c))
     reply_with_sep = "[emotion:neutral]（歪头）嗯，怎么了？\n===\n（首を傾げる）ええ、どうしたの？"
-
-    def fake_stream_llm(user_text):
-        # 模拟 LLM 流式：先中文，后 ===，后日语
-        ctrl._on_llm_delta("[emotion:neutral]（歪头）嗯，怎么了？")
-        ctrl._on_llm_delta("\n===\n")
-        ctrl._on_llm_delta("（首を傾げる）")
-        ctrl._on_llm_delta("ええ、どうしたの？")
-        return reply_with_sep
-
+    shown: list[int] = []
+    ctrl.reply_show.connect(lambda i, t, s: shown.append(i))
     with patch("core.voice.voice_call.encode_wav"), \
          patch.object(ctrl, "_transcribe", return_value="你好"), \
-         patch.object(ctrl, "_stream_llm", side_effect=fake_stream_llm), \
-         patch.object(ctrl._tts, "speak_streaming_start") as mock_start, \
-         patch.object(ctrl._tts, "speak_streaming_append"), \
-         patch.object(ctrl._tts, "speak_streaming_end") as mock_end:
-        ctrl._handle_utterance(b"audio")
-    assert mock_start.called
-    mock_end.assert_called_once_with(fallback_text="（歪头）嗯，怎么了？", fallback_lang="zh")
-    # 流式已启动，不应走兜底 speak_with_options
-    # （ctrl._tts 是真实的 SpeechPlayer，speak_with_options 没被 mock 但流式路径不会调它）
-
-
-def test_handle_utterance_fallback_no_separator():
-    """_handle_utterance 兜底路径：LLM 返回无 === 时整段合成。"""
-    ctrl = _make_controller()
-    with patch("core.voice.voice_call.encode_wav"), \
-         patch.object(ctrl, "_transcribe", return_value="你好"), \
-         patch.object(ctrl, "_stream_llm", return_value="こんにちは"), \
-         patch.object(ctrl._tts, "speak_with_options") as mock_speak, \
+         patch.object(ctrl, "_stream_llm", return_value=reply_with_sep), \
+         patch.object(ctrl._tts, "speak_streaming_end") as mock_end, \
          patch.object(ctrl._tts, "speak_streaming_start") as mock_start:
         ctrl._handle_utterance(b"audio")
-    # 走兜底，不调流式
+    # LLM 结果按逐句协议分句显示（reply_show）
+    assert shown, "未进入分句显示"
+    # 一问一答写入会话
+    assert ("user", "你好") in recorded
+    assert any(r == "assistant" and "嗯，怎么了？" in c for r, c in recorded)
+    # 不再自动流式口播
     mock_start.assert_not_called()
-    # 调 speak_with_options 整段合成
-    mock_speak.assert_called_once()
-    args = mock_speak.call_args
-    assert args.args[0] == "こんにちは"  # parsed.chinese（无 === 时 chinese=full）
-    assert args.kwargs["text_lang"] == "ja"
-    assert args.kwargs["allow_fallback"] is True
-    assert args.kwargs["fallback_text"] == "こんにちは"
-    assert args.kwargs["fallback_lang"] == "ja"
+    mock_end.assert_not_called()
+    # 分句态就绪：点击通过 advance_reply 播放
+    assert ctrl._resp_cn and ctrl._resp_index == -1
 
 
 def test_stream_llm_injects_phone_short_reply_prompt():
@@ -319,39 +303,13 @@ def test_stream_llm_no_token_cap():
     assert kwargs["response_max_tokens"] is None
 
 
-def test_on_llm_delta_japanese_first_order():
-    """电话模式新语序（日语在前、=== 后中文）：首个假名 delta 立即启动 TTS。
-
-    日语先行让首句假名提前 ~9s 到达（不必等整段中文生成完），
-    这是缩短首声延迟的关键；假名检测顺序无关。
-    """
+def test_prepare_reply_japanese_only_falls_back_to_kana():
+    """纯日语输出（无中文翻译段）时用日语假名句顶替字幕，避免空白。"""
     ctrl = _make_controller()
-    with patch.object(ctrl._tts, "speak_streaming_start") as mock_start, \
-         patch.object(ctrl._tts, "speak_streaming_append") as mock_append:
-        # 首个 delta 即日语（含假名）：立即启动 TTS
-        ctrl._on_llm_delta("[emotion:smile]（微笑んで）ええ、どうしたの？")
-        assert ctrl._stream_tts_started is True
-        mock_start.assert_called_once_with(
-            text_lang="ja", first_merge_chars=1, allow_fallback=True
-        )
-        assert mock_append.call_count == 1
-        # 后续 === 与中文翻译：无假名，不追加
-        ctrl._on_llm_delta("\n===\n（微笑）嗯，怎么了？")
-        assert mock_append.call_count == 1
-
-
-def test_on_llm_delta_emits_reply_subtitle():
-    """流式回复实时上字幕（修复：通话中回复从不显示）。"""
-    ctrl = _make_controller()
-    subtitles: list[str] = []
-    ctrl.subtitle.connect(subtitles.append)
-    with patch.object(ctrl._tts, "speak_streaming_start"), \
-         patch.object(ctrl._tts, "speak_streaming_append"):
-        ctrl._on_llm_delta("[emotion:smile]（微笑んで）ええ、どうしたの？")
-        ctrl._on_llm_delta("\n===\n（微笑）嗯，怎么了？")
-    joined = "".join(subtitles)
-    assert "ええ、どうしたの？" in joined, f"日语台词未上字幕: {subtitles}"
-    assert "嗯，怎么了？" in joined, f"中文翻译未上字幕: {subtitles}"
+    shown: list[str] = []
+    ctrl.reply_show.connect(lambda i, t, s: shown.append(s))
+    ctrl._prepare_reply("（微笑んで）ええ、どうしたの？")
+    assert shown and "ええ、どうしたの？" in shown[0]
 
 
 # ===== 全双工（barge-in 打断 + turn 作废）=====
@@ -423,42 +381,39 @@ def test_stale_delta_dropped():
     assert ctrl._streamed_reply == ""
 
 
-# ===== 字幕只中文 / 语音只日语 =====
+# ===== 字幕只中文 / 语音只日语（逐句协议）=====
 
 def test_subtitle_shows_chinese_only():
-    """字幕只出中文（需求）；纯日语无翻译时回退显示日语。"""
+    """逐句字幕：中文字幕句不含日语原文（中日分离）。"""
     ctrl = _make_controller()
-    subs = []
-    ctrl.subtitle.connect(subs.append)
-    ctrl._active_turn = ctrl._turn_id
-    with patch.object(ctrl._tts, "speak_streaming_start"), \
-         patch.object(ctrl._tts, "speak_streaming_append"):
-        ctrl._on_llm_delta("[emotion:smile]（微笑んで）ええ、どうしたの？")
-        ctrl._on_llm_delta("\n===\n（微笑）嗯，怎么了？")
-    joined = "".join(subs)
-    assert "嗯，怎么了？" in joined
-    # 最终字幕只出中文（首 delta 无翻译时回退日语属预期中间态）
-    assert "ええ" not in subs[-1], f"最终字幕不应含日语: {subs[-1]!r}"
+    shown: list[str] = []
+    ctrl.reply_show.connect(lambda i, t, s: shown.append(s))
+    ctrl._prepare_reply("[emotion:smile]（微笑んで）ええ、どうしたの？\n===\n（微笑）嗯，怎么了？")
+    first = shown[0]
+    assert "嗯，怎么了？" in first
+    assert "ええ" not in first, f"字幕不应含日语: {first!r}"
 
 
-def test_fallback_tts_japanese_with_chinese_voice():
-    """兜底路径：有日语段用日语合成；纯中文回复用中文腔读（不混语言）。"""
+def test_advance_tts_language_selects_voice():
+    """逐句朗读：有日语句用日语 + 中文兜底；纯中文句仅显示不发音。"""
+    # 中日交替 → 日语朗读 ja + 中文兜底 zh
     ctrl = _make_controller()
-    with patch("core.voice.voice_call.encode_wav"), \
-         patch.object(ctrl, "_transcribe", return_value="你好"), \
-         patch.object(ctrl, "_stream_llm", return_value="[emotion:smile]（微笑）怎么了？\n===\n（微笑んで）どうしたの？"), \
-         patch.object(ctrl._tts, "speak_with_options") as mock_speak:
-        ctrl._handle_utterance(_frame_of(0.01))
+    shown: list[str] = []
+    ctrl.reply_show.connect(lambda i, t, s: shown.append(s))
+    ctrl._prepare_reply("（微笑）怎么了？\n===\n（微笑んで）どうしたの？")
+    with patch.object(ctrl._tts, "speak_with_options") as mock_speak:
+        ctrl.advance_reply()
+    assert mock_speak.called
     args = mock_speak.call_args
     assert "どうしたの" in args.args[0]
     assert args.kwargs["text_lang"] == "ja"
-
-    # 纯中文回复：中文腔读
+    assert args.kwargs["fallback_lang"] == "zh"
+    # 纯中文回复（无日语段）：仅逐句显示，不发音
     ctrl2 = _make_controller()
-    with patch("core.voice.voice_call.encode_wav"), \
-         patch.object(ctrl2, "_transcribe", return_value="你好"), \
-         patch.object(ctrl2, "_stream_llm", return_value="没什么，随便聊聊"), \
-         patch.object(ctrl2._tts, "speak_with_options") as mock_speak2:
-        ctrl2._handle_utterance(_frame_of(0.01))
-    args2 = mock_speak2.call_args
-    assert args2.kwargs["text_lang"] == "zh"
+    shown2: list[str] = []
+    ctrl2.reply_show.connect(lambda i, t, s: shown2.append(s))
+    ctrl2._prepare_reply("没什么，随便聊聊")
+    with patch.object(ctrl2._tts, "speak_with_options") as mock_speak2:
+        ctrl2.advance_reply()
+    assert not mock_speak2.called  # 无日语，不发音
+    assert shown2, "中文句仍需逐句显示"

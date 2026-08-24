@@ -89,6 +89,7 @@ class CallView(QWidget):
     mute_clicked = Signal()
     hangup_clicked = Signal()
     screen_clicked = Signal()
+    advance_requested = Signal()  # 回复分句区被点击：请求播当前句并推进（句号由控制器维护）
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -119,8 +120,7 @@ class CallView(QWidget):
         top.addWidget(self.elapsed_label)
         layout.addLayout(top)
 
-        # 中部：字幕 + 波形（字幕上方小字常驻显示最近一次语音识别结果，
-        # 让用户确信"我说的话被听见了"）
+        # 中部：用户回显 + 波形
         self.you_said_label = QLabel("", self)
         self.you_said_label.setAlignment(Qt.AlignRight)
         self.you_said_label.setWordWrap(True)
@@ -130,20 +130,31 @@ class CallView(QWidget):
         )
         layout.addWidget(self.you_said_label)
 
+        self.waveform = WaveformCanvas(self)
+        layout.addWidget(self.waveform, alignment=Qt.AlignCenter)
+
+        layout.addStretch()
+
+        # 回答区（靠下，主播：分句逐句显示，点击进入下一句——同聊天交互）。
+        # 底边框带序号徽标：⌈ i/total ⌋ ku┃ 让用户看到"还有几句"。
+        self.reply_count_label = QLabel("", self)
+        self.reply_count_label.setAlignment(Qt.AlignRight)
+        self.reply_count_label.setStyleSheet(
+            "color:#8a7f63; background:transparent; font:10px 'Consolas','Microsoft YaHei'; padding:0 2px"
+        )
         self.subtitle_label = QLabel("正在接通…", self)
         self.subtitle_label.setAlignment(Qt.AlignCenter)
         self.subtitle_label.setWordWrap(True)
+        self.subtitle_label.setCursor(Qt.PointingHandCursor)
+        self.subtitle_label.mousePressEvent = self._on_subtitle_click
         self.subtitle_label.setStyleSheet(
             "color:#c1b492; font:14px 'Times New Roman','SimSun';"
             "background:#171114; border:1px solid #d2738a; border-top:5px solid #d2738a;"
             "border-radius:0px; padding:12px 16px"
         )
+        self._reply_total = 0  # 分句总数；>0 表示处于"回复分句"态，点击才有意义
+        layout.addWidget(self.reply_count_label)
         layout.addWidget(self.subtitle_label)
-
-        self.waveform = WaveformCanvas(self)
-        layout.addWidget(self.waveform, alignment=Qt.AlignCenter)
-
-        layout.addStretch()
 
         # 底部：三按钮
         bottom = QHBoxLayout()
@@ -177,9 +188,6 @@ class CallView(QWidget):
         dot_color = "#c1b492" if phase == "connecting" else "#d2738a" if phase in ("listening", "speaking", "processing") else "#8a7f63"
         self._dot.setStyleSheet(f"color:{dot_color}; font-size:10px")
 
-    def set_subtitle(self, text: str) -> None:
-        self.subtitle_label.setText(text)
-
     def set_you_said(self, text: str) -> None:
         """显示最近一次语音识别结果（常驻小字，直到下一次识别覆盖）。"""
         self.you_said_label.setText(f"🎤 你：{text}")
@@ -204,3 +212,36 @@ class CallView(QWidget):
         self.screen_btn.setToolTip("屏幕共享：开" if on else "屏幕共享：关")
         self.screen_btn._color = "cyan" if on else "amber"
         self.screen_btn.update()
+
+    # ===== 回复分句（点击进入下一句，同聊天交互）=====
+    def set_reply_show(self, index: int, total: int, text: str) -> None:
+        """显示第 index/total 句回复字幕。total>0 进入"分句"态，点击可推进。"""
+        self._reply_total = total
+        self.reply_count_label.setText(f"▢ {index + 1 if total else ''}/{total}" if total else "")
+        self.subtitle_label.setText(text)
+        # 未到尾部时提示可点击；到尾页去掉指针手型并保留序号
+        self.subtitle_label.setCursor(
+            Qt.PointingHandCursor if index < total - 1 else Qt.ArrowCursor
+        )
+
+    def clear_reply(self) -> None:
+        """清空分句态（挂断/结束），恢复普通字幕。"""
+        self._reply_total = 0
+        self.reply_count_label.setText("")
+        self._set_subtitle("通话结束")
+
+    def _on_subtitle_click(self, event) -> None:
+        """点击字幕区 → 请求控制器播当前句并推进到下一句。"""
+        if not self._reply_total:
+            return  # 非分句态（状态提示）点击无意义
+        if event.button() == Qt.LeftButton:
+            self.advance_requested.emit()
+            event.accept()
+
+    def set_subtitle(self, text: str) -> None:
+        """状态提示（接通中/聆听中/识别中/思考中）。分句时由控制器经 set_reply_show 更新。"""
+        self._set_subtitle(text)
+
+    def _set_subtitle(self, text: str) -> None:
+        self.subtitle_label.setText(text)
+        self.subtitle_label.setCursor(Qt.ArrowCursor)
