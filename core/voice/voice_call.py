@@ -62,6 +62,7 @@ class VoiceCallController(QObject):
     phase_changed = Signal(str)       # idle/connecting/listening/processing/speaking/ended
     subtitle = Signal(str)            # 字幕文本
     you_said = Signal(str)            # 用户说的话
+    reply_show = Signal(int, int, str)  # (index, total, text)：回复分句显示逐句
     waveform = Signal(float)          # 波形振幅 0-1
     elapsed = Signal(int)             # 通话秒数
     error = Signal(str)               # 错误提示
@@ -70,9 +71,16 @@ class VoiceCallController(QObject):
     screen_share_changed = Signal(bool)  # 屏幕共享状态
     mouth_intensity = Signal(float)   # TTS 播放音量，用于 Live2D 口型
 
-    def __init__(self, config: dict, character=None, parent=None) -> None:
+    def __init__(
+        self,
+        config: dict,
+        character=None,
+        parent=None,
+        on_record: Callable[[str, str], None] | None = None,
+    ) -> None:
         super().__init__(parent)
         self._config = config
+        self._on_record = on_record  # on_record(role, content)：把通话写完/废话统一入聊天记录
         self._character = character or get_character_by_id("kurisu")
         self._phase = "idle"
         self._vad = VADDetector(params=VAD_PARAMS)
@@ -141,6 +149,11 @@ class VoiceCallController(QObject):
         self._stream_sep_count = 0
         self._stream_tts_started = False
         self._streamed_reply = ""
+        # 逐句口播（点击驱动，同聊天交互）
+        self._resp_cn: list[str] = []   # 中文字幕分句
+        self._resp_jp: list[str] = []   # 日语口播分句（与中文句尽量对齐，多余/不足容忍）
+        self._resp_index = -1           # 当前句号（-1=未进分句态）
+        self._reply_review = False      # 逐句回放中：播完一句只恢复聆听，不覆盖分句字幕
 
     # ===== 属性 =====
     @property
@@ -158,6 +171,20 @@ class VoiceCallController(QObject):
     @property
     def screen_share_on(self) -> bool:
         return self._screen_share_on
+
+    def _record(self, role: str, content: str) -> None:
+        """把通话中的一问一答写入聊天会话（与普通聊天统一，纳入历史记录）。
+
+        role 取值 "user"/"assistant"，content 为完整原文（assistant 保留 === 标记，
+        与 desktop_pet._agent_finished 存入仓库的格式一致，便于历史渲染复用）。
+        回调异常静默：记录是附加能力，不得中断通话管线。
+        """
+        if not content or self._on_record is None:
+            return
+        try:
+            self._on_record(role, content)
+        except Exception:
+            pass
 
     # ===== 状态机 =====
     def _set_phase(self, phase: str) -> None:
@@ -200,6 +227,10 @@ class VoiceCallController(QObject):
         self._barge_recording = False
         self._barge_buf = []
         self._barge_frames = 0
+        self._reply_review = False
+        self._resp_cn = []
+        self._resp_jp = []
+        self._resp_index = -1
         self._connecting_timer.stop()
         self._elapsed_timer.stop()
         self._close_mic()
@@ -495,6 +526,11 @@ class VoiceCallController(QObject):
     def _submit_user_audio(self, audio: np.ndarray) -> None:
         """提交一段用户语音开新回合：作废在途回复（改口/打断场景）。"""
         self._turn_id += 1
+        # 清空上一轮的逐句分句态（_resp_index<0 使 advance_reply 失效）
+        self._reply_review = False
+        self._resp_cn = []
+        self._resp_jp = []
+        self._resp_index = -1
         # 在途回合可能已开始播 TTS（barge-in 由调用方 stop；改口场景在此兜底停）
         self._tts.stop()
         self._set_phase("processing")
@@ -540,6 +576,7 @@ class VoiceCallController(QObject):
                 return
             _vlog(f">>> 语音识别结果: {text[:200]!r}")
             self.you_said.emit(text)
+            self._record("user", text)
             # 识别结果立即上字幕（"思考中…"之前让用户看见"她听到了什么"）
             self.subtitle.emit(f"🎤 你：{text}")
 
@@ -577,41 +614,9 @@ class VoiceCallController(QObject):
                 self._set_phase("listening")
                 self.subtitle.emit("聆听中，请说话")
                 return
-
-            # TTS 收尾
-            if self._stream_tts_started:
-                # 流式 TTS 会话结束：刷新剩余缓冲，speaking_changed(False) → 回 listening
-                _vlog("TTS speak_streaming_end")
-                parsed = parse_reply(reply)
-                fallback_text = parsed.chinese or parsed.japanese
-                fallback_lang = "zh" if parsed.chinese else "ja"
-                self._tts.speak_streaming_end(
-                    fallback_text=fallback_text,
-                    fallback_lang=fallback_lang,
-                )
-            else:
-                # 兜底：LLM 没输出 === 分隔符（异常），整段合成。
-                # 语音只出日语（需求）；无日语段的纯中文回复用中文腔读
-                # （比日语音读中文自然），不混语言
-                parsed = parse_reply(reply)
-                tts_text = parsed.japanese or parsed.chinese
-                text_lang = "ja" if parsed.japanese else "zh"
-                _vlog(f"TTS fallback speak, jp_len={len(parsed.japanese)} cn_len={len(parsed.chinese)} lang={text_lang}")
-                if tts_text:
-                    self._set_phase("speaking")
-                    self._streamed_reply = reply
-                    self._emit_reply_subtitle()
-                    self._tts.speak_with_options(
-                        tts_text,
-                        text_lang=text_lang,
-                        allow_fallback=True,
-                        fallback_text=parsed.chinese or tts_text,
-                        fallback_lang="zh" if parsed.chinese else "ja",
-                    )
-                else:
-                    # 无 TTS 内容，直接回 listening
-                    self._set_phase("listening")
-                    self.subtitle.emit("聆听中，请说话")
+            self._record("assistant", reply)
+            # 逐句口播：切成若干句，播第一句中文序号 + 用户点击逐句朗读（点击驱动节奏）
+            self._prepare_reply(reply)
         except Exception as exc:
             _vlog(f"FAIL: {type(exc).__name__}: {exc}")
             if turn_id != self._turn_id:
@@ -622,6 +627,83 @@ class VoiceCallController(QObject):
                 self._tts.stop()
             self._set_phase("listening")
             self.subtitle.emit("聆听中，请说话")
+
+    # ===== 逐句口播（点击驱动，同聊天交互）=====
+    @staticmethod
+    def _split_jp_sentences(text: str) -> list[str]:
+        """日语句按句末标点切分，供逐句朗读。空串返回 []。"""
+        if not text:
+            return []
+        import re
+        parts = re.split(r"([。．.！!？?…]+)", text)
+        sentences: list[str] = []
+        for i in range(0, len(parts) - 1, 2):
+            seg = (parts[i] + parts[i + 1]).strip()
+            if seg:
+                sentences.append(seg)
+        tail = parts[-1].strip()
+        if tail:
+            sentences.append(tail)
+        return sentences
+
+    def _prepare_reply(self, reply: str) -> None:
+        """把完整回复切成【中文字幕句 / 日语句】，进分句态并显示第一句。
+
+        点击驱动节奏：进入分句态只显示第一句不自动读，第一次点击才朗读
+        第一句，之后每点一句推进一句（逐句听写）。中文句与日语句在 ===
+        交替输出下不一定一一对应，按下标尽量对齐，多退少补——某句无日语
+        则仅显示字幕不发音。
+        """
+        from ui.bubble import _final_bubble_segments  # 复用与聊天一致的切句
+        parsed = parse_reply(reply)
+        cn = _final_bubble_segments(parsed.chinese) or []
+        jp = self._split_jp_sentences(parsed.japanese)
+        if not cn:
+            cn = list(jp)  # 无中文段时假名分句顶替字幕，避免空白
+        self._resp_cn = cn
+        self._resp_jp = jp
+        self._resp_index = -1
+        if not cn:
+            self._set_phase("listening")
+            self.subtitle.emit("聆听中，请说话")
+            return
+        self._reply_review = True
+        # 显示第一句（序号 0/total），等用户第一次点击开始读
+        self.reply_show.emit(0, len(cn), cn[0])
+        # 等待点击：保持 listening（VAD 开，用户可直接开口打断/追问）
+        self._set_phase("listening")
+
+    def advance_reply(self) -> None:
+        """点击推进：朗读第 (当前+1) 句日语 + 显示对应中文字幕。
+
+        朗读时相位切 speaking（半双工：VAD 暂停防回声回流）；播完经
+        _on_tts_speaking_changed 恢复聆听，但不覆盖分句字幕，可继续点击。
+        读到尾部后再点一次即回到聆听态（"聆听中，请说话"）。
+        """
+        if self._phase == "ended" or not self._resp_cn or not self._reply_review:
+            return  # 无回放/回放已结束：不重播
+        idx = self._resp_index + 1
+        n = len(self._resp_cn)
+        if idx >= n:
+            # 到尾：读完，恢复聆听（点多了就结束本回放）
+            self._reply_review = False
+            self._resp_index = -1
+            self._set_phase("listening")
+            self.subtitle.emit("聆听中，请说话")
+            return
+        self._resp_index = idx
+        self.reply_show.emit(idx, n, self._resp_cn[idx])
+        jp = self._resp_jp[idx] if idx < len(self._resp_jp) else ""
+        if jp:
+            self._set_phase("speaking")
+            self._tts.speak_with_options(
+                jp,
+                text_lang="ja",
+                allow_fallback=True,
+                fallback_text=self._resp_cn[idx],
+                fallback_lang="zh",
+            )
+        # 无日语：仅推进显示，等待下次点击（或直接开口）
 
     def _transcribe(self, wav_bytes: bytes) -> str:
         return transcribe(
@@ -658,95 +740,30 @@ class VoiceCallController(QObject):
         return reply.strip()
 
     def _on_llm_delta(self, delta: str) -> None:
-        """LLM 流式 delta 回调：纯 === 切段 + 日语字符过滤（与 desktop_pet._agent_delta 对齐）。
+        """LLM 流式 delta 回调：仅累计全文（待最终分句），不再自动流式口播。
 
-        修复 bug：LLM 把 [emotion:xxx] 放在 === 后的日语段里（违反 prompt 约定），
-        双重切段逻辑会错误把日语段1重置为中文段，后续 TTS 全跳过 → 无声。
-        新方案：纯 === 切段，对每段用 has_japanese() 判断含假名则送 TTS。
-
-        物理意义：LLM 生成与 TTS 合成是 producer-consumer 关系。LLM 生成第一句日语
-        时立即启动 TTS，TTS 合成线程与 LLM 生成线程并行。相比"等 LLM 全部完成再合成"，
-        首句语音延迟从「LLM 总时长 + TTS 合成」降到「LLM 首句时长 + TTS 合成」。
+        逐句口播模式：回复不再边生成边说话，而是在 LLM 完成后切成若干句，
+        由用户点击 CallView 字幕区逐句驱动朗读（_prepare_reply / advance_reply）。
+        这里只做增量累积 + 全双工回合校验，供换取完整 reply 供分句。
         """
         if not delta:
             return
-        # 全双工回合校验：旧回合（被打断/已改口）的 delta 不送 TTS、不上字幕
+        # 全双工回合校验：旧回合（被打断/已改口）的 delta 丢弃
         if self._active_turn != self._turn_id:
             return
         self._streamed_reply += delta
-        # 把 delta 按 === 切分：parts[0] 是当前段尾部，parts[1:] 是新切段开头
-        parts = delta.split("===")
-        if len(parts) == 1:
-            # 无新 ===：当前段增量追加（按假名判断是否送 TTS）
-            self._append_tts_segment_by_japanese(parts[0])
-        else:
-            # 有新 ===：先处理当前段尾部，再逐个切段
-            self._append_tts_segment_by_japanese(parts[0])
-            for i in range(1, len(parts)):
-                seg = parts[i].lstrip("=\r\n")
-                self._append_tts_segment_by_japanese(seg)
-        # 实时字幕：让用户看到她「正在说什么」。修复通话中回复从不显示、
-        # 用户在漫长首声等待中误以为死机而挂断的问题。
-        self._emit_reply_subtitle()
-
-    def _emit_reply_subtitle(self) -> None:
-        """把当前流式回复清理后作为字幕显示：只出中文（需求），纯日语输出
-        （无翻译段）时回退显示日语原文，避免空白。
-
-        parse_reply 按假名分类段落、顺序无关：无论 LLM 输出日语在前还是
-        中文在前，都能正确分列。字幕随 delta 增量刷新。
-        """
-        parsed = parse_reply(self._streamed_reply)
-        text = parsed.chinese or parsed.japanese
-        if text:
-            self.subtitle.emit(text)
-
-    def _append_tts_segment_by_japanese(self, text: str) -> None:
-        """按假名判断是否追加 TTS：含假名的是日语段，提取假名段送 TTS。
-
-        LLM 把日语 + 中文混在同一段（如「日语1 \\n\\n [emotion:neutral]中文2」），
-        用策略：先按 [emotion:xxx] 标签切分（去掉标签），再按空白行切段，
-        对每段用 has_japanese() 判断含假名则送 TTS，跳过纯中文段。
-
-        物理意义：日语必有假名（U+3040-309F 平假名 + U+30A0-30FF 片假名），
-        CJK 汉字无法区分但日语段必含假名。
-        形象理解：把文本按空白行切块，每块扫假名，有假名的是日语块送 TTS。
-        """
-        if not text:
-            return
-        import re
-        # 去掉 [emotion:xxx] 标签
-        cleaned = re.sub(r"\[emotion:[^\]]+\]", "", text)
-        # 按空白行（\\n\\n 或 \\n）切段
-        chunks = re.split(r"\n\s*\n", cleaned)
-        for chunk in chunks:
-            segment = chunk.strip()
-            if not segment:
-                continue
-            # 必须含至少 1 个假名才算日语段
-            if not re.search(r"[\u3040-\u309F\u30A0-\u30FF]", segment):
-                continue
-            # 首次进入日语段时启动流式 TTS 会话
-            if not self._stream_tts_started:
-                _vlog("TTS streaming start (first kana segment)")
-                # first_merge_chars=1：电话模式首句切出句末标点即送合成，
-                # 不等 14 字合并（延迟优先于吞吐，缩短首声等待）
-                self._tts.speak_streaming_start(
-                    text_lang="ja",
-                    first_merge_chars=1,
-                    allow_fallback=True,
-                )
-                self._stream_tts_started = True
-                # phase 切到 speaking（VAD 保持暂停，半双工）
-                self._set_phase("speaking")
-                self._emit_reply_subtitle()
-            self._tts.speak_streaming_append(segment)
 
     def _on_tts_speaking_changed(self, speaking: bool) -> None:
-        """TTS 播放状态变化：speaking=False 时回 listening（半双工恢复）。"""
+        """TTS 播放状态变化：speaking=False 时回 listening（半双工恢复）。
+
+        逐句口播（_reply_review）下：播完一句只恢复聆听（VAD 放行，
+        用户可继续点击下一句或直接开口），但**不覆盖分句字幕**。
+        """
         _vlog(f"TTS speaking_changed={speaking} phase={self._phase}")
         if not speaking and self._phase == "speaking":
             self._set_phase("listening")
+            if self._reply_review:
+                return
             self.subtitle.emit("聆听中，请说话")
 
     def _on_tts_offline(self) -> None:
