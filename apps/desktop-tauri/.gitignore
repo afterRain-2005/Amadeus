@@ -1,0 +1,11 @@
+dist/
+src-tauri/gen/
+
+# `tauri icon` emits every mobile/store variant. The Windows desktop bundle
+# references only the four explicitly listed files in tauri.conf.json.
+src-tauri/icons/android/
+src-tauri/icons/ios/
+src-tauri/icons/*.icns
+src-tauri/icons/64x64.png
+src-tauri/icons/icon.png
+src-tauri/icons/*Logo.png

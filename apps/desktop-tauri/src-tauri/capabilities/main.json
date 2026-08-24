@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "main-window",
+  "description": "Minimal capabilities for the local Amadeus UI.",
+  "windows": ["main", "settings", "terminal"],
+  "permissions": ["core:default", "core:window:allow-start-dragging"]
+}

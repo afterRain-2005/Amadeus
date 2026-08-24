@@ -1,0 +1,56 @@
+[package]
+name = "amadeus-desktop"
+description = "Tauri desktop shell for Amadeus"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[lib]
+name = "amadeus_desktop_lib"
+crate-type = ["lib", "cdylib", "staticlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.6.3", features = [] }
+
+[dependencies]
+amadeus-core = { path = "../../../crates/amadeus-core" }
+base64 = "0.22.1"
+cpal = "0.18.2"
+futures-util = "0.3.34"
+hound = "3.5.1"
+image = { version = "0.25.10", default-features = false, features = ["jpeg"] }
+reqwest = { version = "0.13.4", default-features = false, features = ["json", "stream", "rustls"] }
+ringbuf = "0.5.1"
+rodio = { version = "0.22.2", default-features = false, features = ["playback", "mp3", "wav"] }
+rusqlite = { version = "0.40.2", features = ["bundled"] }
+serde.workspace = true
+serde_json.workspace = true
+tauri = { version = "2.11.5", features = ["tray-icon"] }
+tauri-plugin-single-instance = "2.4.3"
+tauri-plugin-notification = "2.3.3"
+tauri-plugin-opener = "2.5.4"
+tokio = { version = "1", features = ["macros", "sync", "time"] }
+tokio-tungstenite = { version = "0.30.0", default-features = false, features = ["connect", "rustls-tls-native-roots"] }
+tokio-util = { version = "0.7.19", features = ["rt"] }
+uuid.workspace = true
+zeroize = "1.8.2"
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62.2", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_Media_Speech",
+    "Win32_System_Com",
+] }
+windows-sys = { version = "0.61.2", features = [
+    "Win32_Foundation",
+    "Win32_Security_Credentials",
+    "Win32_Storage_FileSystem",
+    "Win32_System_DataExchange",
+    "Win32_System_Memory",
+    "Win32_System_SystemInformation",
+    "Win32_System_Threading",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_WindowsAndMessaging",
+] }

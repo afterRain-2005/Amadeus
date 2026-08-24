@@ -24,6 +24,8 @@ node_modules/
 .venv/
 .pytest_cache/
 .pnpm-store/
+.ruff_cache/
+target/
 
 # 测试产物音频
 data/*.wav
