@@ -1,0 +1,321 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark" />
+    <title>Amadeus Next</title>
+  </head>
+  <body data-theme="wired">
+    <main id="app">
+      <div
+        id="window-drag-region"
+        data-tauri-drag-region
+        aria-hidden="true"
+      ></div>
+      <iframe
+        id="live2d-frame"
+        title="Amadeus Live2D"
+        allow="autoplay"
+      ></iframe>
+      <div id="shell-status-bar" class="shell-status-bar" aria-label="连接状态">
+        <span class="status-prompt">kurisu&gt;</span>
+        <time id="shell-clock">--:--</time>
+        <span class="status-cursor" aria-hidden="true">█</span>
+        <span class="status-spacer"></span>
+        <span class="status-online" aria-hidden="true">●</span>
+        <span>wire ch 1</span>
+        <span class="status-signal" aria-label="信号良好">▲▲▲</span>
+      </div>
+      <section id="assistant-bubble" class="assistant-bubble" aria-live="polite" hidden>
+        <div class="bubble-corner top-left" aria-hidden="true">⌈</div>
+        <div class="bubble-corner top-right" aria-hidden="true">⌉</div>
+        <header>K U R I S U</header>
+        <div class="bubble-body"><span id="assistant-text"></span></div>
+        <footer id="bubble-footer">wire ESTABLISHED · Δ 0.41s · ch 1</footer>
+        <div class="bubble-corner bottom-left" aria-hidden="true">⌊</div>
+        <div class="bubble-corner bottom-right" aria-hidden="true">⌋</div>
+      </section>
+      <section id="chat-panel" class="chat-panel" aria-label="文本对话" hidden>
+        <button id="collapse-chat" class="chat-square" type="button" title="收起聊天" aria-label="收起聊天">←</button>
+        <textarea
+          id="chat-input"
+          maxlength="8000"
+          rows="1"
+          aria-label="输入消息"
+          placeholder="和红莉栖聊点什么…"
+        ></textarea>
+        <button id="clear-chat" class="chat-mini" type="button" title="清除上下文" aria-label="清除上下文">清</button>
+        <button id="cancel-chat" class="chat-square danger" type="button" title="停止回复" hidden>■</button>
+        <button id="send-chat" class="chat-square primary" type="button" title="发送" aria-label="发送">↑</button>
+      </section>
+      <section id="voice-panel" class="voice-panel" aria-label="语音通话" hidden>
+        <header data-tauri-drag-region>
+          <span id="voice-phase">准备通话</span>
+          <small id="voice-device"></small>
+        </header>
+        <div class="voice-meter" aria-label="麦克风音量">
+          <i id="voice-level"></i>
+        </div>
+        <p id="voice-transcript">点击通话后直接说话</p>
+        <div class="voice-actions">
+          <button id="toggle-screen-share" type="button" aria-pressed="false">共享屏幕</button>
+          <button id="mute-voice" type="button">静音</button>
+          <button id="hangup-voice" class="danger" type="button">挂断</button>
+        </div>
+      </section>
+      <section id="terminal-panel" class="terminal-panel" aria-label="Agent 终端" hidden>
+        <header data-tauri-drag-region>
+          <strong>AMADEUS // AGENT</strong>
+          <button id="close-terminal" class="icon-button" type="button" aria-label="关闭终端">×</button>
+        </header>
+        <div id="terminal-output" class="terminal-output" role="log" aria-live="polite"></div>
+        <div class="terminal-input-row">
+          <span aria-hidden="true">guest@wired:~$</span>
+          <input id="terminal-input" maxlength="8000" autocomplete="off" spellcheck="false" aria-label="Agent 指令" />
+          <button id="terminal-cancel" class="danger" type="button" hidden>停</button>
+          <button id="terminal-send" type="button">↵</button>
+        </div>
+      </section>
+      <nav class="shell-dock" aria-label="Amadeus 功能">
+        <button id="toggle-chat" type="button" aria-label="对话" title="对话" aria-expanded="false">
+          <img src="./resources/icons/chat.svg" alt="" />
+        </button>
+        <button id="toggle-voice" type="button" aria-label="电话" title="电话" aria-pressed="false">
+          <img src="./resources/icons/phone.svg" alt="" /><span id="audio-warning" class="warning-dot" aria-label="语音需要配置" hidden></span>
+        </button>
+        <button id="toggle-pin" type="button" aria-label="固定" title="固定" aria-pressed="false">
+          <img src="./resources/icons/pin.svg" alt="" />
+        </button>
+        <button id="toggle-settings" type="button" aria-label="设置" title="设置" aria-expanded="false">
+          <img src="./resources/icons/settings.svg" alt="" /><span id="settings-warning" class="warning-dot" aria-label="需要配置" hidden></span>
+        </button>
+        <button id="toggle-terminal" type="button" aria-label="终端" title="终端" aria-expanded="false">
+          <img src="./resources/icons/terminal.svg" alt="" />
+        </button>
+        <button id="quit-app" class="dock-danger" type="button" aria-label="退出" title="退出">
+          <img src="./resources/icons/close.svg" alt="" />
+        </button>
+      </nav>
+      <section id="settings-panel" class="settings-panel" aria-labelledby="settings-title" hidden>
+        <header class="settings-title-bar" data-tauri-drag-region>
+          <div>
+            <strong id="settings-title">AMADEUS // SETTINGS</strong>
+            <small id="settings-signature">牧瀬紅莉栖 · LAB MEM 004</small>
+          </div>
+          <button id="close-settings" class="icon-button" type="button" aria-label="关闭设置">X</button>
+        </header>
+        <div class="settings-tabs" role="tablist" aria-label="设置类别">
+          <button id="appearance-settings-tab" class="active" type="button" role="tab">外观</button>
+          <button id="model-settings-tab" type="button" role="tab">模型</button>
+          <button id="audio-settings-tab" type="button" role="tab">语音</button>
+          <button id="history-settings-tab" type="button" role="tab">历史</button>
+          <button id="memory-settings-tab" type="button" role="tab">记忆</button>
+          <button id="agent-settings-tab" type="button" role="tab">Agent</button>
+          <button id="companion-settings-tab" type="button" role="tab">陪伴</button>
+          <button id="im-settings-tab" type="button" role="tab">QQ</button>
+          <button id="about-settings-tab" type="button" role="tab">关于</button>
+        </div>
+        <form id="appearance-settings-form" class="settings-page appearance-page">
+          <div class="section-heading">APPEARANCE / INTERFACE</div>
+          <p class="settings-intro">保留旧版手机桌宠布局；主题切换会实时同步到所有窗口。</p>
+          <label for="appearance-theme">界面主题</label>
+          <select id="appearance-theme">
+            <option value="wired">WIRED Rose（旧版）</option>
+            <option value="aqua">青蓝 Aqua</option>
+          </select>
+          <div class="theme-preview" aria-hidden="true">
+            <span>K U R I S U</span>
+            <strong>There is no end though there is a start.</strong>
+            <small>wire ESTABLISHED · ch 1</small>
+          </div>
+          <output id="appearance-settings-status" role="status"></output>
+        </form>
+        <form id="settings-form" class="settings-page" hidden>
+          <div class="section-heading">NETWORK / MODEL</div>
+          <label for="model-endpoint">Endpoint</label>
+          <input id="model-endpoint" type="url" required maxlength="2048" spellcheck="false" />
+          <label for="model-name">模型</label>
+          <input id="model-name" required maxlength="128" spellcheck="false" />
+          <label for="model-api-key">API Key</label>
+          <input
+            id="model-api-key"
+            type="password"
+            autocomplete="off"
+            spellcheck="false"
+            placeholder="留空则保持现有密钥"
+          />
+          <div class="settings-actions">
+            <button id="remove-api-key" class="danger" type="button">清除密钥</button>
+            <button id="save-settings" class="primary" type="submit">保存</button>
+          </div>
+          <output id="settings-status" role="status"></output>
+        </form>
+        <form id="audio-settings-form" class="settings-page" hidden>
+          <div class="section-heading">VOICE INPUT / OUTPUT</div>
+          <label for="audio-input-device">麦克风</label>
+          <select id="audio-input-device"></select>
+          <label for="audio-output-device">播放设备</label>
+          <select id="audio-output-device"></select>
+          <label for="asr-endpoint">ASR Endpoint</label>
+          <input id="asr-endpoint" type="url" required maxlength="2048" spellcheck="false" />
+          <label for="asr-model">ASR 模型</label>
+          <input id="asr-model" required maxlength="128" spellcheck="false" />
+          <label for="asr-api-key">ASR API Key</label>
+          <input id="asr-api-key" type="password" autocomplete="off" placeholder="留空保持现有密钥" />
+          <label class="check-row" for="barge-in-enabled">
+            <input id="barge-in-enabled" type="checkbox" />
+            允许说话打断语音回复
+          </label>
+          <label class="check-row" for="tts-enabled">
+            <input id="tts-enabled" type="checkbox" />
+            播放 AI 语音回复
+          </label>
+          <label class="check-row" for="tts-sapi-fallback">
+            <input id="tts-sapi-fallback" type="checkbox" />
+            云端不可用时使用 Windows 系统语音
+          </label>
+          <label for="tts-model">阿里云 TTS 模型</label>
+          <input id="tts-model" required maxlength="128" spellcheck="false" />
+          <label for="tts-voice-id">阿里云音色 ID</label>
+          <input id="tts-voice-id" maxlength="256" spellcheck="false" />
+          <label for="tts-api-key">阿里云 API Key</label>
+          <input id="tts-api-key" type="password" autocomplete="off" placeholder="留空保持现有密钥" />
+          <div class="settings-actions audio-settings-actions">
+            <button id="remove-audio-keys" class="danger" type="button">清除密钥</button>
+            <button id="refresh-audio-devices" type="button">刷新设备</button>
+            <button id="save-audio-settings" class="primary" type="submit">保存</button>
+          </div>
+          <output id="audio-settings-status" role="status"></output>
+        </form>
+        <section id="history-settings-page" class="settings-page" aria-label="对话历史" hidden>
+          <div class="page-toolbar">
+            <span>会话会自动保存并在重启后恢复</span>
+            <button id="new-conversation" class="primary" type="button">新对话</button>
+          </div>
+          <div id="conversation-list" class="item-list"></div>
+          <div id="conversation-messages" class="message-list"></div>
+          <output id="history-settings-status" role="status"></output>
+        </section>
+        <section id="memory-settings-page" class="settings-page" aria-label="长期记忆" hidden>
+          <div class="page-toolbar">
+            <span>仅保存在本机，可逐条纠正</span>
+            <button id="clear-memories" class="danger" type="button">全部清空</button>
+          </div>
+          <div id="memory-list" class="item-list memory-list"></div>
+          <output id="memory-settings-status" role="status"></output>
+        </section>
+        <form id="agent-settings-form" class="settings-page" hidden>
+          <div class="section-heading">AGENT / SANDBOX</div>
+          <label for="agent-mode">对话引擎</label>
+          <select id="agent-mode">
+            <option value="direct">直连模型（安全聊天）</option>
+            <option value="codex">Codex Agent</option>
+          </select>
+          <label for="agent-workspace">Codex 工作区（绝对路径）</label>
+          <input id="agent-workspace" maxlength="2048" spellcheck="false" />
+          <label for="agent-sandbox">Codex 权限</label>
+          <select id="agent-sandbox">
+            <option value="read-only">只读（推荐）</option>
+            <option value="workspace-write">允许修改工作区</option>
+          </select>
+          <p class="privacy-note">Codex 使用你现有的登录。Amadeus 不读取其令牌；写权限仅限所选工作区，且不提供 danger-full-access。</p>
+          <div class="settings-actions">
+            <button id="refresh-agent-status" type="button">重新检测</button>
+            <button id="save-agent-settings" class="primary" type="submit">保存</button>
+          </div>
+          <output id="agent-settings-status" role="status"></output>
+        </form>
+        <form id="companion-settings-form" class="settings-page" hidden>
+          <div class="section-heading">COMPANION / PRIVACY</div>
+          <label class="check-row" for="proactive-enabled">
+            <input id="proactive-enabled" type="checkbox" />启用主动问候
+          </label>
+          <label class="check-row" for="active-window-enabled">
+            <input id="active-window-enabled" type="checkbox" />感知前台应用和窗口标题
+          </label>
+          <label class="check-row" for="activity-enabled">
+            <input id="activity-enabled" type="checkbox" />感知空闲时长（不记录按键内容）
+          </label>
+          <label class="check-row" for="clipboard-enabled">
+            <input id="clipboard-enabled" type="checkbox" />读取剪贴板预览（敏感，默认关闭）
+          </label>
+          <div class="compact-grid">
+            <label for="idle-minutes">离开提醒（分钟）</label>
+            <input id="idle-minutes" type="number" min="1" max="240" />
+            <label for="cooldown-minutes">冷却（分钟）</label>
+            <input id="cooldown-minutes" type="number" min="5" max="1440" />
+            <label for="max-per-day">每日上限</label>
+            <input id="max-per-day" type="number" min="0" max="24" />
+            <label for="quiet-start">静默开始</label>
+            <input id="quiet-start" type="time" />
+            <label for="quiet-end">静默结束</label>
+            <input id="quiet-end" type="time" />
+          </div>
+          <div id="perception-preview" class="perception-preview">等待感知快照…</div>
+          <div class="settings-actions audio-settings-actions">
+            <button id="refresh-perception" type="button">刷新快照</button>
+            <button id="test-companion" type="button">测试问候</button>
+            <button id="save-companion-settings" class="primary" type="submit">保存</button>
+          </div>
+          <output id="companion-settings-status" role="status"></output>
+        </form>
+        <form id="im-settings-form" class="settings-page" hidden>
+          <div class="section-heading">IM / ONEBOT 11</div>
+          <label class="check-row" for="im-enabled">
+            <input id="im-enabled" type="checkbox" />启用 QQ / OneBot 11 消息通知
+          </label>
+          <label for="im-ws-url">正向 WebSocket 地址</label>
+          <input id="im-ws-url" type="url" required maxlength="2048" spellcheck="false" />
+          <label for="im-access-token">Access Token</label>
+          <input id="im-access-token" type="password" autocomplete="off" placeholder="留空保持现有令牌" />
+          <label class="check-row" for="im-group-at-only">
+            <input id="im-group-at-only" type="checkbox" />群聊仅通知 @我 或命中关键词
+          </label>
+          <label for="im-keywords">群聊关键词（用逗号或顿号分隔）</label>
+          <input id="im-keywords" maxlength="512" spellcheck="false" />
+          <div class="inline-checks">
+            <label class="check-row" for="im-bubble">
+              <input id="im-bubble" type="checkbox" />桌宠气泡
+            </label>
+            <label class="check-row" for="im-tray">
+              <input id="im-tray" type="checkbox" />系统通知
+            </label>
+          </div>
+          <div class="compact-grid">
+            <label for="im-quiet-start">免打扰开始</label>
+            <input id="im-quiet-start" type="time" />
+            <label for="im-quiet-end">免打扰结束</label>
+            <input id="im-quiet-end" type="time" />
+          </div>
+          <p class="privacy-note">令牌保存在 Windows 凭据管理器。远程地址必须使用 WSS；本机 NapCat 可使用 WS。</p>
+          <div class="settings-actions audio-settings-actions">
+            <button id="remove-im-token" class="danger" type="button">清除令牌</button>
+            <button id="reconnect-im" type="button">重新连接</button>
+            <button id="save-im-settings" class="primary" type="submit">保存</button>
+          </div>
+          <output id="im-settings-status" role="status"></output>
+          <div id="im-message-list" class="message-list im-message-list"></div>
+        </form>
+        <section id="about-settings-page" class="settings-page about-page" aria-label="关于与版本" hidden>
+          <div class="about-mark">A</div>
+          <strong>Amadeus Next</strong>
+          <p>原生 Rust / Tauri 桌面伴侣</p>
+          <dl class="about-details">
+            <div><dt>当前版本</dt><dd id="current-version">—</dd></div>
+            <div><dt>最新版本</dt><dd id="latest-version">尚未检查</dd></div>
+          </dl>
+          <p class="privacy-note">版本检查只读取项目的 GitHub Releases。Amadeus 不会自动下载或运行安装包。</p>
+          <div class="settings-actions audio-settings-actions">
+            <button id="open-release-page" type="button">发布页面</button>
+            <button id="check-updates" class="primary" type="button">检查更新</button>
+          </div>
+          <output id="update-status" role="status"></output>
+        </section>
+        <div class="settings-ticker" aria-hidden="true">There is no end though there is a start in space. — El Psy Kongroo.</div>
+      </section>
+      <output id="boot-status" role="status">CORE CONNECTING</output>
+    </main>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

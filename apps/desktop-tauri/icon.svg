@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Amadeus">
+  <defs>
+    <linearGradient id="shell" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#25171d"/>
+      <stop offset="0.5" stop-color="#7d0f1a"/>
+      <stop offset="1" stop-color="#171114"/>
+    </linearGradient>
+    <linearGradient id="mark" x1="0" y1="1" x2="1" y2="0">
+      <stop offset="0" stop-color="#c1b492"/>
+      <stop offset="1" stop-color="#ffd8e1"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="104" fill="url(#shell)"/>
+  <rect x="18" y="18" width="476" height="476" rx="88" fill="none" stroke="#d2738a" stroke-width="12"/>
+  <path d="M126 382 239 111h35l112 271h-62l-23-61h-92l-23 61zm104-116h51l-25-72z" fill="url(#mark)"/>
+  <path d="M92 416h328" fill="none" stroke="#d2738a" stroke-linecap="round" stroke-width="14"/>
+  <circle cx="256" cy="416" r="10" fill="#ffd8e1"/>
+</svg>
