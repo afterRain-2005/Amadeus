@@ -13,19 +13,19 @@
   #canvas { display: block; width: 100%; height: 100%; }
   #status {
     position: fixed; top: 4px; left: 4px;
-    font: 10px monospace; color: #888;
+    font: 10px Consolas, "Microsoft YaHei", monospace; color: #8a7f63;
     pointer-events: none;
   }
   #pet-menu {
     position: fixed; top: 10px; right: 10px; z-index: 10;
-    width: 30px; height: 30px; border: 0; border-radius: 5px;
-    color: rgba(255,255,255,.65); background: rgba(10,10,16,.22);
-    font: 18px sans-serif; cursor: pointer;
+    width: 30px; height: 30px; border: 1px solid #d2738a; border-radius: 0;
+    color: #c1b492; background: rgba(23,17,20,.6);
+    font: 16px Consolas, "Microsoft YaHei", monospace; cursor: pointer;
   }
-  #pet-menu:hover { color: white; background: rgba(209,139,36,.75); }
+  #pet-menu:hover { color: #171114; background: #d2738a; }
 
   #enter-flash {
-    position: fixed; inset: 0; z-index: 50; background: #fff; opacity: 0;
+    position: fixed; inset: 0; z-index: 50; background: #171114; opacity: 0;
     pointer-events: none; animation: dissolve 3.6s steps(12) 1;
   }
   @keyframes dissolve {

@@ -6,6 +6,7 @@ import multiprocessing as mp
 from multiprocessing.connection import Connection
 from pathlib import Path
 import os
+import random
 import sys
 import threading
 import time
@@ -54,7 +55,9 @@ from ui.bubble import (  # noqa: F401
 )
 
 # 抖动纹理助手已抽出至 ui/theme.py（重构 2026-08-24）。
-from ui.theme import _dither_texture_url, _ensure_dither_texture  # noqa: F401
+from ui.theme import (  # noqa: F401
+    BG, CREAM, DIM, FONT_SERIF, ROSE, _dither_texture_url, _ensure_dither_texture,
+)
 
 # 终端 HTML 构建纯函数已抽出至 ui/terminal_html.py（重构 2026-08-24）。
 from ui.terminal_html import (  # noqa: F401
@@ -73,6 +76,36 @@ from ui.terminal_html import (  # noqa: F401
     _build_terminal_html,
 )
 READY_FILE = _APP_DIR / "desktop_pet.ready"
+
+# Compact companion geometry. The viewport size remains fixed so character
+# scale is unchanged while the shell stays tight around its Qt regions.
+CANVAS_WINDOW_W = 304
+CANVAS_WINDOW_H = 585
+CHARACTER_VIEW_X = 20
+CHARACTER_VIEW_Y = 50
+CHARACTER_VIEW_W = 264
+CHARACTER_VIEW_H = 496
+
+# Live2D 人物点击区域定义（归一化坐标，与 phone_live2d_page.html CLICKABLE_REGIONS 一致）
+LIVE2D_CLICK_REGIONS = [
+    {"name": "head",  "nx": 0.50, "ny": 0.15, "motion": "surprised",
+     "lines": ["や、やめろ！頭を触るな！", "こ、これはセクハラだぞ！", "もう…子供扱いしないでくれ"]},
+    {"name": "face",  "nx": 0.50, "ny": 0.30, "motion": "blush",
+     "lines": ["な、なに見てるんだよ！", "そんなに見つめるな…", "変態！じろじろ見るな！"]},
+    {"name": "chest", "nx": 0.50, "ny": 0.45, "motion": "angry",
+     "lines": ["この変態！どこ触ってるんだ！", "警察呼ぶぞ！", "そんなことしたらデータ消すからな！"]},
+    {"name": "arm_l", "nx": 0.15, "ny": 0.40, "motion": "arms_crossed",
+     "lines": ["ふん！", "触るな！", "喧嘩売ってるのか？"]},
+    {"name": "arm_r", "nx": 0.85, "ny": 0.40, "motion": "shrug",
+     "lines": ["なんだよ？", "用があるならさっさと言え", "論文の恐怖をもう一度味わいたいか？"]},
+    {"name": "waist", "nx": 0.50, "ny": 0.60, "motion": "confused",
+     "lines": ["く、くすぐったい！やめろ！", "こら！笑わせるな！", "もう許さないからな！"]},
+    {"name": "legs",  "nx": 0.50, "ny": 0.80, "motion": "sad",
+     "lines": ["おい！", "そんなことしたら帰るからな！", "ふん！知らない！"]},
+    {"name": "hand",  "nx": 0.50, "ny": 0.50, "motion": "chin_rest",
+     "lines": ["手、手をつなぎたいのか？", "仕方ないな…ちょっとだけだぞ", "一瞬だけだからな"]},
+]
+DOCK_SLOT_H = 64
 
 
 # ============================================================
@@ -94,7 +127,7 @@ READY_FILE = _APP_DIR / "desktop_pet.ready"
 # ============================================================
 def run_overlay(connection: Connection, renderer: mp.Process) -> int:
     from PySide6.QtCore import QEasingCurve, QEvent, QPoint, QPropertyAnimation, QRect, Qt, QThreadPool, QTimer
-    from PySide6.QtGui import QColor, QCursor, QIcon, QImage, QKeyEvent, QMouseEvent, QPainter, QPixmap
+    from PySide6.QtGui import QColor, QCursor, QIcon, QImage, QKeyEvent, QMouseEvent, QPainter, QPen, QPixmap
     from PySide6.QtWidgets import (
                 QApplication, QHBoxLayout, QLabel, QLineEdit, QMenu, QMessageBox,
                 QPushButton, QSystemTrayIcon, QWidget,
@@ -114,6 +147,7 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
     from ui.widgets.crt_overlay import CrtOverlay
     from ui.widgets.agent_task import AgentTask
     from ui.widgets.agent_terminal import AgentTerminal
+    from ui.widgets.companion_surface import CompanionSurface
     from ui.widgets.dock import DockBar
     from ui.widgets.status_bar import StatusBar
 
@@ -189,24 +223,48 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool)
             self.setAttribute(Qt.WA_TranslucentBackground, True)
             self.setAttribute(Qt.WA_NoSystemBackground, True)
-            # 尺寸对齐 phone_live2d_page.html 的合成画面：304×690
-            # （手机本体 280×560 —— 严格 2:1 比例）
-            self.setFixedSize(304, 690)
+            # 尺寸对齐 Web 端 Companion Canvas 合成画面。
+            self.setFixedSize(CANVAS_WINDOW_W, CANVAS_WINDOW_H)
+
+            character_rect = QRect(
+                CHARACTER_VIEW_X,
+                CHARACTER_VIEW_Y,
+                CHARACTER_VIEW_W,
+                CHARACTER_VIEW_H,
+            )
+            self.companion_surface = CompanionSurface(character_rect, self)
+            self.companion_surface.setGeometry(self.rect())
+            self.companion_surface.lower()
+            self.live2d_layer = QLabel(self)
+            self.live2d_layer.setGeometry(self.rect())
+            self.live2d_layer.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+            self.live2d_layer.setStyleSheet("background:transparent;border:0;")
+            self.character_border = QWidget(self)
+            self.character_border.setGeometry(character_rect)
+            self.character_border.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+            self.character_border.setStyleSheet(
+                f"background:transparent;border:1px solid {ROSE};"
+            )
 
             screen = QApplication.primaryScreen().availableGeometry()
             self.move(screen.right() - self.width() - 20, screen.bottom() - self.height() - 60)
 
             self.reply_bubble = QLabel(self)
-            # 气泡：手机屏幕内、Dock 栏上方（几何由 _set_bubble_text 统一计算）
-            self.reply_bubble.setGeometry(28, 448, 248, 96)
+            # 气泡：人物画布内、Dock 上方（几何由 _set_bubble_text 统一计算）
+            self.reply_bubble.setGeometry(
+                CHARACTER_VIEW_X + 8,
+                CHARACTER_VIEW_Y + 330,
+                CHARACTER_VIEW_W - 16,
+                96,
+            )
             # v4：正文左对齐（富文本 line-height 1.5 由 _wrap_bubble_html 提供）
             self.reply_bubble.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
             self.reply_bubble.setWordWrap(True)
             self.reply_bubble.setStyleSheet(
-                "QLabel{background-color:#171114;background-image:url(" + _dither_texture_url() + ");"
-                "color:#c1b492;"
-                "border-left:1px solid #d2738a;border-right:1px solid #d2738a;"
-                "border-top:1.5px solid #d2738a;border-bottom:1.5px solid #d2738a;"
+                f"QLabel{{background-color:{BG};background-image:url(" + _dither_texture_url() + ");"
+                f"color:{CREAM};"
+                f"border-left:1px solid {ROSE};border-right:1px solid {ROSE};"
+                f"border-top:1.5px solid {ROSE};border-bottom:1.5px solid {ROSE};"
                 "border-radius:0px;"
                 "padding:10px 16px;font:14px 'Consolas','Microsoft YaHei';"
                 "font-weight:400}"
@@ -222,16 +280,16 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             # v4：名牌/注脚改为一体标签（bg + 粗左边条，贴合气泡上下缘）
             self.bubble_header = QLabel("K U R I S U", self)
             self.bubble_header.setStyleSheet(
-                "color:#d2738a;background-color:#171114;"
-                "border:1px solid #d2738a;border-left:6px solid #d2738a;border-radius:0px;"
-                "font-family:'Times New Roman','Times',serif;font-size:11px;font-weight:bold;"
+                f"color:{ROSE};background-color:{BG};"
+                f"border:1px solid {ROSE};border-left:6px solid {ROSE};border-radius:0px;"
+                f"font-family:'{FONT_SERIF}','Times',serif;font-size:11px;font-weight:bold;"
             )
             self.bubble_header.setAlignment(Qt.AlignHCenter)
             self.bubble_header.hide()
             self.bubble_footer = QLabel("wire ESTABLISHED · Δ 0.41s · ch 1", self)
             self.bubble_footer.setStyleSheet(
-                "color:#8a7f63;background-color:#171114;"
-                "border:1px solid #8a7f63;border-left:6px solid #8a7f63;border-radius:0px;"
+                f"color:{DIM};background-color:{BG};"
+                f"border:1px solid {DIM};border-left:6px solid {DIM};border-radius:0px;"
                 "font-family:'Consolas','Microsoft YaHei';font-size:9px;"
             )
             self.bubble_footer.setAlignment(Qt.AlignHCenter)
@@ -241,31 +299,31 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             for _ch in ("⌈", "⌉", "⌊", "⌋"):
                 lbl = QLabel(_ch, self)
                 lbl.setStyleSheet(
-                    "color:#d2738a;background:transparent;"
-                    "font-family:'Times New Roman','Times',serif;font-size:15px;font-weight:bold;"
+                    f"color:{ROSE};background:transparent;"
+                    f"font-family:'{FONT_SERIF}','Times',serif;font-size:15px;font-weight:bold;"
                 )
                 lbl.hide()
                 self.bubble_corners.append(lbl)
             # v4：状态行（工具进度与台词分离，dim 小字）
             self.status_line = QLabel("", self)
             self.status_line.setStyleSheet(
-                "color:#8a7f63;background:transparent;"
+                f"color:{DIM};background:transparent;"
                 "font-family:'Consolas','Microsoft YaHei';font-size:9px;"
             )
             self.status_line.setAlignment(Qt.AlignHCenter)
             self.status_line.hide()
             self.reply_bubble.installEventFilter(self)
 
-            # 输入面板（默认隐藏，点击💬展开；屏幕内底部槽位）
+            # 输入面板（默认隐藏，点击💬展开；人物画布底部槽位）
             panel_w = 248
-            panel_x = 20 + (264 - panel_w) // 2   # 20 = 屏幕左，264 = 屏幕宽
-            panel_y = 118 + 496 - 64 - 2            # 屏幕底 - 64 Dock预留 - 2margin
+            panel_x = 28
+            panel_y = 552
             self.input_panel = QWidget(self)
             self.input_panel.setGeometry(panel_x, panel_y, panel_w, 52)
             self.input_panel.setStyleSheet(
-                "background-color:#171114;background-image:url(" + _dither_texture_url() + ");"
-                "border-left:1px solid #d2738a;border-right:1px solid #d2738a;"
-                "border-top:1.5px solid #d2738a;border-bottom:1.5px solid #d2738a;"
+                f"background-color:{BG};background-image:url(" + _dither_texture_url() + ");"
+                f"border-left:1px solid {ROSE};border-right:1px solid {ROSE};"
+                f"border-top:1.5px solid {ROSE};border-bottom:1.5px solid {ROSE};"
                 "border-radius:0px"
             )
             input_layout = QHBoxLayout(self.input_panel)
@@ -274,9 +332,9 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             self.input = QLineEdit()
             self.input.setPlaceholderText("和红莉栖对话…")
             self.input.setStyleSheet(
-                "QLineEdit{background:transparent;color:#c1b492;border:0;padding:8px 10px;"
+                f"QLineEdit{{background:transparent;color:{CREAM};border:0;padding:8px 10px;"
                 "font-size:14px;font-family:'Consolas','Microsoft YaHei'}"
-                "QLineEdit::placeholder{color:#8a7f63}"
+                f"QLineEdit::placeholder{{color:{DIM}}}"
             )
             self.input.returnPressed.connect(self._send)
             collapse_button = QPushButton("←")
@@ -284,9 +342,9 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             collapse_button.clicked.connect(self._toggle_input_panel)
             collapse_button.setFixedSize(36, 36)
             collapse_button.setStyleSheet(
-                "QPushButton{background:transparent;color:#8a7f63;border:1px solid #8a7f63;border-radius:0px;"
-                "font-size:16px}"
-                "QPushButton:hover{background:#d2738a;color:#171114}"
+                f"QPushButton{{background:transparent;color:{DIM};border:1px solid {DIM};border-radius:0px;"
+                "font-size:16px}}"
+                f"QPushButton:hover{{background:{ROSE};color:{BG}}}"
             )
             input_layout.addWidget(collapse_button)
             input_layout.addWidget(self.input, 1)
@@ -295,9 +353,9 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             send_button.clicked.connect(self._send)
             send_button.setFixedSize(36, 36)
             send_button.setStyleSheet(
-                "QPushButton{background:transparent;color:#c1b492;border:1px solid #c1b492;border-radius:0px;"
-                "font-size:16px;font-weight:bold}"
-                "QPushButton:hover{background:#d2738a;color:#171114} QPushButton:disabled{color:#8a7f63}"
+                f"QPushButton{{background:transparent;color:{CREAM};border:1px solid {CREAM};border-radius:0px;"
+                "font-size:16px;font-weight:bold}}"
+                f"QPushButton:hover{{background:{ROSE};color:{BG}}} QPushButton:disabled{{color:{DIM}}}"
             )
             input_layout.addWidget(send_button)
             self.send_button = send_button
@@ -315,8 +373,9 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             self.dock_bar.button("电话").clicked.connect(self._toggle_call)
             self.dock_bar.show()
 
-            # 手机屏幕顶部状态栏（时间 + 信号，Qt 实现）
+            # 人物画布顶部悬浮状态栏（时间 + 信号，Qt 实现）
             self.status_bar = StatusBar(self)
+            self.status_bar.close_clicked.connect(self._minimize_to_tray)
             self.status_bar.show()
             self.status_bar.raise_()
 
@@ -324,7 +383,7 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             from ui.widgets.call_view import CallView
             self._in_call = False
             self.call_view = CallView(self)
-            self.call_view.setGeometry(20, 118, 264, 496)
+            self.call_view.setGeometry(CHARACTER_VIEW_X, CHARACTER_VIEW_Y, CHARACTER_VIEW_W, CHARACTER_VIEW_H)
             self.call_view.hide()
             self.call_controller = None  # 通话时创建，避免闲置时持有 sounddevice stream
 
@@ -346,7 +405,7 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             icon_pixmap = QPixmap(str(ROOT / "resources" / "amadeus-logo-TM.png"))
             if icon_pixmap.isNull():
                 icon_pixmap = QPixmap(24, 24)
-                icon_pixmap.fill(QColor(210, 115, 138))
+                icon_pixmap.fill(QColor(ROSE))
             else:
                 icon_pixmap = icon_pixmap.scaled(
                     24, 24, Qt.KeepAspectRatio, Qt.SmoothTransformation
@@ -384,7 +443,7 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
                 btn.setIconSize(_logo_pix.size())
             btn.setStyleSheet(
                 "QPushButton{background:transparent;border:none;padding:0}"
-                "QPushButton:hover{background:rgba(210,115,138,0.3);border-radius:6px}"
+                f"QPushButton:hover{{background:rgba(210,115,138,0.3);border-radius:6px}}"
                 "QPushButton:pressed{background:rgba(210,115,138,0.5);border-radius:6px}"
             )
             btn.clicked.connect(self._restore_from_tray)
@@ -402,11 +461,6 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             self._pointer_timer = QTimer(self)
             self._pointer_timer.timeout.connect(self._track_pointer)
             self._pointer_timer.start(50)
-
-            self._home_click_timer = QTimer(self)
-            self._home_click_timer.setSingleShot(True)
-            self._home_click_timer.setInterval(260)
-            self._home_click_timer.timeout.connect(self._handle_phone_home_click)
 
             from PySide6.QtGui import QKeySequence, QShortcut
             # Ctrl+Space 已由 _poll_global_hotkey 的 win32api 全局轮询处理，
@@ -471,9 +525,9 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             """
             bubble_html = _wrap_bubble_html(text)
             self.reply_bubble.setText(bubble_html)
-            # 手机屏幕区：x=20 w=264；Dock 顶 y = 118+496-64 = 550
-            screen_x, screen_w = 20, 264
-            dock_top = 118 + 496 - 64
+            # 人物画布区域；气泡停靠在命令栏上方。
+            screen_x, screen_w = CHARACTER_VIEW_X, CHARACTER_VIEW_W
+            dock_top = CHARACTER_VIEW_Y + CHARACTER_VIEW_H - DOCK_SLOT_H
             w, h = _bubble_size_hint(bubble_html, self.reply_bubble.font(), screen_w - 16)
             w = min(max(w, 80), screen_w - 16)
             h = min(max(h, 36), 100)
@@ -771,17 +825,6 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             self.hide()
             self._restore_win.show()
 
-        def _handle_phone_home_click(self) -> None:
-            self._minimize_to_tray()
-
-        @staticmethod
-        def _phone_menu_rect() -> QRect:
-            return QRect(10, 10, 30, 30)
-
-        @staticmethod
-        def _phone_home_rect() -> QRect:
-            return QRect(134, 621, 36, 36)
-
         def _tray_activated(self, reason) -> None:
             if reason in (QSystemTrayIcon.Trigger, QSystemTrayIcon.DoubleClick):
                 self._restore_from_tray()
@@ -838,6 +881,7 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
                 self.terminal.submitted.connect(self._terminal_send)
                 self.terminal.interrupt_requested.connect(self._interrupt_agent)
                 self.terminal._history = list(load_terminal_state().get("history") or [])
+                self.terminal.installEventFilter(self)
             # 每次打开都从当前会话重建终端行，避免只加载一次导致
             # 之后主页面新增的聊天记录不显示在终端（历史抽屉是每次重读的）。
             self._term_lines = self._terminal_session_lines()
@@ -1053,6 +1097,7 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             response_max_tokens: int | None = 700,
             inject_system_prompt: str | None = None,
             terminal_cwd: str | None = None,
+            terminal_session_id: str | None = None,
         ) -> None:
             """发送核心：气泡与终端共用（终端模式不显示气泡，回显走终端）。"""
             config = load_config()
@@ -1096,9 +1141,9 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             if response_max_tokens == 700:
                 router_cfg = config.get("agent_router") or {}
                 try:
-                    response_max_tokens = int(router_cfg.get("chat_max_tokens", 700))
+                    response_max_tokens = int(router_cfg.get("chat_max_tokens", 400))
                 except (TypeError, ValueError):
-                    response_max_tokens = 700
+                    response_max_tokens = 400
             task = AgentTask(
                 history,
                 session.get("memories", []),
@@ -1107,6 +1152,7 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
                 response_max_tokens=response_max_tokens,
                 inject_system_prompt=inject_system_prompt,
                 terminal_cwd=terminal_cwd,
+                terminal_session_id=terminal_session_id,
             )
             self._active_agent_task = task
             task.signals.status.connect(self._show_status)
@@ -1223,18 +1269,27 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
                 # 流式气泡：首字即上屏，不等 finished（本地直连低延迟体感优化）。
                 # 停掉思考呼吸动画与 1.2s 短语轮换，防止轮换把流式文字覆盖掉。
                 self._stop_thinking_anim()
-                display = _streamed_display_text(self._streamed_reply)
+                raw_display = _streamed_display_text(self._streamed_reply)
+                # 过滤日语：用 parse_reply 的假名检测只保留纯中文
+                _parsed = parse_reply(raw_display)
+                display = _parsed.chinese if _parsed.chinese else raw_display
                 # 增量分句：句末标点一到位即成为可单击的分段，不必等整条回复
                 # 结束（TTS 逐句播放时第一段声音未完也能推进阅读）
                 self._bubble_segments, tail = _split_stream_segments(display)
                 now = time.monotonic()
                 if not getattr(self, "_stream_reading", False):
-                    # 未进入逐句阅读：整段打字机预览（原有行为）
-                    paint_text = display
-                elif getattr(self, "_stream_live", False) or self._bubble_index >= len(self._bubble_segments):
-                    # 已追平全部完成句：只打字机当前残句（新句完成后仍保持直播）
+                    # 自动进入逐句模式：只展示第一段，等待用户单击推进
+                    self._stream_reading = True
+                    self._stream_live = False  # 初始未追平，等用户单击
+                    self.reply_bubble.show()
+                    if self._bubble_index < len(self._bubble_segments):
+                        self._show_next_bubble()
                     paint_text = tail
-                    self._stream_live = True
+                elif getattr(self, "_stream_live", False):
+                    # 用户已追平：新分段自动推进
+                    if self._bubble_index < len(self._bubble_segments):
+                        self._show_next_bubble()
+                    paint_text = tail
                 else:
                     # 用户停在已完成的句子上：保持不动，等下一次单击推进
                     paint_text = None
@@ -1364,7 +1419,7 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
             elif config.get("tts_enabled", True) and self._stream_tts_started:
                 self.speech.speak_streaming_end()
             elif config.get("tts_enabled", True) and parsed.japanese and not self._stream_tts_started:
-                # 兜底：如果流式未启动（如无 === 分隔符），整段合成
+                # 兜底：如果流式未启动（如无 === 分隔符），整段合成日语
                 print(f"[PET-DBG] 兜底整段合成 jp={parsed.japanese[:60]!r}")
                 self.speech.set_rate([-2, 0, 2][config.get("tts_rate", 1)])
                 self.speech.speak_with_options(
@@ -1372,6 +1427,11 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
                     text_lang="ja",
                     allow_fallback=False,
                 )
+            elif config.get("tts_enabled", True) and not parsed.japanese and not self._stream_tts_started:
+                # LLM 未输出日语，跳过 TTS（静默）
+                # 格式提醒通过 _FORMAT_REMINDER 在每条用户消息前注入，
+                # 防止 LLM 在长上下文后忘记 === 格式。不再用中文兜底。
+                print(f"[PET-DBG] LLM 未输出日语，跳过 TTS")
             self._stream_sep_count = 0
             self._stream_tts_started = False
             # 表情/动作综合判定：本地 Ollama 小模型分类（emotion+motion），
@@ -1439,20 +1499,21 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
                         "请安装 Microsoft Edge WebView2 Runtime，"
                         "或把 data/logs/renderer-crash.log 发给开发者。"
                     )
-                elif kind == "home_click":
-                    # JS 端 Home 键点击 → 最小化到托盘（保留托盘）
-                    self._minimize_to_tray()
-                elif kind == "hide_window":
-                    # JS 端 Home 键双击 → 隐藏整个窗口，保留托盘
-                    self.hide()
-                    self._restore_win.show()
-                elif kind == "close":
-                    # JS 端 × 菜单 → 主动退出（等同于托盘菜单的退出）
-                    QApplication.instance().quit()
+                elif kind == "click":
+                    # Live2D 人物点击事件：触发语音回复（动作已在 JS 端 playMotion）
+                    line = payload.get("line", "")
+                    if line:
+                        self.speech.speak(line)
             if latest is not None:
                 image = QImage.fromData(latest, "PNG")
                 if not image.isNull():
                     self._frame = image
+                    frame_pixmap = QPixmap.fromImage(image)
+                    if frame_pixmap.size() != self.size():
+                        frame_pixmap = frame_pixmap.scaled(
+                            self.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation
+                        )
+                    self.live2d_layer.setPixmap(frame_pixmap)
                     if not self._first_frame_received:
                         self._first_frame_received = True
                         try:
@@ -1483,25 +1544,10 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
                 )
 
         def paintEvent(self, event) -> None:
-            if self._frame.isNull():
-                return
+            super().paintEvent(event)
             painter = QPainter(self)
-            painter.setRenderHint(QPainter.SmoothPixmapTransform)
-            # 合成帧尺寸 = 304×690（手机壳 + Live2D 一体，PyWeb 端已画完）
-            # 直接按 1:1 贴到窗口，保持透明背景
-            target = QRect(0, 0, self.width(), self.height())
-            if self._frame.width() == self.width() and self._frame.height() == self.height():
-                painter.drawImage(target, self._frame)
-            else:
-                scaled = self._frame.scaled(
-                    self.width(), self.height(),
-                    Qt.KeepAspectRatio, Qt.SmoothTransformation
-                )
-                painter.drawImage(
-                    (self.width() - scaled.width()) // 2,
-                    (self.height() - scaled.height()) // 2,
-                    scaled,
-                )
+            painter.setPen(QPen(QColor(ROSE), 3))
+            painter.drawRect(self.rect().adjusted(1, 1, -1, -1))
 
         def wheelEvent(self, event) -> None:
             if self._pinned:
@@ -1522,34 +1568,39 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
                         lbl.setVisible(vis)
                     if not vis:
                         self.status_line.hide()
+            # ESC 隐藏 Terminal
+            if obj is self.terminal and event.type() == QEvent.KeyPress:
+                if event.key() == Qt.Key_Escape:
+                    self.terminal.close()
+                    return True
             return super().eventFilter(obj, event)
 
         def _relayout(self) -> None:
-            """根据手机屏幕布局重新定位所有组件。
-            手机屏幕区域（与 phone_live2d_page.html 对齐）：
-              手机框  x=12 y=110 w=280 h=560 （2:1 比例）
-              屏幕    x=20 y=118 w=264 h=496 （内缩 8px，底部留 56px Home 键）
+            """根据 Companion Canvas 重新定位所有 Qt 组件。
+
+            Web 端只回传透明 Live2D 帧，窗口与全部控件由 Qt 绘制。
             """
-            # Dock：屏幕内底部槽位（居中）——角色合成帧已留 64px Dock 预留，不重叠
-            dock_w = self.dock_bar.sizeHint().width()
-            dock_w = min(dock_w, 250)
-            dock_x = 20 + (264 - dock_w) // 2
-            dock_y = 118 + 496 - 64
+            self.companion_surface.setGeometry(self.rect())
+            self.live2d_layer.setGeometry(self.rect())
+            self.character_border.setGeometry(
+                CHARACTER_VIEW_X,
+                CHARACTER_VIEW_Y,
+                CHARACTER_VIEW_W,
+                CHARACTER_VIEW_H,
+            )
+            self.character_border.raise_()
+
+            dock_x = 28
+            dock_y = 480
+            dock_w = 248
             self.dock_bar.setGeometry(dock_x, dock_y, dock_w, 56)
-            # 输入面板：同位互斥
-            panel_w = 248
-            panel_x = 20 + (264 - panel_w) // 2
-            panel_y = dock_y + 2
-            self.input_panel.setGeometry(panel_x, panel_y, panel_w, 52)
-            # CRT overlay 跟随 input_panel
+            self.input_panel.setGeometry(dock_x, dock_y + 2, dock_w, 52)
             if hasattr(self, '_panel_crt') and self._panel_crt is not None:
                 self._panel_crt.setGeometry(self.input_panel.rect())
-            # 手机屏幕顶部状态栏：屏幕区顶部（y=118，高 26px）
-            self.status_bar.setGeometry(20, 118, 264, 26)
+
+            self.status_bar.setGeometry(10, 10, CANVAS_WINDOW_W - 20, 32)
             self.status_bar.raise_()
-            # 历史抽屉：屏幕内右侧（保持 __init__ 初始位置）
-            # 通话视图：覆盖整个屏幕区域
-            self.call_view.setGeometry(20, 118, 264, 496)
+            self.call_view.setGeometry(CHARACTER_VIEW_X, CHARACTER_VIEW_Y, CHARACTER_VIEW_W, CHARACTER_VIEW_H)
 
         def resizeEvent(self, event) -> None:
             self._relayout()
@@ -1561,17 +1612,39 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
                 return
             super().keyPressEvent(event)
 
+        def _handle_live2d_click(self, pos: QPointF) -> bool:
+            """处理 Live2D 人物点击：找最近区域→触发动作+语音。
+            返回 True 表示已处理（点击在 viewport 范围内）。"""
+            x = pos.x() - CHARACTER_VIEW_X
+            y = pos.y() - CHARACTER_VIEW_Y
+            if x < 0 or x > CHARACTER_VIEW_W or y < 0 or y > CHARACTER_VIEW_H:
+                return False
+            nx = x / CHARACTER_VIEW_W
+            ny = y / CHARACTER_VIEW_H
+            best = None
+            min_dist = float("inf")
+            for region in LIVE2D_CLICK_REGIONS:
+                dx = nx - region["nx"]
+                dy = ny - region["ny"]
+                dist = dx * dx + dy * dy
+                if dist < min_dist:
+                    min_dist = dist
+                    best = region
+            if not best:
+                return False
+            send_command(motion=best["motion"])
+            line = random.choice(best["lines"])
+            # 日语 TTS + 气泡显示文字
+            self.speech.speak_with_options(line, text_lang="ja")
+            self._cancel_bubbles()
+            self._set_bubble_text(line)
+            self.reply_bubble.show()
+            self._schedule_bubble_hide()
+            return True
+
         def mousePressEvent(self, event: QMouseEvent) -> None:
+            print(f"[DEBUG] mousePressEvent at ({event.position().x():.0f}, {event.position().y():.0f})", file=sys.stderr)
             if event.button() == Qt.LeftButton:
-                pos = event.position().toPoint()
-                if self._phone_menu_rect().contains(pos):
-                    QApplication.instance().quit()
-                    event.accept()
-                    return
-                if self._phone_home_rect().contains(pos):
-                    self._home_click_timer.start()
-                    event.accept()
-                    return
                 # 气泡还有剩余分段时，左键点击推进下一句。
                 # 必须放在"收起输入面板"之前：发完消息面板仍展开，若先收面板，
                 # 用户看下一句的第一击会被吃掉（表现为"点了没反应"）。
@@ -1586,8 +1659,9 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
                 if self.input_panel.isVisible() and self._input_opacity.opacity() > 0.5:
                     self._toggle_input_panel()
                     return
-                if event.position().x() > 50:
-                    self._focus_input()
+                # 点击 Live2D 人物区域触发交互效果（动作+语音），不再自动打开输入框
+                if self._handle_live2d_click(event.position()):
+                    return
                 if not self._pinned:
                     self._drag_offset = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
             elif event.button() == Qt.RightButton:
@@ -1605,14 +1679,6 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
                 self._user_pos = self.pos()  # 记住用户拖拽后的位置
                 self._was_desktop = True
             self._drag_offset = None
-
-        def mouseDoubleClickEvent(self, event: QMouseEvent) -> None:
-            if event.button() == Qt.LeftButton and self._phone_home_rect().contains(event.position().toPoint()):
-                self._home_click_timer.stop()
-                self.hide()
-                self._restore_win.show()
-                event.accept()
-                return
 
     app = QApplication(sys.argv)
     app.setApplicationName("Amadeus Kurisu")
@@ -1705,6 +1771,22 @@ def run_overlay(connection: Connection, renderer: mp.Process) -> int:
                 motion = COMPANION_EMOTION_MOTION.get(parsed.emotion, "neutral")
             send_command(emotion=live2d_emotion, motion=motion)
             pet._streamed_reply = ""
+            # TTS 收尾：companion 的流式 TTS 在 _companion_on_delta → _agent_delta 中已启动，
+            # 这里刷新剩余缓冲；未启动时兜底整段合成（与 _agent_finished 逻辑一致）
+            _cfg = load_config()
+            _in_call = getattr(pet, "_in_call", False)
+            if _in_call:
+                pet._stream_tts_started = False
+                pet.speech.stop()
+            elif _cfg.get("tts_enabled", True) and pet._stream_tts_started:
+                pet.speech.speak_streaming_end()
+            elif _cfg.get("tts_enabled", True) and parsed.japanese and not pet._stream_tts_started:
+                pet.speech.set_rate([-2, 0, 2][_cfg.get("tts_rate", 1)])
+                pet.speech.speak_with_options(
+                    parsed.japanese,
+                    text_lang="ja",
+                    allow_fallback=False,
+                )
             pet._stream_tts_started = False
             pet._show_layered_bubbles(parsed.chinese)
         except Exception:
@@ -1831,7 +1913,7 @@ def main() -> int:
     try:
         READY_FILE.unlink(missing_ok=True)
         parent_connection, child_connection = mp.Pipe(duplex=True)
-        renderer = mp.Process(target=renderer_process, args=(child_connection,), daemon=True)
+        renderer = mp.Process(target=renderer_process, args=(child_connection,))
         renderer.start()
         _write_runtime_log(
             "desktop-pet-startup.log",

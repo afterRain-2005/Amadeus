@@ -35,7 +35,7 @@ from ui.terminal_html import (
     _complete_terminal_input,
     _line_cache_key,
 )
-from ui.theme import _dither_texture_url
+from ui.theme import BG, CREAM, QSS_FONT, _dither_texture_url, qcolor
 from ui.widgets.crt_title_bar import CrtTitleBar
 
 
@@ -77,10 +77,10 @@ class AgentTerminal(QDialog):
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.Dialog | Qt.WindowStaysOnTopHint)
         self.setObjectName("agentTerminal")
         self.setStyleSheet(
-            "QDialog#agentTerminal{background-color:#171114;"
-            "color:#c1b492;"
+            f"QDialog#agentTerminal{{background-color:{BG};"
+            f"color:{_TERMINAL_CREAM};"
             "background-image:url(" + _dither_texture_url() + ");"
-            "border:1px solid #d2738a;}"
+            f"border:1px solid {_TERMINAL_ROSE};}}"
         )
         self.setMinimumSize(560, 390)
         self.resize(720, 520)
@@ -98,7 +98,7 @@ class AgentTerminal(QDialog):
         layout.setSpacing(10)
 
         self.title_bar = CrtTitleBar(
-            "⌈ Ａｍａｄｅｕｓ Ｔｅｒｍｉｎａｌ ⌋",
+            "Amadeus Terminal",
             "wire ESTABLISHED · ch 1",
             self,
             self.close,
@@ -112,8 +112,8 @@ class AgentTerminal(QDialog):
         self.log.setStyleSheet(
             "QTextBrowser{background-color:transparent;"
             f"color:{_TERMINAL_CREAM};border:1px solid {_TERMINAL_ROSE};"
-            "border-radius:0px;padding:12px;font:14px 'Consolas','Microsoft YaHei'}"
-            f"QTextBrowser{{selection-background-color:{_TERMINAL_ROSE};selection-color:#171114}}"
+            f"border-radius:0px;padding:12px;font:14px {QSS_FONT}}}"
+            f"QTextBrowser{{selection-background-color:{_TERMINAL_ROSE};selection-color:{BG}}}"
             f"QScrollBar:vertical{{background:rgba(210,115,138,0.15);width:6px;margin:4px}}"
             f"QScrollBar::handle:vertical{{background:{_TERMINAL_ROSE};border-radius:0px;min-height:30px}}"
             "QScrollBar::add-line:vertical,QScrollBar::sub-line:vertical{height:0}"
@@ -128,11 +128,11 @@ class AgentTerminal(QDialog):
         # 审批条：危险工具请求直接在终端内确认，不打断 CRT 工作流
         self.approval_panel = QWidget(self)
         self.approval_panel.setStyleSheet(
-            "QWidget{background:rgba(23,17,20,220);border:1px solid #d2738a;}"
-            "QLabel{color:#c1b492;border:0;background:transparent;}"
-            "QPushButton{color:#d2738a;background:#171114;border:1px solid #d2738a;"
-            "padding:4px 8px;font:12px 'Consolas','Microsoft YaHei';}"
-            "QPushButton:hover{color:#171114;background:#d2738a;}"
+            f"QWidget{{background:rgba(23,17,20,220);border:1px solid {_TERMINAL_ROSE};}}"
+            f"QLabel{{color:{_TERMINAL_CREAM};border:0;background:transparent;}}"
+            f"QPushButton{{color:{_TERMINAL_ROSE};background:{BG};border:1px solid {_TERMINAL_ROSE};"
+            f"padding:4px 8px;font:12px {QSS_FONT};}}"
+            f"QPushButton:hover{{color:{BG};background:{_TERMINAL_ROSE};}}"
         )
         approval_layout = QVBoxLayout(self.approval_panel)
         approval_layout.setContentsMargins(8, 6, 8, 6)
@@ -161,13 +161,13 @@ class AgentTerminal(QDialog):
         input_row.setSpacing(6)
         prompt = QLabel(_TERMINAL_PROMPT, self)
         prompt.setStyleSheet(
-            f"color:{_TERMINAL_ROSE};background:transparent;font:13px 'Consolas','Microsoft YaHei'"
+            f"color:{_TERMINAL_ROSE};background:transparent;font:13px {QSS_FONT}"
         )
         self.input = QLineEdit(self)
         self.input.setStyleSheet(
-            "QLineEdit{background:transparent;color:#c1b492;border:0;border-bottom:1px solid #d2738a;"
-            "padding:4px 2px;font:13px 'Consolas','Microsoft YaHei'}"
-            "QLineEdit::placeholder{color:#8a7f63}"
+            f"QLineEdit{{background:transparent;color:{_TERMINAL_CREAM};border:0;border-bottom:1px solid {_TERMINAL_ROSE};"
+            f"padding:4px 2px;font:13px {QSS_FONT}}}"
+            f"QLineEdit::placeholder{{color:{_TERMINAL_DIM}}}"
         )
         self.input.setPlaceholderText("say something to kurisu…")
         self.input.returnPressed.connect(self._submit)
@@ -176,10 +176,10 @@ class AgentTerminal(QDialog):
         self._slash_commands: list[tuple[str, str]] = terminal_command_registry.slash_completions()
         self._slash_panel = QListWidget(self)
         self._slash_panel.setStyleSheet(
-            "QListWidget{background:#171114;color:#c1b492;border:1px solid #d2738a;"
-            "font:12px 'Consolas','Microsoft YaHei';outline:0;}"
+            f"QListWidget{{background:{BG};color:{_TERMINAL_CREAM};border:1px solid {_TERMINAL_ROSE};"
+            f"font:12px {QSS_FONT};outline:0;}}"
             "QListWidget::item{padding:5px 8px;}"
-            "QListWidget::item:selected{background:#d2738a;color:#171114;}"
+            f"QListWidget::item:selected{{background:{_TERMINAL_ROSE};color:{BG};}}"
         )
         self._slash_panel.setFocusPolicy(Qt.NoFocus)
         self._slash_panel.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
@@ -188,7 +188,7 @@ class AgentTerminal(QDialog):
         self.input.textChanged.connect(self._refresh_slash_panel)
         self.cursor = QLabel("█", self)
         self.cursor.setStyleSheet(
-            f"color:{_TERMINAL_CREAM};background:transparent;font:13px 'Consolas','Microsoft YaHei'"
+            f"color:{_TERMINAL_CREAM};background:transparent;font:13px {QSS_FONT}"
         )
         input_row.addWidget(prompt)
         input_row.addWidget(self.input, 1)
@@ -402,7 +402,7 @@ class AgentTerminal(QDialog):
     def _paint_noise(self, painter: QPainter) -> None:
         import random
         rnd = random.Random(self._noise_seed)
-        painter.setPen(QColor(193, 180, 146, 45))
+        painter.setPen(qcolor(CREAM, 45))
         count = max(0, self.width() * self.height() // 100)
         for _ in range(count):
             painter.drawPoint(rnd.randrange(self.width()), rnd.randrange(self.height()))
@@ -447,7 +447,7 @@ class AgentTerminal(QDialog):
     def _paint_noise(self, painter: QPainter) -> None:
         import random
         rnd = random.Random(self._noise_seed)
-        painter.setPen(QColor(193, 180, 146, 45))
+        painter.setPen(qcolor(CREAM, 45))
         count = max(0, self.width() * self.height() // 100)
         for _ in range(count):
             painter.drawPoint(rnd.randrange(self.width()), rnd.randrange(self.height()))

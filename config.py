@@ -73,7 +73,7 @@ OPENCLAW_DEFAULTS: dict[str, object] = {
 # 运行时被 data/config.json 的 agent_router 键覆盖（{**DEFAULTS, **config["agent_router"]}）。
 AGENT_ROUTER_DEFAULTS: dict[str, object] = {
     "mode": "chat",
-    "chat_max_tokens": 700,
+    "chat_max_tokens": 400,
     # 自动分流（独立开关，优先于 mode）：auto_targets 为勾选参与分流的模式；ollama 为本地小模型配置
     "auto_route": False,
     "auto_targets": ["local", "harness"],

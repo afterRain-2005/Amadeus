@@ -9,13 +9,16 @@ import html
 import os
 from pathlib import Path
 
+from ui.theme import CREAM, DIM, FONT_MONO, ROSE, TERMINAL_PROMPT
 
-# ==== CRT 终端 HTML 构建（fauux 令牌：rose #d2738a / cream #c1b492 / b=rose）====
 
-_TERMINAL_ROSE = "#d2738a"
-_TERMINAL_CREAM = "#c1b492"
-_TERMINAL_DIM = "#8a7f63"
-_TERMINAL_PROMPT = "guest@wired:~$"
+# ==== CRT 终端 HTML 构建（令牌统一来自 ui.theme）====
+
+# 兼容别名：老代码从本模块导入 _TERMINAL_*
+_TERMINAL_ROSE = ROSE
+_TERMINAL_CREAM = CREAM
+_TERMINAL_DIM = DIM
+_TERMINAL_PROMPT = TERMINAL_PROMPT
 
 
 # ============================================================
@@ -85,8 +88,8 @@ def _build_terminal_line_html(kind: str, text: str, extra: dict | None = None) -
         )
     if kind == "result":
         return (
-            f"<pre style='margin:3px 0 5px 16px;color:{_TERMINAL_CREAM};"
-            "white-space:pre-wrap;font-family:Consolas,Microsoft YaHei'>"
+            f"<pre style='margin:3px 0 5px 16px;color:{CREAM};"
+            f"white-space:pre-wrap;font-family:{FONT_MONO}'>"
             f"{html.escape(text)}</pre>"
         )
     if kind == "diff":

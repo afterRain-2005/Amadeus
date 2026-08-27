@@ -39,6 +39,16 @@ def test_call_view_updates_phase_status(app):
     assert "接通" in view.status_label.text() or "connecting" in view.status_label.text().lower()
     view.set_phase("listening")
     assert "聆听" in view.status_label.text() or "listening" in view.status_label.text().lower()
+    assert view.status_label.text().startswith("CALL/")
+
+
+def test_call_view_uses_terminal_speaker_prefixes(app):
+    from ui.widgets.call_view import CallView
+    view = CallView()
+    view.set_you_said("测试输入")
+    view.set_subtitle("测试输出")
+    assert view.you_said_label.text() == "you> 测试输入"
+    assert view.subtitle_label.text() == "kurisu> 测试输出"
 
 
 def test_call_view_buttons_emit_signals(app):

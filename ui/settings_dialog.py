@@ -12,12 +12,14 @@ from PySide6.QtWidgets import (
 )
 
 from core.storage import load_config, save_config
-from ui.widgets.crt_title_bar import CrtTitleBar
+from ui.theme import (
+    BG, CREAM, DEEP, DIM, FONT_TICKER, OK, PANEL, QSS_FONT, ROSE, WARN,
+    _dither_texture_url, qcolor,
+)
+from ui.widgets.crt_title_bar import CrtTitleBar, lainos_title_font
 
 from pathlib import Path
-_DITHER_URL = str(
-    Path(__file__).resolve().parent.parent / "resources" / "textures" / "dither_rose.png"
-).replace("\\", "/")
+_DITHER_URL = _dither_texture_url()
 _ABOUT_BG_URL = str(
     Path(__file__).resolve().parent.parent / "resources" / "ui" / "helivitica-bg.png"
 ).replace("\\", "/")
@@ -34,35 +36,35 @@ def _ensure_poiret_font() -> None:
         QFontDatabase.addApplicationFont(_POIRET_FONT)
         _POIRET_FONT_LOADED = True
 
-_QSS_TMPL = """
-QDialog#settingsDialog { background-color: #171114; color: #c1b492; border: 1px solid #d2738a; background-image: url(__DITHER__); }
-QTabWidget::pane { border: 1px solid #d2738a; background-color: #08031a; background-image: url(ABOUT_BG); background-repeat: no-repeat; background-position: left top; top: -1px; }
-QTabBar::tab { background: #21171b; color: #8a7f63; border: 1px solid #8a7f63; border-bottom: 0; padding: 7px 12px; min-width: 72px; font: 12px "Consolas", "Microsoft YaHei"; }
-QTabBar::tab:selected { background: #d2738a; color: #171114; border-color: #d2738a; }
-QTabBar::tab:hover:!selected { color: #c1b492; border-color: #d2738a; }
-QWidget#settingsPage { background-color: transparent; }
-QScrollArea { background: transparent; border: 0; }
-QScrollArea > QWidget > QWidget { background-color: transparent; }
-QLabel { color: #c1b492; font: 13px "Consolas", "Microsoft YaHei"; }
-QLabel#sectionHeader { color: #d2738a; border-left: 3px solid #d2738a; padding: 3px 0 3px 8px; font: 700 12px "Consolas", "Microsoft YaHei"; }
-QLineEdit, QComboBox { background-color: rgba(23, 17, 20, 178); color: #c1b492; border: 1px solid #8a7f63; border-radius: 0; padding: 7px 9px; min-height: 22px; selection-background-color: #d2738a; selection-color: #171114; font: 13px "Consolas", "Microsoft YaHei"; }
-QLineEdit:focus, QComboBox:focus { border-color: #d2738a; background-color: rgba(23, 17, 20, 204); }
-QComboBox::drop-down { border-left: 1px solid #8a7f63; width: 24px; }
-QComboBox QAbstractItemView { background-color: rgba(23, 17, 20, 222); color: #c1b492; border: 1px solid #d2738a; selection-background-color: #d2738a; selection-color: #171114; }
-QCheckBox { color: #c1b492; spacing: 8px; font: 13px "Consolas", "Microsoft YaHei"; }
-QCheckBox::indicator { width: 14px; height: 14px; border: 1px solid #8a7f63; background: #21171b; }
-QCheckBox::indicator:checked { background: #d2738a; border-color: #d2738a; }
-QPushButton { background-color: #21171b; color: #c1b492; border: 1px solid #c1b492; border-radius: 0; padding: 7px 13px; min-height: 24px; font: 700 12px "Consolas", "Microsoft YaHei"; }
-QPushButton:hover { background-color: #d2738a; color: #171114; border-color: #d2738a; }
-QPushButton:pressed { background-color: #c1b492; color: #171114; }
-QDialogButtonBox QPushButton { min-width: 88px; }
-QScrollBar:vertical { background: transparent; width: 8px; margin: 0; }
-QScrollBar::handle:vertical { background: #d2738a; min-height: 30px; }
-QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
-QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: transparent; }
+_QSS_TMPL = f"""
+QDialog#settingsDialog {{ background-color: {BG}; color: {CREAM}; border: 1px solid {ROSE}; background-image: url({_DITHER_URL}); }}
+QTabWidget::pane {{ border: 1px solid {ROSE}; background-color: {DEEP}; background-image: url({_ABOUT_BG_URL}); background-repeat: no-repeat; background-position: left top; top: -1px; }}
+QTabBar::tab {{ background: {PANEL}; color: {DIM}; border: 1px solid {DIM}; border-bottom: 0; padding: 7px 12px; min-width: 72px; font: 12px {QSS_FONT}; }}
+QTabBar::tab:selected {{ background: {ROSE}; color: {BG}; border-color: {ROSE}; }}
+QTabBar::tab:hover:!selected {{ color: {CREAM}; border-color: {ROSE}; }}
+QWidget#settingsPage {{ background-color: transparent; }}
+QScrollArea {{ background: transparent; border: 0; }}
+QScrollArea > QWidget > QWidget {{ background-color: transparent; }}
+QLabel {{ color: {CREAM}; font: 13px {QSS_FONT}; }}
+QLabel#sectionHeader {{ color: {ROSE}; border-left: 3px solid {ROSE}; padding: 3px 0 3px 8px; }}
+QLineEdit, QComboBox {{ background-color: rgba(23, 17, 20, 178); color: {CREAM}; border: 1px solid {DIM}; border-radius: 0; padding: 7px 9px; min-height: 22px; selection-background-color: {ROSE}; selection-color: {BG}; font: 13px {QSS_FONT}; }}
+QLineEdit:focus, QComboBox:focus {{ border-color: {ROSE}; background-color: rgba(23, 17, 20, 204); }}
+QComboBox::drop-down {{ border-left: 1px solid {DIM}; width: 24px; }}
+QComboBox QAbstractItemView {{ background-color: rgba(23, 17, 20, 222); color: {CREAM}; border: 1px solid {ROSE}; selection-background-color: {ROSE}; selection-color: {BG}; }}
+QCheckBox {{ color: {CREAM}; spacing: 8px; font: 13px {QSS_FONT}; }}
+QCheckBox::indicator {{ width: 14px; height: 14px; border: 1px solid {DIM}; background: {PANEL}; }}
+QCheckBox::indicator:checked {{ background: {ROSE}; border-color: {ROSE}; }}
+QPushButton {{ background-color: {PANEL}; color: {CREAM}; border: 1px solid {CREAM}; border-radius: 0; padding: 7px 13px; min-height: 24px; font: 700 12px {QSS_FONT}; }}
+QPushButton:hover {{ background-color: {ROSE}; color: {BG}; border-color: {ROSE}; }}
+QPushButton:pressed {{ background-color: {CREAM}; color: {BG}; }}
+QDialogButtonBox QPushButton {{ min-width: 88px; }}
+QScrollBar:vertical {{ background: transparent; width: 8px; margin: 0; }}
+QScrollBar::handle:vertical {{ background: {ROSE}; min-height: 30px; }}
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
+QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{ background: transparent; }}
 """
 
-CRT_QSS = _QSS_TMPL.replace("__DITHER__", _DITHER_URL).replace("ABOUT_BG", _ABOUT_BG_URL)
+CRT_QSS = _QSS_TMPL
 
 # 设置页底部左侧滚动台词（fauux 长句 marquee；El Psy Kongroo）
 _TICKER_TEXT = (
@@ -79,8 +81,9 @@ _TICKER_TEXT = (
 def _section(title: str) -> QLabel:
     label = QLabel(title)
     label.setObjectName("sectionHeader")
+    label.setFont(lainos_title_font())
     glow = QGraphicsDropShadowEffect(label)
-    glow.setColor(QColor(210, 115, 138, 140))
+    glow.setColor(qcolor(ROSE, 140))
     glow.setBlurRadius(8)
     glow.setOffset(0, 0)
     label.setGraphicsEffect(glow)
@@ -254,11 +257,11 @@ class SettingsDialog(QDialog):
 
         if not ssh_hosts:
             ssh_hint = QLabel("未找到 ~/.ssh/config，请先创建（可空文件即可，Host 条目手动填）")
-            ssh_hint.setStyleSheet("color:#8a7f63")
+            ssh_hint.setStyleSheet(f"color:{DIM}")
             gpt_form.addRow(ssh_hint)
 
         self.gpt_ssh_status = QLabel("未测试")
-        self.gpt_ssh_status.setStyleSheet("color:#8a7f63")
+        self.gpt_ssh_status.setStyleSheet(f"color:{DIM}")
         self.gpt_ssh_status.setWordWrap(True)
         test_btn = QPushButton("测试 SSH 连接")
         test_btn.clicked.connect(self._test_ssh)
@@ -304,7 +307,7 @@ class SettingsDialog(QDialog):
         self.aliyun_status = QLabel(
             "已克隆" if aliyun_cfg.get("voice_cloned") else "未克隆"
         )
-        self.aliyun_status.setStyleSheet("color:#8a7f63")
+        self.aliyun_status.setStyleSheet(f"color:{DIM}")
         self.aliyun_status.setWordWrap(True)
         self.aliyun_clone_btn = QPushButton("一键克隆红莉栖音色")
         self.aliyun_clone_btn.clicked.connect(self._on_clone_voice)
@@ -337,7 +340,7 @@ class SettingsDialog(QDialog):
         self.agent_mode.setCurrentIndex(max(idx, 0))
         agent_form.addRow("Agent 模式", self.agent_mode)
         self._agent_hint = QLabel("本地直连：使用「直连模型」tab 的配置。")
-        self._agent_hint.setStyleSheet("color:#8a7f63")
+        self._agent_hint.setStyleSheet(f"color:{DIM}")
         agent_form.addRow(self._agent_hint)
 
         # 自动分流（Ollama 小模型，独立开关，优先于 Agent 模式）
@@ -376,7 +379,7 @@ class SettingsDialog(QDialog):
         self.hermes_key.setEchoMode(QLineEdit.Password)
         hermes_form.addRow("Hermes API Key", self.hermes_key)
         self.hermes_status = QLabel("未检测")
-        self.hermes_status.setStyleSheet("color:#8a7f63")
+        self.hermes_status.setStyleSheet(f"color:{DIM}")
         hermes_btn = QPushButton("检测 Hermes 网关")
         hermes_btn.clicked.connect(self._probe_hermes)
         hermes_form.addRow(self.hermes_status, hermes_btn)
@@ -404,7 +407,7 @@ class SettingsDialog(QDialog):
         self.openclaw_autostart.setChecked(bool(openclaw_cfg.get("autostart", True)))
         openclaw_form.addRow(self.openclaw_autostart)
         self.openclaw_status = QLabel("未检测")
-        self.openclaw_status.setStyleSheet("color:#8a7f63")
+        self.openclaw_status.setStyleSheet(f"color:{DIM}")
         openclaw_btn = QPushButton("检测 OpenClaw 网关")
         openclaw_btn.clicked.connect(self._probe_openclaw)
         openclaw_form.addRow(self.openclaw_status, openclaw_btn)
@@ -561,7 +564,7 @@ class SettingsDialog(QDialog):
 
         # 当前上下文预览（只读）
         self.companion_preview = QLabel("（启动后显示）")
-        self.companion_preview.setStyleSheet("color:#8a7f63; font-family: monospace;")
+        self.companion_preview.setStyleSheet(f"color:{DIM}; font-family: monospace;")
         self.companion_preview.setWordWrap(True)
         companion_form.addRow("当前上下文", self.companion_preview)
 
@@ -639,7 +642,7 @@ class SettingsDialog(QDialog):
 
         im_form.addRow(_section("IM · 状态"))
         self.im_status = QLabel("（保存并重启后生效；下方可测试连通性）")
-        self.im_status.setStyleSheet("color:#8a7f63")
+        self.im_status.setStyleSheet(f"color:{DIM}")
         self.im_status.setWordWrap(True)
         im_form.addRow(self.im_status)
         im_test_btn = QPushButton("测试连接")
@@ -660,7 +663,7 @@ class SettingsDialog(QDialog):
         self.version_check_url.setPlaceholderText("远程版本检查 URL（纯文本，可留空）")
         about_form.addRow("版本检查 URL", self.version_check_url)
         self.version_status = QLabel("未检查")
-        self.version_status.setStyleSheet("color:#8a7f63")
+        self.version_status.setStyleSheet(f"color:{DIM}")
         about_form.addRow("最新版本", self.version_status)
         check_btn = QPushButton("检查更新")
         check_btn.clicked.connect(self._check_update)
@@ -671,7 +674,7 @@ class SettingsDialog(QDialog):
         buttons.accepted.connect(self._save)
         buttons.rejected.connect(self.reject)
         self.title_bar = CrtTitleBar(
-            "⌈ Ａｍａｄｅｕｓ Ｓｅｔｔｉｎｇｓ ⌋",
+            "Amadeus Settings",
             "tait-crt-interface-skill",
             self,
             self.reject,
@@ -699,8 +702,8 @@ class SettingsDialog(QDialog):
         self._ticker_bar.setFixedHeight(32)
         self._ticker_label = QLabel(_TICKER_TEXT, self._ticker_bar)
         self._ticker_label.setStyleSheet(
-            "color:#8a7f63;background:transparent;"
-            "font:700 24px 'Poiret One','Consolas','Microsoft YaHei';"
+            f"color:{DIM};background:transparent;"
+            f"font:700 24px '{FONT_TICKER}','Consolas','Microsoft YaHei';"
             "text-transform:uppercase;white-space:nowrap"
         )
         self._ticker_label.adjustSize()
@@ -790,18 +793,18 @@ class SettingsDialog(QDialog):
         latest = check_latest_version(url)
         if latest is None:
             self.version_status.setText("未配置 URL 或检查失败")
-            self.version_status.setStyleSheet("color:#8a7f63")
+            self.version_status.setStyleSheet(f"color:{DIM}")
             return
         try:
             if parse_version(latest) > parse_version(__version__):
                 self.version_status.setText(f"{latest}（有新版）")
-                self.version_status.setStyleSheet("color:#d2738a")
+                self.version_status.setStyleSheet(f"color:{ROSE}")
             else:
                 self.version_status.setText(f"{latest}（已是最新）")
-                self.version_status.setStyleSheet("color:#34c759")
+                self.version_status.setStyleSheet(f"color:{OK}")
         except ValueError:
             self.version_status.setText(f"{latest}（版本号格式异常）")
-            self.version_status.setStyleSheet("color:#8a7f63")
+            self.version_status.setStyleSheet(f"color:{DIM}")
 
     def _probe_hermes(self) -> None:
         """同步探测 Hermes 网关 /health（2s 超时，设置页内可接受）。"""
@@ -814,7 +817,7 @@ class SettingsDialog(QDialog):
         QApplication.processEvents()
         ok = probe_health(base_url, api_key)
         self.hermes_status.setText("在线" if ok else "离线")
-        self.hermes_status.setStyleSheet("color:#34c759" if ok else "color:#d2738a")
+        self.hermes_status.setStyleSheet(f"color:{OK}" if ok else f"color:{ROSE}")
 
     def _probe_openclaw(self) -> None:
         """同步探测 OpenClaw 网关 /v1/models（2s 超时，设置页内可接受）。"""
@@ -828,7 +831,7 @@ class SettingsDialog(QDialog):
         QApplication.processEvents()
         ok = probe_gateway(base_url, token)
         self.openclaw_status.setText("在线" if ok else "离线")
-        self.openclaw_status.setStyleSheet("color:#34c759" if ok else "color:#d2738a")
+        self.openclaw_status.setStyleSheet(f"color:{OK}" if ok else f"color:{ROSE}")
 
     def _test_companion(self) -> None:
         """手动触发一次 companion 问候（用于设置页验收）。"""
@@ -876,24 +879,24 @@ class SettingsDialog(QDialog):
         host_alias = self.gpt_ssh_host.currentData()
         if not host_alias:
             self.gpt_ssh_status.setText("请先选择 SSH Host")
-            self.gpt_ssh_status.setStyleSheet("color:#d2738a")
+            self.gpt_ssh_status.setStyleSheet(f"color:{ROSE}")
             return
         host_obj = next((h for h in self._ssh_hosts if h.host == host_alias), None)
         if host_obj is None:
             self.gpt_ssh_status.setText("Host 信息丢失，请重开设置")
-            self.gpt_ssh_status.setStyleSheet("color:#d2738a")
+            self.gpt_ssh_status.setStyleSheet(f"color:{ROSE}")
             return
         self.gpt_ssh_status.setText("测试中...")
-        self.gpt_ssh_status.setStyleSheet("color:#c1b492")
+        self.gpt_ssh_status.setStyleSheet(f"color:{CREAM}")
         QApplication.processEvents()
         tunnel = SSHTunnel(host_obj, local_port=9880, remote_port=9880)
         status = tunnel.test(timeout=5)
         if status.ok:
             self.gpt_ssh_status.setText(f"✓ {status.message}")
-            self.gpt_ssh_status.setStyleSheet("color:#6abf69")
+            self.gpt_ssh_status.setStyleSheet(f"color:{OK}")
         else:
             self.gpt_ssh_status.setText(f"✗ {status.message}")
-            self.gpt_ssh_status.setStyleSheet("color:#d2738a")
+            self.gpt_ssh_status.setStyleSheet(f"color:{ROSE}")
 
     def _test_tunnel(self) -> None:
         """建立隧道并探测 GPT-SoVITS API 是否可用。"""
@@ -902,7 +905,7 @@ class SettingsDialog(QDialog):
         host_alias = self.gpt_ssh_host.currentData()
         if not host_alias:
             self.gpt_ssh_status.setText("请先选择 SSH Host")
-            self.gpt_ssh_status.setStyleSheet("color:#d2738a")
+            self.gpt_ssh_status.setStyleSheet(f"color:{ROSE}")
             return
         host_obj = next((h for h in self._ssh_hosts if h.host == host_alias), None)
         if host_obj is None:
@@ -912,21 +915,21 @@ class SettingsDialog(QDialog):
             remote_port = int(self.gpt_remote_port.text().strip())
         except ValueError:
             self.gpt_ssh_status.setText("端口必须是数字")
-            self.gpt_ssh_status.setStyleSheet("color:#d2738a")
+            self.gpt_ssh_status.setStyleSheet(f"color:{ROSE}")
             return
 
         if self._tunnel is not None:
             self._tunnel.stop()
             self._tunnel = None
         self.gpt_ssh_status.setText("建立隧道中...")
-        self.gpt_ssh_status.setStyleSheet("color:#c1b492")
+        self.gpt_ssh_status.setStyleSheet(f"color:{CREAM}")
         QApplication.processEvents()
 
         self._tunnel = SSHTunnel(host_obj, local_port=local_port, remote_port=remote_port)
         status = self._tunnel.start()
         if not status.ok:
             self.gpt_ssh_status.setText(f"✗ {status.message}")
-            self.gpt_ssh_status.setStyleSheet("color:#d2738a")
+            self.gpt_ssh_status.setStyleSheet(f"color:{ROSE}")
             self._tunnel = None
             return
 
@@ -937,23 +940,23 @@ class SettingsDialog(QDialog):
             with urllib.request.urlopen(url, timeout=3.0) as resp:
                 if resp.status == 200:
                     self.gpt_ssh_status.setText(f"✓ 隧道+API 可用（{status.message}）")
-                    self.gpt_ssh_status.setStyleSheet("color:#6abf69")
+                    self.gpt_ssh_status.setStyleSheet(f"color:{OK}")
                 else:
                     self.gpt_ssh_status.setText(f"✗ API 返回 {resp.status}")
-                    self.gpt_ssh_status.setStyleSheet("color:#d2738a")
+                    self.gpt_ssh_status.setStyleSheet(f"color:{ROSE}")
         except Exception as e:
             self.gpt_ssh_status.setText(f"✗ 隧道已建立但 API 不可达：{e}（服务器上 GPT-SoVITS 启动了吗？）")
-            self.gpt_ssh_status.setStyleSheet("color:#d2738a")
+            self.gpt_ssh_status.setStyleSheet(f"color:{ROSE}")
 
     def _on_clone_voice(self) -> None:
         api_key = self.aliyun_api_key.text().strip()
         if not api_key:
             self.aliyun_status.setText("请先填写 API Key")
-            self.aliyun_status.setStyleSheet("color:#d2738a")
+            self.aliyun_status.setStyleSheet(f"color:{ROSE}")
             return
         self.aliyun_clone_btn.setEnabled(False)
         self.aliyun_status.setText("克隆中...")
-        self.aliyun_status.setStyleSheet("color:#c1b492")
+        self.aliyun_status.setStyleSheet(f"color:{CREAM}")
         QApplication.processEvents()
         preferred_name = self.aliyun_preferred_name.text().strip() or "amadeus_kurisu"
         # 克隆 target_model 固定 qwen3-tts-vc-2026-01-22（与 engine 解耦，与 amadeus src/app/api/tts/clone/route.ts:88 对齐）
@@ -1007,19 +1010,19 @@ class SettingsDialog(QDialog):
     def _on_clone_done(self, voice_id: str) -> None:
         self.aliyun_voice_id.setText(voice_id)
         self.aliyun_status.setText(f"克隆成功：{voice_id}")
-        self.aliyun_status.setStyleSheet("color:#6abf69")
+        self.aliyun_status.setStyleSheet(f"color:{OK}")
         self.aliyun_clone_btn.setEnabled(True)
 
     @Slot(str)
     def _on_clone_failed(self, message: str) -> None:
         self.aliyun_status.setText(message)
-        self.aliyun_status.setStyleSheet("color:#d2738a")
+        self.aliyun_status.setStyleSheet(f"color:{ROSE}")
         self.aliyun_clone_btn.setEnabled(True)
 
     @Slot(str)
     def _on_clone_warn(self, reason: str) -> None:
         self.aliyun_status.setText(f"克隆成功（降级模式）：{reason}")
-        self.aliyun_status.setStyleSheet("color:#d8a53f")
+        self.aliyun_status.setStyleSheet(f"color:{WARN}")
 
     def _test_im_connection(self) -> None:
         """后台线程快速探测 NapCat WS 端口连通性，结果回 UI 线程。"""

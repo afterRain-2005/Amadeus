@@ -13,6 +13,9 @@ GUI_PATTERN = re.compile(r"打开|启动|关闭|点击|截个屏|截图|屏幕|�
 AGENT_PATTERN = re.compile(r"搜索|查找|帮我搜|帮我写|整理|运行|执行|读.{0,8}文件|列出|下载|运行动命令|脚本|查一下|百度|google|联网|查天气|查新闻")
 CHAT_HINT_PATTERN = re.compile(r"^(你好|您好|晚上好|早上好|下午好|谢谢|在吗|嗨+|喂+|好久不见|怎么了).*$")
 
+# 每次用户消息前追加的格式提醒：防止 LLM 在长上下文后忘记 === 双语格式
+_FORMAT_REMINDER = "【回复格式】必须用 === 分隔中文和日语：[emotion:xxx]（动作）中文\n===\n（动作）日本語"
+
 GUI_NUDGE = "Please use operate_gui for this task."
 _codex_session_started = False
 
@@ -132,7 +135,7 @@ def route_and_send(
     system_role: str = "user",
     skip_history: bool = False,
     inject_system_prompt: str | None = None,
-    response_max_tokens: int | None = 700,
+    response_max_tokens: int | None = 400,
     cancel_event=None,
     harness_session_id: str | None = None,
 ) -> tuple[str, str]:
@@ -342,6 +345,9 @@ def route_and_send(
         return reply, "codex"
 
     text = input_text if route != "gui" else input_text + "\n" + GUI_NUDGE
+    # 每次对话前追加格式提醒，防止 LLM 在长上下文后忘记 === 双语格式
+    if system_role != "companion":
+        text = _FORMAT_REMINDER + "\n\n" + text
     if not skip_history and conversation_history is not None:
         conversation_history.append({"role": "user", "content": input_text})
     instructions = KURISU_OUTPUT_FORMAT

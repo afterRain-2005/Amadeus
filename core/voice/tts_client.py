@@ -625,6 +625,9 @@ class SpeechPlayer(QObject):
         """
         if session_id is None:
             session_id = self._session_id
+        text = self._clean_tts_text(text)
+        if not text:
+            return False, None
         try:
             from core.voice.gpt_sovits_client import KurisuTTS
 

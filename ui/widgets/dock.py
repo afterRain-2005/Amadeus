@@ -9,6 +9,8 @@ from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtGui import QColor, QPainter
 from PySide6.QtWidgets import QHBoxLayout, QPushButton, QWidget
 
+from ui.theme import ROSE, qcolor
+
 
 ROOT = Path(sys._MEIPASS) if getattr(sys, 'frozen', False) else Path(__file__).resolve().parent.parent.parent
 
@@ -143,20 +145,20 @@ class DockButton(QPushButton):
         pressed = self.isDown()
         hovered = self.underMouse()
         if pressed:
-            bg = QColor(210, 115, 138, 46)
-            border = QColor(210, 115, 138, 255)
+            bg = qcolor(ROSE, 46)
+            border = qcolor(ROSE, 255)
         elif hovered:
-            bg = QColor(210, 115, 138, 10)
-            border = QColor(210, 115, 138, 200)
+            bg = qcolor(ROSE, 10)
+            border = qcolor(ROSE, 200)
         elif self._pinned:
-            bg = QColor(210, 115, 138, 60)
-            border = QColor(210, 115, 138, 255)
+            bg = qcolor(ROSE, 60)
+            border = qcolor(ROSE, 255)
         elif self._is_danger:
             bg = QColor(0, 0, 0, 0)
-            border = QColor(210, 115, 138, 110)
+            border = qcolor(ROSE, 110)
         else:
             bg = QColor(0, 0, 0, 0)
-            border = QColor(210, 115, 138, 100)
+            border = qcolor(ROSE, 100)
         painter.setBrush(bg)
         if pressed:
             from PySide6.QtGui import QPen

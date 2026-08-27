@@ -4,9 +4,8 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from PySide6.QtCore import QEvent, QPoint, Qt
-from PySide6.QtGui import QColor
+from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
-    QGraphicsDropShadowEffect,
     QHBoxLayout,
     QLabel,
     QPushButton,
@@ -14,15 +13,29 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from ui.theme import BG, DIM, FONT_TITLE, PANEL, QSS_FONT, ROSE
 
-CRT_TITLE_BAR_QSS = """
-QWidget#crtTitleBar { background: transparent; border: 0; }
-QWidget#crtTitleFrame { background-color: #21171b; border: 1px solid #d2738a; border-left: 8px solid #d2738a; }
-QLabel#crtTitle { color: #d2738a; font: 700 13px "Times New Roman", "Microsoft YaHei"; }
-QLabel#crtSignature { color: #8a7f63; font: 10px "Consolas", "Microsoft YaHei"; }
-QPushButton#crtClose { background: #171114; color: #d2738a; border: 1px solid #d2738a; min-width: 24px; max-width: 24px; min-height: 22px; max-height: 22px; padding: 0; font: 700 14px "Consolas", "Microsoft YaHei"; }
-QPushButton#crtClose:hover { background: #d2738a; color: #171114; }
+
+CRT_TITLE_BAR_QSS = f"""
+QWidget#crtTitleBar {{ background: transparent; border: 0; }}
+QWidget#crtTitleFrame {{ background-color: {PANEL}; border: 1px solid {ROSE}; border-left: 8px solid {ROSE}; }}
+QLabel#crtTitle {{ color: {ROSE}; background: transparent; font-family: {FONT_TITLE}; font-size: 16px; font-weight: 700; }}
+QLabel#crtSignature {{ color: {DIM}; font: 10px {QSS_FONT}; }}
+QPushButton#crtClose {{ background: {BG}; color: {ROSE}; border: 1px solid {ROSE}; min-width: 24px; max-width: 24px; min-height: 22px; max-height: 22px; padding: 0; font: 700 14px {QSS_FONT}; }}
+QPushButton#crtClose:hover {{ background: {ROSE}; color: {BG}; }}
 """
+
+LAINOS_TITLE_PIXEL_SIZE = 16
+LAINOS_TITLE_LETTER_SPACING = 1.0
+
+
+def lainos_title_font() -> QFont:
+    """Return the font used by the descriptive headings on lainos.net."""
+    font = QFont(FONT_TITLE)
+    font.setPixelSize(LAINOS_TITLE_PIXEL_SIZE)
+    font.setWeight(QFont.Bold)
+    font.setLetterSpacing(QFont.AbsoluteSpacing, LAINOS_TITLE_LETTER_SPACING)
+    return font
 
 
 class CrtTitleBar(QWidget):
@@ -54,11 +67,7 @@ class CrtTitleBar(QWidget):
         self.title_label = QLabel(title, self.frame)
         self.title_label.setObjectName("crtTitle")
         self.title_label.setAttribute(Qt.WA_TransparentForMouseEvents)
-        glow = QGraphicsDropShadowEffect(self.title_label)
-        glow.setColor(QColor(210, 115, 138, 180))
-        glow.setBlurRadius(14)
-        glow.setOffset(1, 3)
-        self.title_label.setGraphicsEffect(glow)
+        self.title_label.setFont(lainos_title_font())
 
         self.signature_label = QLabel(signature, self.frame)
         self.signature_label.setObjectName("crtSignature")

@@ -6,7 +6,7 @@
 
 ## 功能特性
 
-- **Live2D 桌宠**：PixiJS + Cubism 4 渲染，面部/身体跟随鼠标，情感动作系统（10 种情绪 × 歪头/叉腰/扶额/摊手等动作），闲置微动作（长时间无交互随机托腮/发呆），手机外壳 UI（CSS/DOM 渲染，与浏览器预览一致）。
+- **Live2D 桌宠**：PixiJS + Cubism 4 渲染，面部/身体跟随鼠标，情感动作系统（10 种情绪 × 歪头/叉腰/扶额/摊手等动作），闲置微动作（长时间无交互随机托腮/发呆）；WebView 只输出透明人物帧，窗口 UI 由 Qt 绘制。
 - **语音对话**：ASR 实时识别（mimo-audio-v1 线路）+ TTS 多引擎（阿里云 / GPT-SoVITS / SAPI 自动降级）+ 音量驱动口型同步。
 - **实时通话**：双向语音通话视图，支持挂断、屏幕共享给 AI 看。
 - **聊天屏幕感知**：普通对话可选附加当前屏幕描述（视觉模型一句话总结，默认关）。
@@ -24,7 +24,7 @@
 | UI 框架 | PySide6 (Qt) |
 | Web 渲染 | pywebview 6.x（winforms + Edge WebView2 / Chromium） |
 | Live2D | PixiJS `pixi-live2d-display` + Cubism 4 Core |
-| 手机 UI | CSS/DOM + html2canvas（与浏览器预览一致） |
+| Companion Canvas UI | PySide6（WebView 仅负责透明 Live2D Canvas2） |
 | HTTP | 内置 ThreadingHTTPServer（renderer 静态资源） |
 | 打包 | PyInstaller（onedir） |
 
@@ -94,7 +94,7 @@ amadeus-py/
 │   ├── renderer_proc.py     #   renderer 子进程（webview + Live2D 帧回传）
 │   ├── settings_dialog.py   #   设置页
 │   └── widgets/             #   Dock / 状态栏 / AgentTerminal / AgentTask…
-├── live2d/                  # Live2D 页面与渲染（手机 UI + PIXI）
+├── live2d/                  # Live2D 页面与渲染（透明终端画布 + PIXI）
 ├── resources/               # 图标 / 纹理 / 模型 / 字体
 ├── scripts/                 # 辅助脚本
 ├── docs/                    # 文档（prd/ 需求稿 · archive/ 历史设计稿与退役资源）

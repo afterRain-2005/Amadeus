@@ -2,109 +2,39 @@
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
-<title>Amadeus Phone Live2D</title>
+<title>Amadeus Companion Canvas</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   html, body {
-    width: 100%; height: 100%;
+    width: 304px; height: 585px;
     overflow: hidden;
     background: transparent;
-    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", sans-serif;
   }
 
-  /* —— 布局：顶层透明容器承载"气泡区 + 手机" —— */
   #app {
     position: fixed; inset: 0;
-    display: flex; flex-direction: column;
-    align-items: center;
-    padding-top: 110px;           /* 顶部气泡预留区：主进程画气泡 */
+    width: 304px;
+    height: 585px;
   }
 
-  /* —— 手机本体：阳极氧化红铝机身（严格 2:1 长比） —— */
-  .phone {
-    position: relative;
-    width: 280px;                 /* 2:1 —— 280 × 560 */
-    height: 560px;
-    border-radius: 20px;
-    background: linear-gradient(155deg,
-        #ff7a7a 0%,  #e0343f 10%, #d2738a 34%,
-        #7d0f1a 62%, #9e121f 80%, #e0343f 92%, #ff8a8a 100%);
-    overflow: hidden;
-    box-shadow:
-      inset 0 0 0 1px rgba(255, 228, 228, 0.12),
-      0 12px 28px rgba(125, 15, 26, 0.38);
-    isolation: isolate;
-  }
-  /* 金属质感：拉丝横纹 + 斜向高光 + 微颗粒（阳极氧化铝磨砂） */
-  .phone::before {
-    content: "";
-    position: absolute; inset: 4px;
-    border-radius: 16px;
-    background:
-      /* 斜向高光（金属反光带） */
-      linear-gradient(118deg, transparent 18%, rgba(255,255,255,0.14) 23%, transparent 30%),
-      linear-gradient(115deg, transparent 62%, rgba(255,255,255,0.10) 68%, transparent 74%),
-      /* 阳极拉丝横纹 */
-      repeating-linear-gradient(90deg,
-        transparent 0 2px, rgba(255,255,255,0.05) 2px 3px,
-        transparent 3px 7px, rgba(0,0,0,0.10) 7px 9px,
-        transparent 9px 12px),
-      /* 细颗粒噪点（金属粉质感） */
-      repeating-linear-gradient(0deg,
-        rgba(255,255,255,0.02) 0 1px, transparent 1px 3px,
-        rgba(0,0,0,0.03) 3px 4px, transparent 4px 6px);
-    pointer-events: none;
-  }
-  /* 顶部受光亮线 */
-  .phone::after {
-    content: "";
-    position: absolute; top: 3px; left: 30px; right: 30px; height: 2px;
-    background: linear-gradient(90deg,
-        transparent, rgba(255, 217, 217, 0.90), transparent);
-    pointer-events: none;
-  }
-
-  /* —— 屏幕：深色壁纸 + 玫瑰辉光（机身内缩 8px，底部留 56px Home 区） —— */
-  .screen {
+  .companion-page {
     position: absolute;
-    top: 8px; left: 8px; right: 8px; bottom: calc(8px + 56px);
-    border-radius: 14px;
+    inset: 0;
     overflow: hidden;
-    background: #171114;
-    box-shadow: inset 0 0 0 2px rgba(0, 0, 0, 0.78);
-  }
-  .screen::before {
-    content: "";
-    position: absolute; inset: 0;
-    background:
-      url("../resources/bg.png") center/cover no-repeat,
-      #171114;
-    opacity: 1;
-  }
-  /* 屏幕底部玫瑰辉光 */
-  .screen::after {
-    content: "";
-    position: absolute;
-    left: 0; right: 0; bottom: -30px; height: 240px;
-    background: radial-gradient(closest-side,
-        rgba(210, 115, 138, 0.22) 0%,
-        rgba(210, 115, 138, 0.00) 70%);
-    pointer-events: none;
+    background: transparent;
   }
 
-  /* —— Live2D 舞台区：画布填充，角色从底部向上生长（顶部留 Qt 状态栏 26px，底部留 Dock 64px） —— */
+  .viewport {
+    position: absolute;
+    top: 50px; left: 20px;
+    width: 264px; height: 496px;
+    overflow: hidden;
+    background: transparent;
+  }
+
   .stage {
     position: absolute; left: 0; right: 0; top: 26px; bottom: 0;
     padding-bottom: 64px;
-  }
-  .stage::after {
-    content: "";
-    position: absolute;
-    left: 0; right: 0; top: -20px; height: 200px;
-    background: radial-gradient(closest-side,
-        rgba(210, 115, 138, 0.10) 0%,
-        rgba(210, 115, 138, 0.00) 70%);
-    pointer-events: none;
   }
   #canvas {
     display: block;
@@ -112,143 +42,30 @@
     height: 100%;
   }
 
-  /* —— 听筒（黑色传感器条） —— */
-  .speaker {
-    position: absolute;
-    top: 13px; left: 50%; transform: translateX(-50%);
-    width: 80px; height: 20px;
-    background: #050405;
-    border-radius: 10px;
-    z-index: 3;
-  }
-  .speaker::before {
-    content: "";
-    position: absolute; top: 7px; left: 8px;
-    width: 18px; height: 5px;
-    background: #3a3a3a;
-    border-radius: 2px;
-  }
-
-  /* —— Home 键：红色金属纹理（拉丝 + 斜高光 + 细颗粒） —— */
-  .home-btn {
-    position: absolute;
-    left: 50%; transform: translateX(-50%);
-    bottom: 13px;
-    width: 36px; height: 36px;
-    border-radius: 50%;
-    box-shadow:
-      inset 0 0 0 1px rgba(255, 255, 255, 0.18),
-      inset 0 1px 2px rgba(255, 200, 200, 0.20),
-      0 0 0 1px rgba(120, 18, 22, 0.55),
-      0 0 4px rgba(220, 40, 50, 0.18);
-    z-index: 3;
-  }
-  .home-btn::before {
-    content: "";
-    position: absolute; inset: 4px;
-    border-radius: 50%;
-    overflow: hidden;
-    background:
-      /* ① 主体红色金属渐变（基底） */
-      linear-gradient(155deg,
-        #ff7a7a 0%, #e0343f 12%, #d2738a 38%,
-        #7d0f1a 66%, #9e121f 82%, #e0343f 95%, #ff8a8a 100%),
-      /* ② 底部暗红 */
-      radial-gradient(ellipse 70% 60% at 50% 100%,
-        rgba(90, 10, 14, 0.45) 0%,
-        rgba(90, 10, 14, 0) 65%),
-      /* ③ 顶部亮部 */
-      radial-gradient(ellipse 60% 30% at 50% 28%,
-        rgba(255, 235, 235, 0.40) 0%,
-        rgba(255, 235, 235, 0) 70%);
-  }
-  .home-btn::after {
-    content: "";
-    position: absolute; inset: 4px;
-    border-radius: 50%;
-    overflow: hidden;
-    pointer-events: none;
-    background:
-      /* ④ 斜向高光（金属反光带 118° / 115°） */
-      linear-gradient(118deg,
-        transparent 18%, rgba(255, 255, 255, 0.12) 23%, transparent 30%),
-      linear-gradient(115deg,
-        transparent 62%, rgba(255, 255, 255, 0.08) 68%, transparent 74%),
-      /* ⑤ 阳极拉丝横纹（90°） */
-      repeating-linear-gradient(90deg,
-        transparent 0 2px, rgba(255, 255, 255, 0.04) 2px 3px,
-        transparent 3px 7px, rgba(0, 0, 0, 0.08) 7px 9px,
-        transparent 9px 12px),
-      /* ⑥ 细颗粒噪点（金属粉质感） */
-      repeating-linear-gradient(0deg,
-        rgba(255, 255, 255, 0.02) 0 1px, transparent 1px 3px,
-        rgba(0, 0, 0, 0.025) 3px 4px, transparent 4px 6px);
-    box-shadow:
-      inset 0 2px 3px rgba(255, 255, 255, 0.30),
-      inset 0 -2px 4px rgba(60, 0, 0, 0.30);
-  }
-
-  /* —— 侧键：同色系金属凸起（音量 ± / 电源） —— */
-  .side {
-    position: absolute;
-    width: 4px;
-    background: linear-gradient(180deg, #e0343f 0%, #7d0f1a 100%);
-    border-radius: 3px;
-    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.25);
-    z-index: 2;
-  }
-  .side.left-1  { left: -3px; top: 148px; height: 64px; }
-  .side.left-2  { left: -3px; top: 222px; height: 64px; }
-  .side.right-1 { right: -1px; top: 196px; height: 88px; }
-
   #status {
     position: fixed; top: 4px; left: 4px;
-    font: 10px monospace; color: #888;
+    font: 10px Consolas, monospace; color: #8a7f63;
     pointer-events: none;
     z-index: 99;
-  }
-  #pet-menu {
-    position: fixed; top: 10px; right: 10px; z-index: 99;
-    width: 30px; height: 30px; border: 0; border-radius: 5px;
-    color: rgba(255,255,255,.65); background: rgba(10,10,16,.22);
-    font: 18px sans-serif; cursor: pointer;
-  }
-  #pet-menu:hover { color: white; background: rgba(209,139,36,.75); }
-
-  #enter-flash {
-    position: fixed; inset: 0; z-index: 100; background: #fff; opacity: 0;
-    pointer-events: none; animation: dissolve 3.6s steps(12) 1;
-  }
-  @keyframes dissolve {
-    0% { opacity: 1; } 4% { opacity: .1; } 8% { opacity: .8; }
-    12% { opacity: .05; } 16% { opacity: .6; } 22% { opacity: 0; } 100% { opacity: 0; }
   }
 </style>
 </head>
 <body>
 <div id="status">Loading...</div>
-<button id="pet-menu" title="关闭桌宠">×</button>
-<div id="enter-flash"></div>
 
 <div id="app">
-  <div class="phone">
-    <div class="screen">
+  <section class="companion-page">
+    <div class="viewport">
       <div class="stage">
         <canvas id="canvas"></canvas>
       </div>
     </div>
-    <div class="speaker"></div>
-    <div class="home-btn" id="homeBtn" title="最小化到托盘"></div>
-    <div class="side left-1"></div>
-    <div class="side left-2"></div>
-    <div class="side right-1"></div>
-  </div>
+  </section>
 </div>
 
 <script src="../resources/live2dcubismcore.min.js"></script>
 <script src="../resources/pixi.min.js"></script>
 <script src="../resources/cubism4.min.js"></script>
-<script src="../resources/html2canvas.min.js"></script>
 <script src="../resources/amadeus-live2d-motion.js"></script>
 
 <script>
@@ -264,31 +81,6 @@
   }, 1200);
 
   // 状态栏时钟已移除：时间/信号显示改由 Qt 侧实现（desktop_pet.py StatusBar）
-
-  document.getElementById('pet-menu').addEventListener('click', () => {
-    if (window.pywebview?.api?.close) window.pywebview.api.close();
-    else window.close();
-  });
-
-  // Home 键 → 单击: 最小化到托盘；双击: 隐藏整个窗口
-  // 用延时区分单击与双击，避免双击时误触发单击
-  let homeClickTimer = null;
-  document.getElementById('homeBtn').addEventListener('click', () => {
-    homeClickTimer = setTimeout(() => {
-      homeClickTimer = null;
-      if (window.__amadeusHomeClick) window.__amadeusHomeClick();
-    }, 260);
-  });
-  document.getElementById('homeBtn').addEventListener('dblclick', (e) => {
-    if (homeClickTimer) {
-      clearTimeout(homeClickTimer);
-      homeClickTimer = null;
-    }
-    e.preventDefault();
-    if (window.pywebview && window.pywebview.api && window.pywebview.api.hide_window) {
-      try { window.pywebview.api.hide_window(); } catch(e2){}
-    }
-  });
 
   // 从 query string 读取模型绝对路径
   const params = new URLSearchParams(location.search);
@@ -469,7 +261,7 @@
     }
 
     // —— 闲置微动作（airi idle animation）——
-    // 长时间无交互且未说话时随机播放小动作；手机页无持续鼠标事件，
+    // 长时间无交互且未说话时随机播放小动作；透明画布无持续鼠标事件，
     // 以外部命令（setEmotion/setSpeaking/setPointer/playMotion）作为活动信号。
     const IDLE_MOTION_POOL = ['chin_rest', 'thinking', 'shrug', 'arms_crossed', 'neutral'];
     let idleMarkAt = performance.now();
@@ -572,7 +364,7 @@
     });
 
     // 鼠标范围限制到屏幕区域内（避免视线跟踪过界）；交给 gaze 系统平滑跟随
-    const screenEl = document.querySelector('.screen');
+    const screenEl = document.querySelector('.viewport');
     window.addEventListener('mousemove', event => {
       const rect = screenEl.getBoundingClientRect();
       const x = event.clientX - rect.left;
@@ -581,6 +373,80 @@
       const py = Math.max(-1, Math.min(1, y / rect.height * 2 - 1));
       gaze.setPointer(px, py);
       resetIdleTimer();
+    });
+
+    // ============================================================
+    // 点击区域系统：点击 Live2D 人物不同部位触发不同动作+语音
+    // ============================================================
+    const CLICKABLE_REGIONS = [
+      {
+        name: 'head',  nx: 0.50, ny: 0.15, motion: 'surprised', emotion: 'surprised',
+        lines: ['呀！别碰我的头！', '喂！摸头会长不高的！', '不要随便碰女孩子的头啊！'],
+      },
+      {
+        name: 'face',  nx: 0.50, ny: 0.30, motion: 'blush', emotion: 'blush',
+        lines: ['别、别盯着我看...', '我脸上有什么东西吗？', '笨蛋！看够了吗？'],
+      },
+      {
+        name: 'chest', nx: 0.50, ny: 0.45, motion: 'angry', emotion: 'angry',
+        lines: ['变态！你在摸哪里啊！', '信不信我报警了！', '再这样我就把你数据删了！'],
+      },
+      {
+        name: 'arm_l', nx: 0.15, ny: 0.40, motion: 'arms_crossed', emotion: 'angry',
+        lines: ['哼！', '别碰我！', '想打架吗？'],
+      },
+      {
+        name: 'arm_r', nx: 0.85, ny: 0.40, motion: 'shrug', emotion: 'confused',
+        lines: ['干什么？', '有事说事，别动手动脚的', '还想再体验一次被论文支配的恐惧吗？'],
+      },
+      {
+        name: 'waist', nx: 0.50, ny: 0.60, motion: 'confused', emotion: 'confused',
+        lines: ['痒...别闹了！', '住手！好痒哈哈哈', '再这样我可要生气了！'],
+      },
+      {
+        name: 'legs',  nx: 0.50, ny: 0.80, motion: 'sad', emotion: 'sad',
+        lines: ['喂！', '你再这样我就走了', '哼！不理你了！'],
+      },
+      {
+        name: 'hand',  nx: 0.50, ny: 0.50, motion: 'chin_rest', emotion: 'neutral',
+        lines: ['想牵手吗？', '真拿你没办法...', '就一下哦'],
+      },
+    ];
+
+    let _lastClickEvent = null;
+
+    function _findClickedRegion(clickX, clickY) {
+      let minDist = Infinity, best = null;
+      for (const region of CLICKABLE_REGIONS) {
+        const dx = clickX - region.nx;
+        const dy = clickY - region.ny;
+        const dist = dx * dx + dy * dy;
+        if (dist < minDist) { minDist = dist; best = region; }
+      }
+      return best;
+    }
+
+    // 点击监听：用 window 级别（兼容 mousemove 的写法），限定在 viewport 范围内
+    const viewportEl = document.querySelector('.viewport');
+    window.addEventListener('click', event => {
+      const rect = viewportEl.getBoundingClientRect();
+      const cx = event.clientX, cy = event.clientY;
+      // 只有点击在 viewport 范围内才响应
+      if (cx < rect.left || cx > rect.right || cy < rect.top || cy > rect.bottom) return;
+      const x = (cx - rect.left) / rect.width;
+      const y = (cy - rect.top) / rect.height;
+      const region = _findClickedRegion(x, y);
+      if (!region) return;
+      playMotion(region.motion);
+      if (region.emotion in target) {
+        Object.keys(target).forEach(k => target[k] = 0);
+        target[region.emotion] = region.emotion === 'smile' ? 0.75 : 0.85;
+      }
+      resetIdleTimer();
+      _lastClickEvent = {
+        region: region.name,
+        line: region.lines[Math.floor(Math.random() * region.lines.length)],
+      };
     });
 
     window.__amadeus = {
@@ -607,26 +473,27 @@
         resetIdleTimer();
       },
       playMotion,
+      // 供 Python 轮询的点击事件接口：返回最近一次点击事件并清空
+      getClickEvent() {
+        const evt = _lastClickEvent;
+        _lastClickEvent = null;
+        return evt;
+      },
     };
 
     // ============================================================
     // 函数：composeFrame()
-    // 作用：把"手机 UI（html2canvas DOM 截图）+ Live2D 角色帧（WebGL PIXI）"
-    //       合成到 #composite canvas（304×690，透明背景），并返回 dataURL。
-    //       这就是 renderer_process 每 15fps 截取的画面。
-    //       手机 UI 由 CSS/DOM 渲染（html2canvas 截取，与浏览器预览一致），
-    //       Live2D 保持原生 WebGL 渲染，两层独立互不干扰。
+    // 作用：只把 Live2D WebGL 画布合成到透明的 304×622 canvas2。
+    //       窗口外框、背景图、标题和功能控件全部由 Qt 绘制。
     // 参数：无
-    // 返回值：str —— PNG dataURL（手机+角色 合成帧）
+    // 返回值：str —— PNG dataURL（透明 Live2D 合成帧）
     // ============================================================
-    const COMPOSITE_W = 304;   // #app 宽 = 280 手机 + 24px 边距（12+12）
-    const COMPOSITE_H = 690;   // #app 高 = 110 气泡预留 + 560 手机 + 20 底余
-    const PHONE_X = 12;        // 手机在 #app 内水平居中（(304-280)/2）
-    const PHONE_Y = 110;       // 手机在 #app 顶部 y=110（气泡预留区高度）
-    const PHONE_W = 280;
-    const PHONE_H = 560;
-    const BORDER = 8;          // 屏幕内缩
-    const BOTTOM = 56;         // 底部 Home 区高度
+    const COMPOSITE_W = 304;
+    const COMPOSITE_H = 585;
+    const VIEW_X = 20;
+    const VIEW_Y = 50;
+    const VIEW_W = 264;
+    const VIEW_H = 496;
 
     const compCanvas = document.createElement('canvas');
     compCanvas.width = COMPOSITE_W;
@@ -635,54 +502,20 @@
     document.body.appendChild(compCanvas);
     const compCtx = compCanvas.getContext('2d');
 
-    // ============================================================
-    // 手机 UI 层：html2canvas 直接截图 .phone DOM（CSS 渲染，
-    //             与浏览器预览完全一致），替代手绘 Canvas 2D。
-    // ============================================================
-    let _uiBase = null;   // 手机 UI 底图（html2canvas 输出 280×560）
-    async function captureUiBase() {
-      stageEl.style.display = 'none';      // 截图时隐藏 Live2D 舞台
-      try {
-        const canvas = await html2canvas(document.querySelector('.phone'), {
-          scale: 1,
-          backgroundColor: 'transparent',
-          useCORS: true,
-          logging: false,
-        });
-        _uiBase = canvas;
-      } catch (e) {
-        console.error('html2canvas capture failed:', e);
-      } finally {
-        stageEl.style.display = '';
-      }
-    }
-    captureUiBase();
-    window.__amadeusRecapture = captureUiBase;
-
     window.__amadeusComposite = function composeFrameSync() {
       compCtx.clearRect(0, 0, COMPOSITE_W, COMPOSITE_H);
       const pixiCanvas = (window.__amadeus && window.__amadeus.app)
         ? window.__amadeus.app.view
         : null;
 
-      // 第 1 层：手机 UI（html2canvas DOM 截图，CSS 渲染与浏览器一致）
-      if (_uiBase) {
-        compCtx.drawImage(_uiBase, PHONE_X, PHONE_Y, PHONE_W, PHONE_H);
-      }
-
-      // 第 2 层：Live2D 角色（贴到屏幕区域：底部对齐，留 56px Dock 槽位）
       if (pixiCanvas) {
-        const sx = PHONE_X + BORDER;
-        const sy = PHONE_Y + BORDER;
-        const sw = PHONE_W - BORDER * 2;
-        const sh = PHONE_H - BORDER - BOTTOM;
         const pw2 = pixiCanvas.width, ph2 = pixiCanvas.height;
         if (pw2 > 0 && ph2 > 0) {
-          const ratio = Math.min(sw / pw2, (sh - 56) / ph2) * 1.05;
+          const ratio = Math.min(VIEW_W / pw2, (VIEW_H - 56) / ph2) * 1.05;
           const dw2 = pw2 * ratio;
           const dh2 = ph2 * ratio;
-          const dx = sx + (sw - dw2) / 2;
-          const dy = sy + sh - dh2;
+          const dx = VIEW_X + (VIEW_W - dw2) / 2;
+          const dy = VIEW_Y + VIEW_H - dh2;
           compCtx.drawImage(pixiCanvas, dx, dy, dw2, dh2);
         }
       }

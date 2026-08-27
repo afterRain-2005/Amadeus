@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import base64
+import json
 import threading
 import time
 import traceback
@@ -89,35 +90,9 @@ def renderer_process(connection: Connection) -> None:
             f"?model=/resources/live2d/kurisu/amadeusV1.model3.json"
         )
 
-        # ============================================================
-        # 类：RendererJsApi
-        # 作用：pywebview 向 JS 暴露的桥接 API（必须在 create_window 前构造）。
-        #       JS 端 Home 键点击 → window.pywebview.api.home_click()
-        #       → 通过管道通知主进程 _minimize_to_tray()。
-        # ============================================================
-        class RendererJsApi:
-            def home_click(self) -> None:
-                try:
-                    connection.send(("home_click", True))
-                except (BrokenPipeError, OSError):
-                    pass
-
-            def hide_window(self) -> None:
-                try:
-                    connection.send(("hide_window", True))
-                except (BrokenPipeError, OSError):
-                    pass
-
-            def close(self) -> None:
-                try:
-                    connection.send(("close", True))
-                except (BrokenPipeError, OSError):
-                    pass
-
         window = webview.create_window(
-            "Amadeus Renderer", url=url, width=340, height=720,
+            "Amadeus Renderer", url=url, width=304, height=585,
             x=-10000, y=-10000, frameless=True, shadow=False,
-            js_api=RendererJsApi(),
         )
 
         def loaded() -> None:
@@ -125,34 +100,12 @@ def renderer_process(connection: Connection) -> None:
             # 函数：stream_frames()
             # 作用：★renderer 主循环（独立线程，daemon=True）。
             #       1. 等模型就绪
-            #       2. 循环：接收命令→驱动动作；监听 Home 键；截取"#app 整页"
-            #         （手机壳+屏幕+辉光+角色一体）回传主进程 paintEvent 直接显示
+            #       2. 循环：接收命令→驱动动作；监听悬浮命令；截取"#app 整页"
+            #         （透明画布+角色一体）回传主进程 paintEvent 直接显示
             #       每秒 15 帧
             # ============================================================
             def stream_frames() -> None:
                 try:
-                    # JS 端：给页面原有的单/双击分流提供 pywebview 回调。
-                    # 不额外绑定 click，避免双击时第一下 click 立即最小化。
-                    home_js = (
-                        "(function(){"
-                        "  window.__amadeusHomeClick = function() {"
-                        "    if (window.pywebview && window.pywebview.api && window.pywebview.api.home_click) {"
-                        "      try { window.pywebview.api.home_click(); } catch(e){}"
-                        "    }"
-                        "  };"
-                        "  const menu = document.getElementById('pet-menu');"
-                        "  if (menu) menu.addEventListener('click', () => {"
-                        "    if (window.pywebview && window.pywebview.api && window.pywebview.api.close) {"
-                        "      try { window.pywebview.api.close(); } catch(e){}"
-                        "    }"
-                        "  });"
-                        "})();"
-                    )
-                    try:
-                        window.evaluate_js(home_js)
-                    except Exception:
-                        pass
-
                     for _ in range(30):
                         time.sleep(0.25)
                         if window.evaluate_js("document.title") == "KURISU_READY":
@@ -161,8 +114,7 @@ def renderer_process(connection: Connection) -> None:
                         connection.send(("error", "Live2D model did not become ready"))
                         return
 
-                    # 调 JS 端的 __amadeusComposite()：手机壳 + Live2D 一体合成
-                    # （返回 PNG dataURL；304×690；手机 UI 完全在 Web 端用 Canvas 2D 绘制）
+                    # 调 JS 端的 __amadeusComposite()：只返回透明 Live2D PNG。
                     script = (
                         "(function(){"
                         "  return typeof window.__amadeusComposite === 'function'"
@@ -184,6 +136,17 @@ def renderer_process(connection: Connection) -> None:
                                 js = apply_command_js(payload)
                                 if js:
                                     window.evaluate_js(js)
+                        # 轮询 JS 端点击事件（Live2D 人物点击）
+                        click_json = window.evaluate_js(
+                            "(function(){"
+                            "  var f = window.__amadeus && window.__amadeus.getClickEvent"
+                            "    ? window.__amadeus.getClickEvent()"
+                            "    : null;"
+                            "  return f ? JSON.stringify(f) : null;"
+                            "})()"
+                        )
+                        if click_json:
+                            connection.send(("click", json.loads(click_json)))
                         data_url = window.evaluate_js(script)
                         if not data_url:
                             time.sleep(1 / 15)

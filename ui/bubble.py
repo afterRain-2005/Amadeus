@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import html
 
+from ui.theme import CREAM
+
 
 # ============================================================
 # 函数：_sync_bubble_accessories()
@@ -62,7 +64,7 @@ def _wrap_bubble_html(text: str) -> str:
     safe = html.escape(text).replace("\n", "<br>")
     return (
         "<html><body style='margin:0;line-height:150%;text-align:left;"
-        "color:#c1b492;font-size:14px'>" + safe + "</body></html>"
+        f"color:{CREAM};font-size:14px'>" + safe + "</body></html>"
     )
 
 

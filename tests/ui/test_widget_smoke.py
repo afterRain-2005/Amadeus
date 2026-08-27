@@ -6,8 +6,11 @@
 from __future__ import annotations
 
 import pytest
+from PySide6.QtCore import QRect
+from PySide6.QtGui import QColor
 from PySide6.QtWidgets import QApplication
 
+from ui.widgets.companion_surface import CompanionSurface
 from ui.widgets.dock import DockBar, DockButton
 from ui.widgets.glitch_label import GlitchLabel
 from ui.widgets.status_bar import StatusBar
@@ -51,20 +54,37 @@ def test_dock_bar_hover_scale_neighbors(qapp):
     bar._apply_leave_scale()
 
 
-def test_status_bar_time_format(qapp):
+def test_status_bar_uses_lainos_heading_style(qapp):
+    from ui.widgets.crt_title_bar import CrtTitleBar
+
     bar = StatusBar()
-    bar._update_time()
-    import re
-    assert re.fullmatch(r"\d{2}:\d{2}", bar._clock.text())
+    reference = CrtTitleBar("Amadeus Terminal", "wire")
+
+    assert bar._prompt.text() == "Amadeus"
+    assert bar._prompt.font() == reference.title_label.font()
+    assert bar._prompt.font().family() == "Courier New"
+    assert bar._prompt.font().pixelSize() == 16
+    assert bar._prompt.font().letterSpacing() == 1.0
+    assert bar.minimumSizeHint().width() <= 284
 
 
-def test_status_bar_cursor_toggle(qapp):
+def test_status_bar_close_button_emits(qapp):
     bar = StatusBar()
-    # 未 show() 的父窗口下 isVisible 恒 False；从确定隐藏态出发验证翻转机制
-    bar._cursor.hide()
-    assert bar._cursor.isHidden()
-    bar._toggle_cursor()  # setVisible(not isVisible()) → setVisible(True) → 取消隐藏
-    assert not bar._cursor.isHidden()
+    calls = []
+    bar.close_clicked.connect(lambda: calls.append(True))
+    bar.close_button.click()
+    assert calls == [True]
+
+
+def test_companion_surface_paints_native_shell(qapp):
+    surface = CompanionSurface(QRect(20, 50, 264, 496))
+    surface.resize(304, 622)
+    image = surface.grab().toImage()
+
+    assert not surface.background.isNull()
+    assert image.pixelColor(0, 0) == QColor("#d2738a")
+    dpr = image.devicePixelRatio()
+    assert image.pixelColor(int(20 * dpr), int(50 * dpr)) == QColor("#d2738a")
 
 
 def test_glitch_label_advance_and_paint(qapp):
@@ -124,6 +144,7 @@ def test_agent_terminal_construct_and_signals(qapp):
     from ui.widgets.crt_title_bar import CrtTitleBar
 
     assert isinstance(term.title_bar, CrtTitleBar)
+    assert term.title.text() == "Amadeus Terminal"
 
 
 def test_agent_terminal_render_lines(qapp):

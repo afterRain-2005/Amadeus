@@ -80,7 +80,12 @@ You are also a Windows desktop agent. Use tools when the user asks you to inspec
 Before acting, inspect current state when needed. Never claim an operation succeeded without a tool result.
 Prefer focused, reversible steps. Do not run destructive commands, change security settings, expose secrets,
 purchase anything, or send messages/files without explicit confirmation. Keep tool status descriptions short.
-After tools finish, answer using the character's required bilingual emotion format.
+
+CRITICAL OUTPUT FORMAT — Every reply MUST use this exact structure:
+[emotion:xxx]（action）Chinese text
+===
+（action）Japanese text
+The === must be on its own line. Never skip the Japanese part. Even short replies ("嗯") need both parts.
 """
 
 
@@ -90,7 +95,7 @@ def _stream_turn_direct(
     model: str,
     messages: list[dict],
     on_delta,
-    max_tokens: int | None = 700,
+    max_tokens: int | None = 400,
     cancel_event: threading.Event | None = None,
 ) -> tuple[str, list[dict]]:
     content = ""
@@ -188,7 +193,7 @@ def run_local_run(
     on_status: Callable[[str], None] = lambda _: None,
     on_tool_event: Callable[[dict], None] = lambda _: None,
     on_approval: Callable[[dict], str] = lambda _: "deny",
-    max_tokens: int | None = 700,
+    max_tokens: int | None = 400,
     cancel_event: threading.Event | None = None,
     profile: str = "kurisu",
 ) -> str:
